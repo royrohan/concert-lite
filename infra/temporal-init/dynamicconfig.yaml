@@ -1,0 +1,15 @@
+# Latency-oriented settings for the local cluster.
+frontend.enableUpdateWorkflowExecution:
+  - value: true
+frontend.enableExecuteMultiOperation:
+  - value: true
+system.enableEagerWorkflowStart:
+  - value: true
+matching.numTaskqueueReadPartitions:
+  - value: 4
+matching.numTaskqueueWritePartitions:
+  - value: 4
+limit.maxIDLength:
+  - value: 255
+system.enableActivityEagerExecution:
+  - value: true
