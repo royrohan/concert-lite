@@ -1,0 +1,63 @@
+{
+  "name" : "insurance",
+  "package" : "io.concert.eco.insurance",
+  "modelsDir" : "examples/insurance",
+  "module" : "showcases/insurance",
+  "service" : "insurance-worker",
+  "profile" : "insurance",
+  "files" : [ "claim.pure", "common.pure", "payout.pure", "policy.pure" ],
+  "roots" : [ {
+    "smType" : "claim",
+    "rootClass" : "insurance::Claim",
+    "table" : "claims",
+    "deephavenTable" : "insurance_claims_latest",
+    "initial" : "NEW",
+    "terminal" : [ "WITHDRAWN", "REJECTED", "PAID" ],
+    "events" : [ "file", "assess", "withdraw", "approve", "reject", "pay" ],
+    "sampleKey" : "CLAIM-1001",
+    "happyPath" : "samples/flows/claim-happy-path.json"
+  }, {
+    "smType" : "payout",
+    "rootClass" : "insurance::Payout",
+    "table" : "payouts",
+    "deephavenTable" : "insurance_payouts_latest",
+    "initial" : "PENDING",
+    "terminal" : [ "DISBURSED" ],
+    "events" : [ "schedule", "disburse", "fail", "retry" ],
+    "sampleKey" : "PAYOUT-1001",
+    "happyPath" : "samples/flows/payout-happy-path.json"
+  }, {
+    "smType" : "policy",
+    "rootClass" : "insurance::Policy",
+    "table" : "policies",
+    "deephavenTable" : "insurance_policies_latest",
+    "initial" : "QUOTED",
+    "terminal" : [ "DECLINED", "EXPIRED", "CANCELLED" ],
+    "events" : [ "bind", "decline", "endorse", "expire", "cancel" ],
+    "sampleKey" : "POLICY-1001",
+    "happyPath" : "samples/flows/policy-happy-path.json"
+  } ],
+  "deephavenTables" : [ "insurance_claims_latest", "insurance_payouts_latest", "insurance_policies_latest", "insurance_latest", "insurance_state_distribution", "insurance_completions_per_minute" ],
+  "generator" : "./generate-concert-ecosystem",
+  "sampleHashes" : {
+    "showcases/insurance/samples/claim/file.json" : "e176068deb4af3fa17be03aca243768a869f1a3c6d8ad7bd3e290fa7e3a8c5db",
+    "showcases/insurance/samples/claim/assess.json" : "814eb162e6bce7e1b52293317be3c4b67b8a57df5ae59975f2ca41475d1033a4",
+    "showcases/insurance/samples/claim/withdraw.json" : "08b42a592e0d82df3b2407ffc2577bf58d4f15a3788749865cfa5024eae6205f",
+    "showcases/insurance/samples/claim/approve.json" : "3359e6b6a304f7885d712c4c2bbf8c08548658bf885bcbd18f6975661a516d76",
+    "showcases/insurance/samples/claim/reject.json" : "08b42a592e0d82df3b2407ffc2577bf58d4f15a3788749865cfa5024eae6205f",
+    "showcases/insurance/samples/claim/pay.json" : "50513d5c352c722733abe1ee0839d9af9c82b9e92892dc0da801d85a7b07c1b1",
+    "showcases/insurance/samples/flows/claim-happy-path.json" : "06de75310951c06265bb7e0d4caaa4a76c6b7ad9c26e7a4dc1a59a1d532442ba",
+    "showcases/insurance/samples/payout/schedule.json" : "bc2611e073b027a0ddff2b683331b4a5787155c597e729d2e383f47f8095e857",
+    "showcases/insurance/samples/payout/disburse.json" : "e97ce574c5564407370ecfd2c52b91d0350f411a889d75560759cc5cb09daebe",
+    "showcases/insurance/samples/payout/fail.json" : "50342015eba5246ff3a33de6e85d5ddfcc539eb5ea27468879a40b5a898657ad",
+    "showcases/insurance/samples/payout/retry.json" : "bc2611e073b027a0ddff2b683331b4a5787155c597e729d2e383f47f8095e857",
+    "showcases/insurance/samples/flows/payout-happy-path.json" : "16293344c2d66fde77b254b61f46d7501fa6919a7a8a46142d4ec396314606a1",
+    "showcases/insurance/samples/policy/bind.json" : "ae21f21c8dcd1d6f6a2ae2a26314e00f9f552455db59b96086ea15641ab13255",
+    "showcases/insurance/samples/policy/decline.json" : "08b42a592e0d82df3b2407ffc2577bf58d4f15a3788749865cfa5024eae6205f",
+    "showcases/insurance/samples/policy/endorse.json" : "e411df54f7a9f898cc965ead0c16ded96cfedf3ca60ad22979571cdc69422971",
+    "showcases/insurance/samples/policy/expire.json" : "4985b8191c5a337184ece1c7487a066ca75a30ca91d93a2347062127c5dc1d3f",
+    "showcases/insurance/samples/policy/cancel.json" : "08b42a592e0d82df3b2407ffc2577bf58d4f15a3788749865cfa5024eae6205f",
+    "showcases/insurance/samples/flows/policy-happy-path.json" : "ac7558ecd478d944544cc2d5c66d85bb6bc8a5e76c0bbf7204046428f84fb836"
+  },
+  "generatedFiles" : [ "showcases/insurance/src/main/pure/claim.pure", "showcases/insurance/src/main/pure/common.pure", "showcases/insurance/src/main/pure/payout.pure", "showcases/insurance/src/main/pure/policy.pure", "showcases/insurance/src/main/pure/concert/concert.pure", "showcases/insurance/src/main/java/io/concert/eco/insurance/InsuranceModels.java", "showcases/insurance/src/main/java/io/concert/eco/insurance/ClaimSpec.java", "showcases/insurance/src/main/java/io/concert/eco/insurance/PayoutSpec.java", "showcases/insurance/src/main/java/io/concert/eco/insurance/PolicySpec.java", "showcases/insurance/src/main/java/io/concert/eco/insurance/InsuranceMachines.java", "showcases/insurance/src/main/java/io/concert/eco/insurance/InsuranceWorkerMain.java", "showcases/insurance/src/main/java/io/concert/eco/insurance/InsuranceEvents.java", "showcases/insurance/src/main/resources/META-INF/services/io.concert.sdk.MachineCatalog", "showcases/insurance/src/test/java/io/concert/eco/insurance/InsuranceGeneratedTest.java", "showcases/insurance/build.gradle.kts", "showcases/insurance/compose.yml", "showcases/insurance/send", "showcases/insurance/send-flow", "showcases/insurance/README.md", "infra/deephaven/app.d/ecosystems/insurance.py" ]
+}

@@ -1,0 +1,94 @@
+###Pure
+// Order aggregate handled by OrderStateMachine (sm type "order").
+//   CREATED --pay--> PAID --ship--> SHIPPED --deliver--> DELIVERED
+//   CREATED --cancel--> CANCELLED;  PAID --cancel--> REFUND_PENDING --refunded--> CANCELLED
+import demo::common::*;
+
+Enum demo::order::OrderStatus
+{
+  CREATED, PAID, SHIPPED, DELIVERED, REFUND_PENDING, CANCELLED
+}
+
+Class demo::order::Customer
+{
+  customerId: String[1];
+  name: String[1];
+  email: String[0..1];
+}
+
+Class demo::order::Order
+[
+  // Documentation only (constraints are not executed); OrderStateMachine enforces it on pay.
+  totalMatchesLines: $this.lines->isEmpty() || $this.total->isNotEmpty()
+]
+{
+  orderId: String[1];
+  status: OrderStatus[1] = OrderStatus.CREATED;
+  customer: Customer[0..1];
+  total: Money[0..1];
+  shippingAddress: Address[0..1];
+  paymentMethod: PaymentMethod[0..1];
+  paidAt: DateTime[0..1];
+  carrier: String[0..1];
+  trackingNumber: String[0..1];
+  shippedAt: DateTime[0..1];
+  signedBy: String[0..1];
+  deliveredAt: DateTime[0..1];
+  cancelReason: String[0..1];
+  cancelledAt: DateTime[0..1];
+  refunded: Money[0..1];
+
+  lineCount() { $this.lines->size() } : Integer[1];
+}
+
+Class demo::order::OrderLine
+{
+  sku: String[1];
+  quantity: Integer[1] = 1;
+  unitPrice: Money[1];
+}
+
+// The order owns its lines; OrderLine.order is a back-reference rebuilt after reading.
+Association demo::order::OrderLines
+{
+  order: Order[1];
+  lines: OrderLine[*];
+}
+
+// ---- event payloads ----
+
+// Checkout: pays the order and, optionally, fixes its customer, lines and shipping address.
+Class demo::order::PayCommand
+{
+  amount: Money[1];
+  method: PaymentMethod[1];
+  customer: Customer[0..1];
+  lines: OrderLine[*];
+  shippingAddress: Address[0..1];
+  workMs: Integer[0..1];
+}
+
+Class demo::order::ShipCommand
+{
+  carrier: String[1];
+  trackingNumber: String[1];
+  workMs: Integer[0..1];
+}
+
+Class demo::order::DeliverCommand
+{
+  signedBy: String[0..1];
+  workMs: Integer[0..1];
+}
+
+Class demo::order::CancelCommand
+{
+  reason: String[1];
+  workMs: Integer[0..1];
+}
+
+Class demo::order::RefundCommand
+{
+  amount: Money[1];
+  workMs: Integer[0..1];
+}

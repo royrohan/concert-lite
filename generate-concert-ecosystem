@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Generate (or update) an ecosystem module from Pure models whose state machines are declared with the
+# concert::sm profile (see core/ecosystem-gen/README.md):
+#   ./generate-concert-ecosystem <models-dir> --name <name> [--package io.concert.eco.<name>] [--force]
+#   ./generate-concert-ecosystem check <models-dir>        (validate only)
+# Writes showcases/<name>/ (specs and registries regenerated; <Root>Machine stubs written once, --force backs
+# them up and rewrites them), adds the module to settings.gradle.kts and infra/deephaven/app.d/ecosystems/<name>.py.
+set -euo pipefail
+root=$(cd "$(dirname "$0")" && pwd)
+. "$root/scripts/java-env.sh"
+cmd=generate
+if [ "${1:-}" = "check" ]; then cmd=check; shift; fi
+if [ $# -lt 1 ] || [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
+(cd "$root" && ./gradlew -q --console=plain :ecosystem-gen:installDist)
+exec "$root/core/ecosystem-gen/build/install/ecosystem-gen/bin/ecosystem-gen" "$cmd" "$@" --repo "$root"

@@ -1,0 +1,64 @@
+###Pure
+// Payout of an approved claim: scheduled, disbursed; a failed disbursement can be retried.
+// Every payout event locks its claim (claim:{claimId}, the claim entity's key).
+
+Enum insurance::PayoutStatus
+{
+  PENDING, SCHEDULED, DISBURSED, FAILED
+}
+
+Enum insurance::PayoutMethod
+{
+  ACH, WIRE, CHECK
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'payout',
+  concert::sm.transitions = '
+    PENDING   -schedule-> SCHEDULED : SchedulePayout;
+    SCHEDULED -disburse-> DISBURSED : DisbursePayout;
+    SCHEDULED -fail->     FAILED    : FailPayout;
+    FAILED    -retry->    SCHEDULED : SchedulePayout',
+  concert::sm.locks = '*: claim:{claimId}'
+}
+insurance::Payout
+{
+  payoutId: String[1];
+  status: PayoutStatus[1] = PayoutStatus.PENDING;
+  claimId: String[0..1];
+  payeeAccount: String[0..1];
+  method: PayoutMethod[0..1];
+  amount: Money[0..1];
+  attempts: Integer[1] = 0;
+  reference: String[0..1];
+  failureReason: String[0..1];
+  scheduledAt: DateTime[0..1];
+  disbursedAt: DateTime[0..1];
+}
+
+Association insurance::ClaimPayouts
+{
+  claim: Claim[0..1];
+  payouts: Payout[*];
+}
+
+Class <<concert::sm.command>> insurance::SchedulePayout
+{
+  claimId: String[1];
+  payeeAccount: String[1];
+  method: PayoutMethod[1];
+  amount: Money[1];
+}
+
+Class <<concert::sm.command>> insurance::DisbursePayout
+{
+  claimId: String[1];
+  reference: String[1];
+}
+
+Class <<concert::sm.command>> insurance::FailPayout
+{
+  claimId: String[1];
+  reason: String[1];
+}

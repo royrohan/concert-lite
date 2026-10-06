@@ -1,0 +1,45 @@
+{
+  "name" : "claim-happy-path",
+  "description" : "NEW -file-> OPEN -assess-> ASSESSED -approve-> APPROVED -pay-> PAID",
+  "events" : [ {
+    "smType" : "claim",
+    "instanceKey" : "CLAIM-1001",
+    "eventType" : "file",
+    "payload" : {
+      "policyId" : "POLICY-1001",
+      "claimant" : "claimant-1",
+      "lossType" : "FIRE",
+      "lossDate" : "2026-01-15",
+      "description" : "sample description",
+      "claimed" : {
+        "amount" : 1250.00,
+        "currency" : "USD"
+      }
+    }
+  }, {
+    "smType" : "claim",
+    "instanceKey" : "CLAIM-1001",
+    "eventType" : "assess",
+    "payload" : {
+      "assessor" : "Jane Doe",
+      "assessedAmount" : 1250.00
+    }
+  }, {
+    "smType" : "claim",
+    "instanceKey" : "CLAIM-1001",
+    "eventType" : "approve",
+    "payload" : {
+      "policyId" : "POLICY-1001",
+      "approvedAmount" : 1250.00
+    }
+  }, {
+    "smType" : "claim",
+    "instanceKey" : "CLAIM-1001",
+    "eventType" : "pay",
+    "payload" : {
+      "policyId" : "POLICY-1001",
+      "payeeAccount" : "PAYEE-ACCOUNT-1001",
+      "paidAmount" : 1250.00
+    }
+  } ]
+}

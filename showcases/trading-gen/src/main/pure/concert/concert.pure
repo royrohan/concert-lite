@@ -1,0 +1,25 @@
+###Pure
+// The concert state machine profile (built in; ./generate-concert-ecosystem adds this file to every
+// generated module as src/main/pure/concert/concert.pure). A class marked <<concert::sm.root>> is the
+// data of one state machine type; its tagged values declare the machine. Payload classes are marked
+// <<concert::sm.command>>. Syntax (see core/ecosystem-gen/README.md):
+//
+//   Class <<concert::sm.root>>
+//   {
+//     concert::sm.type = 'claim',                                  // smType (task queue sm-claim)
+//     concert::sm.initial = 'OPEN',                                // default: first transition's source
+//     concert::sm.transitions = 'OPEN -assess-> ASSESSED : AssessClaim;
+//                                ASSESSED -approve-> APPROVED : ApproveClaim',   // FROM[|FROM2] -event-> TO [: Payload]
+//     concert::sm.terminal = 'APPROVED',                           // default: states without outgoing transitions
+//     concert::sm.locks = 'approve: policy:{policyId}',            // event[,event2|*]: template[, template]
+//     concert::sm.statusProperty = 'status',                       // enum property kept equal to the state
+//     concert::sm.idProperty = 'claimId'                           // String property set to the instance key
+//   }
+//   insurance::Claim { ... }
+//
+// Entries of transitions / locks are separated by ';' or new lines, and both tags may be repeated.
+Profile concert::sm
+{
+  stereotypes: [root, command];
+  tags: [type, initial, transitions, terminal, locks, statusProperty, idProperty];
+}

@@ -1,0 +1,201 @@
+###Pure
+// Copy of core/trading-model/src/main/pure/order.pure with the trading state machines declared in Pure
+// (concert::sm), equivalent to the hand-written TradingFlows (showcases/trading). Generated module:
+// showcases/trading-gen (./generate-concert-ecosystem examples/trading-gen --name trading-gen). The smTypes are
+// prefixed gen_ so they never clash with the hand-written trading machines; lock namespaces follow them.
+// Trading aggregates. Each is the data of one state machine type (see TradingFlows):
+//   Order      trading_order      parent client order; owns copies of its executions and allocations
+//   Execution  trading_execution  child order routed to one venue; owns copies of its fills
+//   Fill       trading_fill       one venue fill; BOOKED (terminal) on its first event
+//   Allocation trading_allocation part of a filled order given to an account
+// The owned to-many ends (Order.executions, Execution.fills, Order.allocations) are the serialized
+// side, so an Order snapshot carries its full execution and fill tree for analytics. The back
+// references are [0..1] because Execution, Fill and Allocation are also aggregate roots of their own
+// machines, where the parent is not loaded.
+import trading::common::*;
+
+Enum trading::order::OrderStatus
+{
+  PENDING_NEW, NEW, ACKED, WORKING, PARTIALLY_FILLED, ALLOCATING, CANCEL_ALLOCATING, FILLED, CANCELLED, REJECTED
+}
+
+Enum trading::order::ExecutionStatus
+{
+  PENDING_NEW, ROUTED, PARTIALLY_FILLED, FILLED, CANCELLED, REJECTED
+}
+
+Enum trading::order::FillStatus
+{
+  PENDING, BOOKED
+}
+
+Enum trading::order::AllocationStatus
+{
+  PENDING, ALLOCATED, CONFIRMED
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'gen_trading_order',
+  concert::sm.initial = 'PENDING_NEW',
+  concert::sm.transitions = '
+    PENDING_NEW       -submit->        NEW               : NewOrderCommand;
+    NEW               -ack->           ACKED             : AckCommand;
+    NEW               -reject->        REJECTED          : RejectCommand;
+    ACKED             -route->         WORKING           : RouteCommand;
+    ACKED             -cancel->        CANCELLED         : CancelCommand;
+    WORKING           -route->         WORKING           : RouteCommand;
+    WORKING           -fill->          PARTIALLY_FILLED  : FillCommand;
+    WORKING           -complete_fill-> ALLOCATING        : FillCommand;
+    WORKING           -cancel->        CANCELLED         : CancelCommand;
+    PARTIALLY_FILLED  -route->         PARTIALLY_FILLED  : RouteCommand;
+    PARTIALLY_FILLED  -fill->          PARTIALLY_FILLED  : FillCommand;
+    PARTIALLY_FILLED  -complete_fill-> ALLOCATING        : FillCommand;
+    PARTIALLY_FILLED  -cancel->        CANCEL_ALLOCATING : CancelCommand;
+    ALLOCATING        -allocate->      ALLOCATING        : AllocateCommand;
+    ALLOCATING        -close->         FILLED            : CloseOrderCommand;
+    CANCEL_ALLOCATING -allocate->      CANCEL_ALLOCATING : AllocateCommand;
+    CANCEL_ALLOCATING -close->         CANCELLED         : CloseOrderCommand',
+  concert::sm.locks = '*: account:{accountId}',
+  concert::sm.idProperty = 'orderId'
+}
+trading::order::Order
+[
+  // Documentation only (constraints are not executed); the order machine enforces them.
+  filledWithinQuantity: $this.filledQty <= $this.quantity,
+  allocatedWithinFilled: $this.allocatedQty <= $this.filledQty
+]
+{
+  orderId: String[1];
+  clientId: String[1];
+  // Parent account: credit is checked and consumed against it (lock key account:<accountId>).
+  accountId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  orderType: OrderType[1] = OrderType.MARKET;
+  limitPrice: Decimal[0..1];
+  timeInForce: TimeInForce[1] = TimeInForce.DAY;
+  currency: Currency[1] = Currency.USD;
+  quantity: Integer[1];
+  filledQty: Integer[1] = 0;
+  leavesQty: Integer[1] = 0;
+  routedQty: Integer[1] = 0;
+  allocatedQty: Integer[1] = 0;
+  avgPx: Decimal[0..1];
+  // Mid at order arrival: the benchmark for implementation shortfall.
+  arrivalPx: Decimal[0..1];
+  notional: Decimal[1] = 0.0;
+  totalFees: Decimal[1] = 0.0;
+  status: OrderStatus[1] = OrderStatus.PENDING_NEW;
+  rejectReason: String[0..1];
+  cancelReason: String[0..1];
+  createdAt: DateTime[0..1];
+  ackedAt: DateTime[0..1];
+  firstFillAt: DateTime[0..1];
+  lastFillAt: DateTime[0..1];
+  completedAt: DateTime[0..1];
+
+  fillRatio() { $this.filledQty / $this.quantity } : Float[1];
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'gen_trading_execution',
+  concert::sm.initial = 'PENDING_NEW',
+  concert::sm.transitions = '
+    PENDING_NEW      -route->         ROUTED           : RouteCommand;
+    ROUTED           -fill->          PARTIALLY_FILLED : FillCommand;
+    ROUTED           -complete_fill-> FILLED           : FillCommand;
+    ROUTED           -cancel->        CANCELLED        : CancelCommand;
+    ROUTED           -reject->        REJECTED         : RejectCommand;
+    PARTIALLY_FILLED -fill->          PARTIALLY_FILLED : FillCommand;
+    PARTIALLY_FILLED -complete_fill-> FILLED           : FillCommand;
+    PARTIALLY_FILLED -cancel->        CANCELLED        : CancelCommand',
+  concert::sm.locks = '*: gen_trading_order:{orderId}',
+  concert::sm.idProperty = 'execId'
+}
+trading::order::Execution
+{
+  execId: String[1];
+  orderId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  venue: String[1];
+  quantity: Integer[1];
+  filledQty: Integer[1] = 0;
+  limitPrice: Decimal[0..1];
+  avgPx: Decimal[0..1];
+  totalFees: Decimal[1] = 0.0;
+  status: ExecutionStatus[1] = ExecutionStatus.PENDING_NEW;
+  routedAt: DateTime[0..1];
+  completedAt: DateTime[0..1];
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'gen_trading_fill',
+  concert::sm.initial = 'PENDING',
+  concert::sm.transitions = 'PENDING -book-> BOOKED : FillCommand',
+  concert::sm.locks = '*: gen_trading_order:{orderId}, gen_trading_execution:{execId}',
+  concert::sm.idProperty = 'fillId'
+}
+trading::order::Fill
+{
+  fillId: String[1];
+  execId: String[1];
+  orderId: String[1];
+  accountId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  quantity: Integer[1];
+  price: Decimal[1];
+  venue: String[1];
+  liquidity: Liquidity[1];
+  // Venue fee for this fill; negative = rebate.
+  fee: Decimal[1];
+  status: FillStatus[1] = FillStatus.PENDING;
+  ts: DateTime[1];
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'gen_trading_allocation',
+  concert::sm.initial = 'PENDING',
+  concert::sm.transitions = '
+    PENDING   -allocate-> ALLOCATED : AllocateCommand;
+    ALLOCATED -confirm->  CONFIRMED : ConfirmAllocationCommand',
+  concert::sm.locks = '*: gen_trading_order:{orderId}, account:{allocAccountId}',
+  concert::sm.idProperty = 'allocId'
+}
+trading::order::Allocation
+{
+  allocId: String[1];
+  orderId: String[1];
+  // The account receiving the shares (may differ from the order's parent account).
+  accountId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  quantity: Integer[1];
+  avgPx: Decimal[1];
+  status: AllocationStatus[1] = AllocationStatus.PENDING;
+  allocatedAt: DateTime[0..1];
+  confirmedAt: DateTime[0..1];
+}
+
+Association trading::order::OrderExecutions
+{
+  order: Order[0..1];
+  executions: Execution[*];
+}
+
+Association trading::order::ExecutionFills
+{
+  execution: Execution[0..1];
+  fills: Fill[*];
+}
+
+Association trading::order::OrderAllocations
+{
+  order: Order[0..1];
+  allocations: Allocation[*];
+}

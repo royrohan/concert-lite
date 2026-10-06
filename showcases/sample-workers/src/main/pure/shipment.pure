@@ -1,0 +1,69 @@
+###Pure
+// Shipment aggregate handled by ShipmentStateMachine (sm type "shipment").
+//   CREATED --pick--> PICKED --dispatch--> IN_TRANSIT --deliver--> DELIVERED
+//                                          IN_TRANSIT --lose--> LOST
+import demo::common::*;
+
+Enum demo::shipment::ShipmentStatus
+{
+  CREATED, PICKED, IN_TRANSIT, DELIVERED, LOST
+}
+
+Class demo::shipment::Shipment
+{
+  shipmentId: String[1];
+  status: ShipmentStatus[1] = ShipmentStatus.CREATED;
+  orderId: String[0..1];
+  destination: Address[0..1];
+  carrier: String[0..1];
+  trackingNumber: String[0..1];
+  pickedAt: DateTime[0..1];
+  dispatchedAt: DateTime[0..1];
+  deliveredAt: DateTime[0..1];
+  signedBy: String[0..1];
+  lostAt: DateTime[0..1];
+  lossReason: String[0..1];
+  insuredValue: Money[0..1];
+}
+
+Class demo::shipment::Parcel
+{
+  parcelId: String[1];
+  weightKg: Decimal[1];
+}
+
+Association demo::shipment::ShipmentParcels
+{
+  shipment: Shipment[1];
+  parcels: Parcel[*];
+}
+
+// ---- event payloads ----
+
+Class demo::shipment::PickCommand
+{
+  orderId: String[0..1];
+  destination: Address[0..1];
+  parcels: Parcel[*];
+  insuredValue: Money[0..1];
+  workMs: Integer[0..1];
+}
+
+Class demo::shipment::DispatchCommand
+{
+  carrier: String[1];
+  trackingNumber: String[1];
+  workMs: Integer[0..1];
+}
+
+Class demo::shipment::DeliverCommand
+{
+  signedBy: String[0..1];
+  workMs: Integer[0..1];
+}
+
+Class demo::shipment::LoseCommand
+{
+  reason: String[1];
+  workMs: Integer[0..1];
+}

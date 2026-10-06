@@ -1,0 +1,82 @@
+{
+  "name" : "gen_trading_order-happy-path",
+  "description" : "PENDING_NEW -submit-> NEW -ack-> ACKED -route-> WORKING -complete_fill-> ALLOCATING -close-> FILLED",
+  "events" : [ {
+    "smType" : "gen_trading_order",
+    "instanceKey" : "GEN-TRADING-ORDER-1001",
+    "eventType" : "submit",
+    "payload" : {
+      "@type" : "trading::command::NewOrderCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "clientId" : "CLIENT-ID-1001",
+      "symbol" : "AAPL",
+      "side" : "BUY",
+      "orderType" : "MARKET",
+      "limitPrice" : 101.25,
+      "timeInForce" : "DAY",
+      "currency" : "USD",
+      "quantity" : 10,
+      "arrivalPx" : 101.25
+    }
+  }, {
+    "smType" : "gen_trading_order",
+    "instanceKey" : "GEN-TRADING-ORDER-1001",
+    "eventType" : "ack",
+    "payload" : {
+      "@type" : "trading::command::AckCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "ackedBy" : "OMS"
+    }
+  }, {
+    "smType" : "gen_trading_order",
+    "instanceKey" : "GEN-TRADING-ORDER-1001",
+    "eventType" : "route",
+    "payload" : {
+      "@type" : "trading::command::RouteCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "execId" : "GEN-TRADING-EXECUTION-1001",
+      "venue" : "XNAS",
+      "symbol" : "AAPL",
+      "side" : "BUY",
+      "quantity" : 10,
+      "limitPrice" : 101.25
+    }
+  }, {
+    "smType" : "gen_trading_order",
+    "instanceKey" : "GEN-TRADING-ORDER-1001",
+    "eventType" : "complete_fill",
+    "payload" : {
+      "@type" : "trading::command::FillCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "fillId" : "GEN-TRADING-FILL-1001",
+      "execId" : "GEN-TRADING-EXECUTION-1001",
+      "symbol" : "AAPL",
+      "side" : "BUY",
+      "quantity" : 10,
+      "price" : 101.25,
+      "venue" : "XNAS",
+      "liquidity" : "ADD",
+      "fee" : 1.50
+    }
+  }, {
+    "smType" : "gen_trading_order",
+    "instanceKey" : "GEN-TRADING-ORDER-1001",
+    "eventType" : "close",
+    "payload" : {
+      "@type" : "trading::command::CloseOrderCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "allocatedQty" : 10,
+      "allocationCount" : 10
+    }
+  } ]
+}

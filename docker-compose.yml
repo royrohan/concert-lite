@@ -1,16 +1,61 @@
-# Local stack: LocalStack (Kinesis), Temporal (Postgres-backed, 16 history shards) + UI,
-# and Postgres 16 standing in for Aurora DSQL.
-#   docker compose up -d
-#   Temporal UI: http://localhost:8080   Temporal gRPC: localhost:7233
-#   LocalStack:  http://localhost:4566   DSQL stand-in: localhost:5433 (concert/concert)
+# Local stack. STORE_KIND (see .env) picks the database the platform writes to:
+#   postgres -> "dsql" service (Postgres 16 standing in for Aurora DSQL), profile "postgres"
+#   dynamo   -> DynamoDB inside the localstack service (always running)
+#   spanner  -> Cloud Spanner emulator, profile "spanner"
+# Profile "apps" also runs coordinator, workers and trace UI as containers.
+# Profile "analytics" runs Kafka (entity-snapshots + market-data topics), the DuckDB sink, ClickHouse (+ its
+# one-shot provisioner), Deephaven and the market-data simulator; profile "kafka-ui" adds Redpanda Console.
+# Profile "trading" runs the trading worker (trading_order / _execution / _fill / _allocation machines);
+# "trading-load" is the one-shot order-flow generator (scripts/trading-load.sh [orders] [rate]).
+#
+#   scripts/up.sh spanner --analytics   # + analytics profile; without it workers don't publish snapshots
+#   scripts/up.sh spanner --analytics --trading && scripts/trading-load.sh 100 50   # trading showcase
+#
+#   scripts/up.sh spanner          # = STORE_KIND=spanner COMPOSE_PROFILES=spanner,apps docker compose up -d --build
+#   docker compose up -d           # infrastructure only, per .env (apps run from Gradle / scripts)
+#
+#   Temporal UI: http://localhost:8080   Trace UI: http://localhost:8088   Temporal gRPC: localhost:7233
+#   LocalStack:  http://localhost:4566   Postgres: localhost:5433 (concert/concert)   Spanner: localhost:9010
+#   Kafka:       localhost:29092 (host)  kafka:9092 (containers)   DuckDB sink: http://localhost:8090
+#   ClickHouse:  http://localhost:8123 (Play UI /play; users concert/concert, readonly/readonly)  native :9000
+#   Deephaven:   http://localhost:10000/ide/ (PSK ${DEEPHAVEN_PSK:-concert})   Redpanda Console: http://localhost:8081
 name: concert-temporal
+
+x-app-env: &app-env
+  STORE_KIND: ${STORE_KIND:-postgres}
+  TEMPORAL_ADDRESS: temporal:7233
+  KINESIS_ENDPOINT: http://localstack:4566
+  STORE_JDBC_URL: jdbc:postgresql://dsql:5432/concert
+  DYNAMO_ENDPOINT: http://localstack:4566
+  SPANNER_EMULATOR_HOST: spanner:9010
+  TRACE_SAMPLE: ${TRACE_SAMPLE:-1.0}
+  AWS_REGION: us-east-1
+  # Completed-entity snapshots. scripts/up.sh without --analytics sets KAFKA_BOOTSTRAP= (empty), so
+  # workers use the no-op publisher; when it is set but Kafka is down, publishes retry until it is up.
+  KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP-kafka:9092}
+  # Reconciliation (typed workers): ReconcileWorkflow compares the StateStore with the DuckDB sink's read-only
+  # POST /versions; with Kafka set, each worker creates the hourly Temporal Schedule reconcile-<smType>.
+  SINK_DUCKDB_URL: http://sink-duckdb:8090
+
+# Completed-entity roots of the analytics sinks (smType:pure::Class). Root table = plural(snake(smType)):
+# orders, payments, shipments (+ child tables order_lines, ...) and trading_orders, trading_executions,
+# trading_fills, trading_allocations. Associations between trading roots (Order.executions, ...) are not
+# child tables: each aggregate is its own snapshot, joined on orderId / execId.
+x-sink-roots: &sink-roots >-
+  order:demo::order::Order,payment:demo::payment::Payment,shipment:demo::shipment::Shipment,trading_order:trading::order::Order,trading_execution:trading::order::Execution,trading_fill:trading::order::Fill,trading_allocation:trading::order::Allocation
+
+# The database container depends on STORE_KIND, so apps don't depend_on it (optional dependencies
+# need compose >= 2.20); if it isn't ready yet an app exits and "restart: unless-stopped" retries.
+x-app-deps: &app-deps
+  temporal-init: { condition: service_completed_successfully }
+  localstack: { condition: service_healthy }
 
 services:
   localstack:
     image: localstack/localstack:4.12
     ports: ["4566:4566"]
     environment:
-      SERVICES: kinesis
+      SERVICES: kinesis,dynamodb
       KINESIS_SHARDS: ${KINESIS_SHARDS:-4}
       KINESIS_LATENCY: "0"
     volumes:
@@ -21,6 +66,7 @@ services:
       retries: 40
 
   dsql:
+    profiles: [postgres]
     image: postgres:16
     ports: ["5433:5432"]
     environment:
@@ -87,5 +133,239 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: http://localhost:3000
 
+  spanner:
+    profiles: [spanner]
+    image: gcr.io/cloud-spanner-emulator/emulator:latest
+    ports: ["9010:9010", "9020:9020"]
+
+  # ---------------------------------------------------------------- apps (profile "apps")
+
+  coordinator:
+    profiles: [apps]
+    build: { context: ., target: coordinator }
+    image: concert-temporal/coordinator
+    depends_on: *app-deps
+    environment:
+      <<: *app-env
+    restart: unless-stopped
+    # scale out: docker compose up -d --scale coordinator=3
+
+  worker:
+    profiles: [apps]
+    build: { context: ., target: worker }
+    image: concert-temporal/worker
+    depends_on:
+      <<: *app-deps
+      coordinator: { condition: service_started }
+    environment:
+      <<: *app-env
+      SM_TYPE: ${SM_TYPE:-order,payment,shipment,ledger}
+      STORE_INIT_SCHEMA: "false"
+    restart: unless-stopped
+
+  # Trading showcase workers: the four trading state machines in one process (showcases/trading/README.md).
+  trading-worker:
+    profiles: [trading]
+    build: { context: ., target: trading-worker }
+    image: concert-temporal/trading-worker
+    depends_on:
+      <<: *app-deps
+      coordinator: { condition: service_started }
+    environment:
+      <<: *app-env
+      STORE_INIT_SCHEMA: "false"
+      # heap 50% of the cap: Temporal's gRPC/netty buffers and four workers' thread pools live off-heap
+      JAVA_OPTS: -XX:+UseZGC -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=50
+    deploy: { resources: { limits: { memory: 1536m } } }
+    restart: unless-stopped
+
+  # One-shot: realistic order flow to Kinesis (concert-events). Same seed and vol multiplier as
+  # marketdata-sim, and events are stamped and sent on the wall clock, so every fill sits on the bid/ask
+  # that md.ticks shows at the fill's timestamp. scripts/trading-load.sh [orders] [rate] runs it.
+  trading-loadgen:
+    profiles: [trading-load]
+    build: { context: ., target: trading-loadgen }
+    image: concert-temporal/trading-loadgen
+    depends_on:
+      localstack: { condition: service_healthy }
+    environment:
+      KINESIS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      ORDERS: ${TRADING_ORDERS:-100}
+      RATE: ${TRADING_RATE:-50}
+      SEED: ${TRADING_SEED:-42}
+      VOL_MULT: ${TRADING_VOL_MULT:-4}
+      JAVA_OPTS: -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=75   # bin/trading already selects ZGC
+    deploy: { resources: { limits: { memory: 384m } } }
+    restart: "no"
+
+  trace-ui:
+    profiles: [apps]
+    build: { context: ., target: trace-ui }
+    image: concert-temporal/trace-ui
+    depends_on:
+      <<: *app-deps
+      coordinator: { condition: service_started }
+    ports: ["8088:8088"]
+    environment:
+      <<: *app-env
+      TEMPORAL_UI_URL: http://localhost:8080
+      SINK_DUCKDB_URL: http://sink-duckdb:8090
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: readonly
+      CLICKHOUSE_PASSWORD: readonly
+      CLICKHOUSE_PUBLIC_URL: http://localhost:8123
+      DEEPHAVEN_URL: http://deephaven:10000
+      DEEPHAVEN_PUBLIC_URL: http://localhost:10000
+      DEEPHAVEN_PSK: ${DEEPHAVEN_PSK:-concert}
+      REDPANDA_CONSOLE_URL: http://redpanda-console:8080
+      REDPANDA_CONSOLE_PUBLIC_URL: http://localhost:8081
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- analytics (profile "analytics")
+
+  kafka:
+    profiles: [analytics]
+    image: apache/kafka:4.3.1
+    ports: ["29092:29092"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://:9092,EXTERNAL://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xmx384m -Xms384m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      retries: 30
+
+  # One-shot: all topics (infra/kafka-init/create-topics.sh): the compacted snapshot topic (latest record
+  # per entity id survives compaction) and the market-data topics (configs as in marketdata-sim's MdTopics).
+  kafka-init:
+    profiles: [analytics]
+    image: apache/kafka:4.3.1
+    depends_on:
+      kafka: { condition: service_healthy }
+    volumes:
+      - ./infra/kafka-init:/init:ro
+    entrypoint: ["bash", "/init/create-topics.sh"]
+    restart: "no"
+
+  sink-duckdb:
+    profiles: [analytics]
+    build: { context: ., target: sink-duckdb }
+    image: concert-temporal/sink-duckdb
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+    ports: ["8090:8090"]
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      MODELS_DIR: /models,/models-trading
+      SINK_ROOTS: *sink-roots
+      DUCKDB_PATH: /data/concert.duckdb
+    volumes:
+      - ./showcases/sample-workers/src/main/pure:/models:ro
+      - ./core/trading-model/src/main/pure:/models-trading:ro
+      - duckdb-data:/data
+    restart: unless-stopped
+
+  clickhouse:
+    profiles: [analytics]
+    image: clickhouse/clickhouse-server:26.3
+    ports: ["8123:8123", "9000:9000"]
+    ulimits:
+      nofile: { soft: 262144, hard: 262144 }
+    volumes:
+      - ./infra/clickhouse/config.d/concert.xml:/etc/clickhouse-server/config.d/concert.xml:ro
+      - ./infra/clickhouse/users.d/concert.xml:/etc/clickhouse-server/users.d/concert.xml:ro
+      - clickhouse-data:/var/lib/clickhouse
+    deploy: { resources: { limits: { memory: 2g } } }
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 3s
+      retries: 40
+    restart: unless-stopped
+
+  # One-shot: generates the ClickHouse schema from the Pure models (Kafka engine queues, materialized views,
+  # ReplacingMergeTree per type, market-data tables) and applies it idempotently; ClickHouse then consumes.
+  sink-clickhouse:
+    profiles: [analytics]
+    build: { context: ., target: sink-clickhouse }
+    image: concert-temporal/sink-clickhouse
+    depends_on:
+      clickhouse: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: concert
+      CLICKHOUSE_PASSWORD: concert
+      KAFKA_BROKERS: kafka:9092
+      MODELS_DIR: /models,/models-trading
+      SINK_ROOTS: *sink-roots
+      MARKETDATA_MODELS_DIR: /models-trading
+    volumes:
+      - ./showcases/sample-workers/src/main/pure:/models:ro
+      - ./core/trading-model/src/main/pure:/models-trading:ro
+    deploy: { resources: { limits: { memory: 256m } } }
+    restart: on-failure
+
+  # Market data straight to Kafka (ref.*, md.ticks, md.bars.1m), bypassing concert.
+  marketdata-sim:
+    profiles: [analytics]
+    build: { context: ., target: marketdata-sim }
+    image: concert-temporal/marketdata-sim
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+    environment:
+      KAFKA_BOOTSTRAP: kafka:9092
+      TICK_RATE: ${MD_TICK_RATE:-200}
+      SEED: ${TRADING_SEED:-42}
+      VOL_MULT: ${TRADING_VOL_MULT:-4}
+      JAVA_OPTS: -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=50
+    deploy: { resources: { limits: { memory: 256m } } }
+    restart: unless-stopped
+
+  # Live tables over the same topics (infra/deephaven/app.d: Python app-mode script). Restarts rebuild
+  # everything from offset 0 (in-memory tables, nothing committed). The app's tables are also globals in the
+  # IDE console; notebooks live in ./infra/deephaven/notebooks (starter notebooks + your own, kept on restart).
+  deephaven:
+    profiles: [analytics]
+    image: ghcr.io/deephaven/server:42.5
+    ports: ["10000:10000"]
+    environment:
+      START_OPTS: -Xmx1g -Dauthentication.psk=${DEEPHAVEN_PSK:-concert} -Ddeephaven.application.dir=/app.d
+    volumes:
+      - ./infra/deephaven/app.d:/app.d:ro
+      - ./infra/deephaven/notebooks:/data/storage/notebooks
+      - deephaven-data:/data
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+    deploy: { resources: { limits: { memory: 2g } } }
+    restart: unless-stopped
+
+  redpanda-console:
+    profiles: [kafka-ui]
+    image: redpandadata/console:v3.12.0
+    ports: ["8081:8080"]
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    restart: unless-stopped
+
 volumes:
   dsql-data:
+  kafka-data:
+  duckdb-data:
+  clickhouse-data:
+  deephaven-data:

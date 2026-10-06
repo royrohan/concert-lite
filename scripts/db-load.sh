@@ -34,8 +34,8 @@ pkill -TERM -f "orchestration/build/install|sample-workers/build/install" 2>/dev
 (cd "$ROOT" && docker compose exec -T temporal temporal workflow terminate --address temporal:7233 \
   --workflow-id ingest:concert-events --reason "db-load $RUN_ID" >/dev/null 2>&1)
 
-"$ROOT/orchestration/build/install/orchestration/bin/orchestration" > "$RUN_DIR/coordinator.log" 2>&1 & C=$!
-SM_TYPE=ledger "$ROOT/sample-workers/build/install/sample-workers/bin/sample-workers" > "$RUN_DIR/worker.log" 2>&1 & W=$!
+"$ROOT/platform/orchestration/build/install/orchestration/bin/orchestration" > "$RUN_DIR/coordinator.log" 2>&1 & C=$!
+SM_TYPE=ledger "$ROOT/showcases/sample-workers/build/install/sample-workers/bin/sample-workers" > "$RUN_DIR/worker.log" 2>&1 & W=$!
 trap 'kill $C $W 2>/dev/null' EXIT
 log "coordinator + worker starting"; sleep 12
 for pid in $C $W; do kill -0 "$pid" 2>/dev/null || { log "a process died at startup, see $RUN_DIR/*.log"; exit 1; }; done
@@ -43,7 +43,7 @@ for pid in $C $W; do kill -0 "$pid" 2>/dev/null || { log "a process died at star
 psql_ "SELECT pg_stat_statements_reset()" >/dev/null
 COMMITS0=$(psql_ "SELECT xact_commit FROM pg_stat_database WHERE datname = 'concert'")
 
-"$ROOT/tools/build/install/tools/bin/tools" loadgen --run-id "$RUN_ID" --rate "$RATE" --seconds "$SECONDS_" \
+"$ROOT/showcases/tools/build/install/tools/bin/tools" loadgen --run-id "$RUN_ID" --rate "$RATE" --seconds "$SECONDS_" \
   --keys "$KEYS" --out "$RUN_DIR/manifest.json" > "$RUN_DIR/loadgen.log" 2>&1
 TOTAL=$((RATE * SECONDS_))
 log "published $TOTAL events; waiting for all to be applied"

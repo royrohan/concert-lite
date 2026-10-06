@@ -1,0 +1,12 @@
+{
+  "holderName" : "Jane Doe",
+  "product" : "HOME",
+  "premium" : {
+    "amount" : 1250.00,
+    "currency" : "USD"
+  },
+  "coverageLimit" : 1250.00,
+  "deductible" : 1250.00,
+  "startDate" : "2026-01-15",
+  "endDate" : "2026-01-15"
+}

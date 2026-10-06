@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concert Trace</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #6b6b66; --line: #e4e4df;
+    --accent: #2f6fdb; --ok: #1f8a4c; --warn: #b7791f; --bad: #c0392b; --chip: #eef2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141413; --panel: #1d1d1b; --text: #ececea; --muted: #9a9a94; --line: #2e2e2b;
+            --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  header { padding: 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  nav button { background: none; border: 1px solid var(--line); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  nav button.on { border-color: var(--accent); color: var(--accent); }
+  form { display: flex; gap: 8px; flex: 1; min-width: 240px; }
+  input { flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font-family: ui-monospace, monospace; }
+  main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; overflow-x: auto; }
+  .muted { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  code, .mono { font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .stage { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--chip); font-size: 12px; font-weight: 600; }
+  .DONE, .TRANSITION { color: var(--ok); } .DROPPED, .REJECTED { color: var(--warn); } .FAILED { color: var(--bad); }
+  .bar { height: 6px; background: var(--accent); border-radius: 3px; min-width: 2px; }
+  a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; }
+  /* Analytics */
+  main.wide { max-width: 1400px; }
+  .subtabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .subtabs button { background: none; border: 1px solid var(--line); color: var(--text); padding: 4px 12px; border-radius: 14px; cursor: pointer; font-size: 13px; }
+  .subtabs button.on { background: var(--chip); border-color: var(--accent); color: var(--accent); }
+  .analytics { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 800px) { .analytics { grid-template-columns: 1fr; } }
+  .browser details { margin-bottom: 4px; }
+  .browser summary { cursor: pointer; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .browser ul { list-style: none; margin: 2px 0 6px 14px; padding: 0; }
+  .browser li { font-family: ui-monospace, monospace; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .browser li:hover { color: var(--accent); }
+  .kind { font-size: 11px; color: var(--muted); }
+  textarea#sql { width: 100%; min-height: 140px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+                 background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, monospace; tab-size: 2; }
+  .toolbar { display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .toolbar button.run { background: var(--accent); color: #fff; border: 0; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { background: var(--chip); border: 1px solid transparent; color: var(--text); border-radius: 12px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  table.results td { font-family: ui-monospace, monospace; font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.results th { white-space: nowrap; }
+  .null { color: var(--muted); font-style: italic; }
+  .pipeline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; font-size: 12.5px; }
+  .pipeline .lag { border: 1px solid var(--line); border-radius: 12px; padding: 2px 10px; background: var(--panel); }
+  .pipeline .lag b { font-weight: 600; }
+  .pipeline .lag.behind { border-color: var(--warn); }
+  .pipeline .lag.bad { border-color: var(--bad); }
+  .pipeline button { background: none; border: 1px solid var(--line); color: var(--text); padding: 2px 10px; border-radius: 12px; cursor: pointer; font-size: 12.5px; }
+  .pipeline button:hover { border-color: var(--accent); color: var(--accent); }
+  #reconcile table td, #reconcile table th { font-size: 12.5px; padding: 3px 8px; }
+  details.play summary { cursor: pointer; font-weight: 600; }
+  details.play iframe { width: 100%; height: 640px; border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; background: #fff; }
+  .widgets { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+  .widgets .panel { padding: 8px 8px 4px; margin: 0; }
+  .widgets h4 { margin: 2px 4px 6px; font: 600 13px ui-monospace, monospace; }
+  .widgets iframe { width: 100%; height: 360px; border: 0; border-radius: 4px; }
+  .hint code { background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Concert Trace</h1>
+  <nav>
+    <button data-view="event" class="on">Event</button>
+    <button data-view="entity">Entity</button>
+    <button data-view="lock">Lock</button>
+    <button data-view="analytics">Analytics</button>
+  </nav>
+  <form id="search"><input id="q" placeholder="event id" autocomplete="off"><button>Go</button></form>
+</header>
+<main id="out"><div class="panel muted">Loading recent events…</div></main>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+const out = document.getElementById('out'), q = document.getElementById('q');
+let view = 'event';
+const placeholders = { event: 'event id', entity: 'smType:instanceKey, e.g. order:o1', lock: 'lock key, e.g. account:3' };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const time = ms => new Date(ms).toISOString().slice(11, 23);
+const link = (v, id) => `<a onclick="go('${v}','${esc(id)}')">${esc(id)}</a>`;
+mermaid.initialize({ startOnLoad: false, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () =>
+  b.dataset.view === 'analytics' ? showAnalytics('duckdb') : setView(b.dataset.view));
+document.getElementById('search').onsubmit = e => { e.preventDefault(); if (q.value.trim()) go(view, q.value.trim()); };
+function setView(v) {
+  view = v; q.placeholder = placeholders[v] ?? '';
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  document.getElementById('search').style.visibility = v === 'analytics' ? 'hidden' : '';
+  out.classList.toggle('wide', v === 'analytics');
+}
+async function api(path) { const r = await fetch(path); return r.json(); }
+
+async function go(v, id) {
+  if (v === 'analytics') { showAnalytics(id || 'duckdb'); return; }
+  setView(v); q.value = id; location.hash = v + '/' + encodeURIComponent(id);
+  out.innerHTML = '<div class="panel muted">Loading…</div>';
+  try { await ({ event: showEvent, entity: showEntity, lock: showLock })[v](id); }
+  catch (e) { out.innerHTML = `<div class="panel FAILED">${esc(e)}</div>`; }
+}
+
+async function showRecent() {
+  const d = await api('/api/recent');
+  out.innerHTML = `<div class="panel"><h3>Recent events</h3><table>
+    <tr><th>time</th><th>event</th><th>stage</th><th>entity</th><th>detail</th></tr>
+    ${d.events.map(t => `<tr><td class="mono">${time(t.tsMillis)}</td><td class="mono">${link('event', t.eventId)}</td>
+      <td><span class="stage ${t.stage}">${t.stage}</span></td><td class="mono">${t.workflowId ? link('entity', t.workflowId) : ''}</td>
+      <td class="mono muted">${esc(t.detail)}</td></tr>`).join('')}</table></div>`;
+}
+
+async function showEvent(id) {
+  const d = await api('/api/events/' + encodeURIComponent(id));
+  const tr = d.trace;
+  if (!tr.length) { out.innerHTML = `<div class="panel muted">No trace for ${esc(id)}.</div>`; return; }
+  const t0 = tr[0].tsMillis, span = Math.max(1, tr[tr.length - 1].tsMillis - t0);
+  const entity = tr.find(t => t.workflowId)?.workflowId;
+  out.innerHTML = `<div class="panel"><div class="kv">
+      <span class="muted">event</span><span class="mono">${esc(id)}</span>
+      <span class="muted">dedupe</span><span>${esc(d.dedupeStatus)}</span>
+      <span class="muted">entity</span><span class="mono">${entity ? link('entity', entity) : '-'}</span>
+      <span class="muted">total</span><span>${span} ms (first to last trace row)</span>
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">workflows touched by this event ↗</a></span>
+    </div></div>
+    <div class="panel"><h3>Timeline</h3><table>
+    <tr><th>+ms</th><th>stage</th><th>lock</th><th>detail</th><th style="width:30%"></th></tr>
+    ${tr.map(t => `<tr><td class="mono">+${t.tsMillis - t0}</td><td><span class="stage ${t.stage}">${t.stage}</span></td>
+      <td class="mono">${t.lockKey ? link('lock', t.lockKey) : ''}</td><td class="mono muted">${esc(t.detail)}</td>
+      <td><div class="bar" style="margin-left:${(t.tsMillis - t0) / span * 100}%;width:2px"></div></td></tr>`).join('')}
+    </table></div>`;
+}
+
+async function showEntity(id) {
+  const d = await api('/api/entities/' + encodeURIComponent(id));
+  const live = d.live, proj = d.projection;
+  out.innerHTML = `<div class="panel"><div class="kv">
+      <span class="muted">entity</span><span class="mono">${esc(id)}</span>
+      <span class="muted">state</span><span><b>${esc(live?.state ?? proj?.state ?? 'unknown')}</b> ${live ? '' : '<span class="muted">(workflow not running; from DSQL)</span>'}</span>
+      <span class="muted">version</span><span>${esc(live?.version ?? proj?.version)}</span>
+      <span class="muted">data</span><span class="mono">${esc(live?.data ?? proj?.data)}</span>
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">open workflow ↗</a></span>
+      ${d.terminal ? `<span class="muted">analytics</span><span><a onclick="openInDuckDb('${esc(d.smType)}','${esc(id)}')">open in DuckDB</a>
+        · <a onclick="openInClickHouse('${esc(d.smType)}','${esc(id)}')">open in ClickHouse</a>
+        <span class="muted">(completed: its snapshot is in the analytics sinks)</span></span>` : ''}
+    </div></div>
+    ${d.mermaid ? '<div class="panel"><h3>State machine</h3><div id="diagram"></div></div>' : ''}
+    ${d.modelMermaid ? '<div class="panel"><details><summary><h3 style="display:inline">Model</h3> <span class="muted">(Pure classes)</span></summary><div id="model-diagram"></div></details></div>' : ''}
+    <div class="panel"><h3>History</h3><table><tr><th>time</th><th>event</th><th>stage</th><th>detail</th></tr>
+    ${d.history.map(t => `<tr><td class="mono">${time(t.tsMillis)}</td><td class="mono">${link('event', t.eventId)}</td>
+      <td><span class="stage ${t.stage}">${t.stage}</span></td><td class="mono muted">${esc(t.detail)}</td></tr>`).join('')}</table></div>`;
+  if (d.mermaid) {
+    const { svg } = await mermaid.render('m' + Date.now(), d.mermaid);
+    document.getElementById('diagram').innerHTML = svg;
+  }
+  if (d.modelMermaid) {
+    try {
+      const { svg } = await mermaid.render('c' + Date.now(), d.modelMermaid);
+      document.getElementById('model-diagram').innerHTML = svg;
+    } catch (e) { document.getElementById('model-diagram').textContent = 'model diagram: ' + e; }
+  }
+}
+
+async function showLock(key) {
+  const d = await api('/api/locks/' + encodeURIComponent(key));
+  const l = d.live;
+  out.innerHTML = `<div class="panel"><div class="kv">
+      <span class="muted">lock</span><span class="mono">${esc(key)}</span>
+      <span class="muted">holder</span><span class="mono">${l?.holder ? link('event', l.holder) + ' — ' + esc(l.holderState) : 'free'}</span>
+      <span class="muted">waiting</span><span class="mono">${l?.waiting?.length ? l.waiting.map(w => link('event', w)).join(', ') : 'none'}</span>
+      <span class="muted">ops this run</span><span>${esc(l?.opsThisRun ?? 0)}</span>
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">open lock workflow ↗</a></span>
+    </div>${l ? '' : '<p class="muted">No open lock workflow: the key is free.</p>'}</div>`;
+}
+
+// ---------------------------------------------------------------- Analytics
+// Sub-tabs per analytics target, with a pipeline strip (consumer-group lag per target) on top.
+//   DuckDB:     our sink's read-only SQL endpoint, proxied under /api/analytics/duckdb/
+//   ClickHouse: the same console, proxied under /api/analytics/clickhouse/ to ClickHouse HTTP as the
+//               read-only user; plus ClickHouse's own Play UI embedded (or linked)
+//   Deephaven:  live widgets in iframes (http://localhost:10000/iframe/widget/?name=...) and the IDE
+const ANALYTICS = {
+  duckdb: { label: 'DuckDB', api: '/api/analytics/duckdb', limits: 'read-only · max 5000 rows, 10 s' },
+  clickhouse: { label: 'ClickHouse', api: '/api/analytics/clickhouse', final: true,
+                limits: 'read-only user · max 5000 rows, 10 s · use FINAL for one row per entity' },
+  deephaven: { label: 'Deephaven', deephaven: true },
+};
+let duckTables = null, chTables = null, currentApi = ANALYTICS.duckdb.api, lagTimer = null;
+
+async function apiJson(path, opts) {
+  const r = await fetch(path, opts);
+  let body; try { body = await r.json(); } catch { body = { error: `HTTP ${r.status}` }; }
+  if (!r.ok && !body.error) body.error = `HTTP ${r.status}`;
+  return body;
+}
+
+function showAnalytics(sub, sql) {
+  if (!ANALYTICS[sub]) sub = 'duckdb';
+  setView('analytics');
+  location.hash = 'analytics/' + sub + (sql ? '/' + encodeURIComponent(sql) : '');
+  const tabs = Object.entries(ANALYTICS).map(([k, a]) =>
+    `<button class="${k === sub ? 'on' : ''}" onclick="showAnalytics('${k}')">${a.label}</button>`).join('');
+  const a = ANALYTICS[sub];
+  const strip = '<div class="pipeline" id="pipeline"><span class="muted">pipeline: loading lag…</span></div>'
+    + '<div class="panel" id="reconcile" style="display:none"></div>';
+  clearInterval(lagTimer);
+  lagTimer = setInterval(() => document.getElementById('pipeline') ? loadPipeline() : clearInterval(lagTimer), 5000);
+  if (a.deephaven) {
+    out.innerHTML = `<div class="analytics-root">${strip}<div class="subtabs">${tabs}</div><div id="dh"><div class="panel muted">Loading…</div></div></div>`;
+    loadPipeline();
+    showDeephaven();
+    return;
+  }
+  currentApi = a.api;
+  const play = sub === 'clickhouse' ? `<div class="panel"><details class="play" id="play">
+      <summary>ClickHouse Play UI</summary>
+      <p class="muted">ClickHouse's own console, served by ClickHouse at <a href="http://localhost:8123/play" target="_blank">localhost:8123/play ↗</a>
+        (opens in a new tab if the frame stays blank). Log in as <code>readonly</code> / <code>readonly</code>.</p>
+      <iframe data-src="http://localhost:8123/play?user=readonly" title="ClickHouse Play"></iframe></details></div>` : '';
+  out.innerHTML = `<div class="analytics-root">${strip}<div class="subtabs">${tabs}</div>
+    <div class="analytics">
+      <aside class="panel browser" id="browser"><div class="muted">Loading tables…</div></aside>
+      <section>
+        <div class="panel">
+          <div class="chips" id="samples"></div>
+          <textarea id="sql" spellcheck="false" placeholder="SELECT * FROM orders LIMIT 10"></textarea>
+          <div class="toolbar"><button class="run" onclick="runSql()">Run</button>
+            <span class="muted">Ctrl/⌘ + Enter · ${esc(a.limits)}</span><span id="status" class="muted"></span></div>
+        </div>
+        <div class="panel" id="results"><span class="muted">Results appear here.</span></div>
+        ${play}
+      </section>
+    </div></div>`;
+  const pd = document.getElementById('play');
+  if (pd) pd.ontoggle = () => { const f = pd.querySelector('iframe'); if (pd.open && !f.src) f.src = f.dataset.src; };
+  loadPipeline();
+  const ta = document.getElementById('sql');
+  ta.value = sql || ta.value;
+  ta.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runSql(); } };
+  loadBrowser(a.api);
+  loadSamples(a.api);
+  if (sql) runSql();
+}
+
+async function loadBrowser(api) {
+  const el = document.getElementById('browser');
+  const d = await apiJson(api + '/tables');
+  if (d.error) { el.innerHTML = `<div class="FAILED">${esc(d.error)}</div>`; return; }
+  if (api === ANALYTICS.clickhouse.api) chTables = d.tables; else duckTables = d.tables;
+  const fin = t => api === ANALYTICS.clickhouse.api && /ReplacingMergeTree/.test(t.engine || '') ? ' FINAL' : '';
+  el.innerHTML = '<h3 style="margin-top:0">Tables</h3>' + d.tables.map(t => `<details ${t.kind === 'root' ? 'open' : ''}>
+      <summary><a onclick="setSql('SELECT * FROM &quot;${esc(t.name)}&quot;${fin(t)} LIMIT 100', true)">${esc(t.name)}</a>
+        <span class="kind">${esc(t.kind)}${t.smType ? ' · ' + esc(t.smType) : ''}</span></summary>
+      <ul>${t.columns.map(c => `<li onclick="insertSql('${esc(c.name)}')"><span>${esc(c.name)}</span><span class="kind">${esc(c.type)}</span></li>`).join('')}</ul>
+    </details>`).join('');
+}
+
+async function loadSamples(api) {
+  const el = document.getElementById('samples');
+  const d = await apiJson(api + '/samples');
+  if (d.error) { el.innerHTML = ''; return; }
+  window._samples = d.samples;
+  el.innerHTML = d.samples.map((s, i) => `<button class="chip" title="${esc(s.sql)}" onclick="setSql(_samples[${i}].sql, true)">${esc(s.title)}</button>`).join('');
+}
+
+function setSql(sql, run) { const ta = document.getElementById('sql'); ta.value = sql; ta.focus(); if (run) runSql(); }
+function insertSql(text) {
+  const ta = document.getElementById('sql'), s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0, s) + text + ta.value.slice(e); ta.focus(); ta.selectionStart = ta.selectionEnd = s + text.length;
+}
+
+async function runSql() {
+  const sql = document.getElementById('sql').value.trim(), res = document.getElementById('results'), st = document.getElementById('status');
+  if (!sql) return;
+  st.textContent = 'running…';
+  const d = await apiJson(currentApi + '/query', { method: 'POST', body: sql, headers: { 'Content-Type': 'text/plain' } });
+  if (d.error) { st.textContent = ''; res.innerHTML = `<div class="FAILED mono">${esc(d.error)}</div>`; return; }
+  st.textContent = `${d.rows.length} row${d.rows.length === 1 ? '' : 's'}${d.truncated ? ' (truncated)' : ''} · ${d.elapsedMs} ms`;
+  const cell = v => v === null ? '<span class="null">null</span>' : esc(typeof v === 'object' ? JSON.stringify(v) : v);
+  res.innerHTML = d.columns.length === 0 ? '<span class="muted">Statement returned no result set.</span>' :
+    `<table class="results"><tr>${d.columns.map((c, i) => `<th title="${esc(d.types[i])}">${esc(c)}</th>`).join('')}</tr>
+      ${d.rows.map(r => `<tr>${r.map(v => `<td title="${esc(v)}">${cell(v)}</td>`).join('')}</tr>`).join('')}</table>`;
+}
+
+/** Entity page link: the entity's row in its root table (found via /tables, else smType + "s"). */
+async function openInDuckDb(smType, entityId) {
+  if (!duckTables) { const d = await apiJson(ANALYTICS.duckdb.api + '/tables'); duckTables = d.tables || []; }
+  const root = duckTables.find(t => t.kind === 'root' && t.smType === smType)?.name ?? smType + 's';
+  showAnalytics('duckdb', `SELECT * FROM "${root}" WHERE entity_id = '${entityId.replace(/'/g, "''")}'`);
+}
+
+/** Entity page link: the entity's latest row in ClickHouse (root table from /tables, FINAL for one row). */
+async function openInClickHouse(smType, entityId) {
+  if (!chTables) { const d = await apiJson(ANALYTICS.clickhouse.api + '/tables'); chTables = d.tables || []; }
+  const root = chTables.find(t => t.kind === 'root' && t.smType === smType)?.name ?? smType + 's';
+  showAnalytics('clickhouse', `SELECT * FROM ${root} FINAL WHERE entity_id = '${entityId.replace(/'/g, "''")}'`);
+}
+
+/**
+ * Pipeline strip: per sink applied/sec, consumer-group lag and dead-lettered records (DLQ topic per target;
+ * ClickHouse's kafka_errors), Deephaven note, console links and the reconcile buttons.
+ */
+async function loadPipeline() {
+  const el = document.getElementById('pipeline');
+  if (!el) return;
+  const d = await apiJson('/api/analytics/lag');
+  if (!document.getElementById('pipeline')) return;
+  const groups = (d.groups || []).filter(g => g.target !== 'other');
+  const duck = d.sinks?.duckdb || {}, ch = d.sinks?.clickhouse || {}, dlq = d.dlq || {}, by = dlq.byTarget || {};
+  const rate = v => v === null || v === undefined ? '…' : v;
+  const chip = g => `<span class="lag ${g.lag > 0 ? 'behind' : ''}" title="${esc(Object.entries(g.topics).map(([t, v]) =>
+      `${t}: committed ${v.committed}, end ${v.end}`).join('\n'))} · ${esc(g.state)}"><b>${esc(g.group)}</b> lag ${g.lag}</span>`;
+  const duckDlq = Object.entries(by).filter(([t]) => t.startsWith('sink-duckdb')).reduce((a, [, n]) => a + n, 0);
+  const chErr = ch.kafkaErrors ?? 0;
+  el.innerHTML = '<span class="muted">pipeline</span>' + (d.error ? `<span class="FAILED">${esc(d.error)}</span>` : '')
+    + (duck.error ? '' : `<span class="lag" title="entities applied by the DuckDB sink (total ${duck.applied ?? 0})"><b>duckdb</b> ${rate(duck.appliedPerSec)}/s</span>`)
+    + (ch.error ? '' : `<span class="lag" title="snapshots read by ClickHouse's Kafka engine (total ${ch.read ?? 0})"><b>clickhouse</b> ${rate(ch.readPerSec)}/s</span>`)
+    + groups.map(chip).join('')
+    + `<span class="lag ${duckDlq > 0 ? 'bad' : ''}" title="${esc((dlq.topic || 'entity-snapshots.dlq') + (dlq.latestError ? '\nlatest: ' + dlq.latestError : '') + (dlq.error ? '\n' + dlq.error : ''))}"><b>dlq</b> duckdb ${duckDlq}</span>`
+    + `<span class="lag ${chErr > 0 ? 'bad' : ''}" title="ClickHouse rows in kafka_errors (unparsable records)"><b>kafka_errors</b> clickhouse ${chErr}</span>`
+    + `<span class="lag muted" title="${esc(d.deephaven || '')}"><b>deephaven</b> replays from 0</span>`
+    + (d.console?.reachable ? `<a href="${esc(d.console.url)}" target="_blank">Redpanda Console ↗</a>`
+       : `<span class="muted" title="COMPOSE_PROFILES=kafka-ui docker compose up -d redpanda-console">Redpanda Console off</span>`)
+    + (d.clickhousePlay ? `<a href="${esc(d.clickhousePlay)}" target="_blank">ClickHouse Play ↗</a>` : '')
+    + `<button onclick="runReconcile(true)" title="compare the StateStore's terminal entities with DuckDB, publish nothing">Reconcile (dry run)</button>`
+    + `<button onclick="runReconcile(false)" title="republish the current snapshot of terminal entities missing or stale in DuckDB">Reconcile</button>`;
+}
+
+/** Runs ReconcileWorkflow for every typed smType (each in its own worker) and shows the counts. */
+async function runReconcile(dryRun) {
+  const el = document.getElementById('reconcile');
+  if (!el) return;
+  el.style.display = '';
+  el.innerHTML = `<span class="muted">reconciling${dryRun ? ' (dry run)' : ''}…</span>`;
+  const d = await apiJson('/api/analytics/reconcile?dryRun=' + dryRun, { method: 'POST' });
+  if (d.error) { el.innerHTML = `<div class="FAILED">${esc(d.error)}</div>`; return; }
+  const t = d.totals || {};
+  const row = r => r.error ? `<tr><td>${esc(r.smType)}</td><td colspan="7" class="FAILED">${esc(r.error)}</td></tr>`
+    : `<tr><td>${esc(r.smType)}</td><td>${r.scanned}</td><td>${r.terminal}</td><td>${r.missing}</td><td>${r.stale}</td>
+       <td>${r.ahead}</td><td>${r.republished}</td><td class="muted">${r.skipped ? esc(r.skipped) : r.elapsedMs + ' ms'}</td></tr>`;
+  el.innerHTML = `<b>Reconciliation${d.dryRun ? ' (dry run)' : ''}</b> <span class="muted">${esc(d.at)} · ${d.elapsedMs} ms ·
+      scanned ${t.scanned}, missing ${t.missing}, stale ${t.stale}, republished ${t.republished}</span>
+    <table><tr><th>smType</th><th>scanned</th><th>terminal</th><th>missing</th><th>stale</th><th>ahead</th><th>republished</th><th></th></tr>
+      ${(d.reports || []).map(row).join('')}</table>
+    ${(d.skipped || []).length ? `<div class="muted">skipped: ${d.skipped.map(s => esc(s.smType + ' (' + s.reason + ')')).join(', ')}</div>` : ''}`;
+}
+
+/**
+ * Deephaven: live widgets as iframes. The PSK comes from /api/analytics/deephaven/config and is put in the
+ * iframe URLs so they log in by themselves -- fine for local dev only (anyone who can open the page gets it).
+ */
+async function showDeephaven() {
+  const el = document.getElementById('dh');
+  const c = await apiJson('/api/analytics/deephaven/config');
+  if (c.error) { el.innerHTML = `<div class="panel FAILED">${esc(c.error)}</div>`; return; }
+  const psk = encodeURIComponent(c.psk);
+  el.innerHTML = `<div class="panel hint">
+      <a href="${esc(c.ide)}" target="_blank"><b>Open Deephaven IDE ↗</b></a>
+      ${c.reachable ? '' : '<span class="FAILED"> · Deephaven is not reachable (scripts/up.sh &lt;store&gt; --analytics)</span>'}
+      <p style="margin:8px 0 0"><b>Run your own Python:</b> every table below (and <code>ticks</code>, <code>instruments</code>,
+        <code>bars_1m</code>, <code>snapshots</code>, <code>orders_latest</code>, …) is a global in the IDE console, built by
+        <code>infra/deephaven/app.d/concert.py</code>. Starter notebooks (IDE › File Explorer, saved in
+        <code>infra/deephaven/notebooks</code>): ${c.notebooks.map(n => `<code>${esc(n)}</code>`).join(', ')}.</p></div>
+    <div class="widgets">${c.widgets.map(w => `<div class="panel"><h4>${esc(w)}
+        <a href="${esc(c.url)}/iframe/widget/?name=${encodeURIComponent(w)}&psk=${psk}" target="_blank" title="open alone">↗</a></h4>
+      <iframe loading="lazy" src="${esc(c.url)}/iframe/widget/?name=${encodeURIComponent(w)}&psk=${psk}" title="${esc(w)}"></iframe></div>`).join('')}
+    </div>`;
+}
+
+const [hv, hid, hextra] = location.hash.slice(1).split('/');
+if (hv === 'analytics') showAnalytics(hid || 'duckdb', hextra ? decodeURIComponent(hextra) : undefined);
+else if (hv && hid) go(hv, decodeURIComponent(hid)); else showRecent();
+</script>
+</body>
+</html>

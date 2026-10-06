@@ -1,0 +1,44 @@
+###Pure
+// Support ticket model for the ModelStateMachine tests.
+
+Enum demo::ticket::Priority { LOW, NORMAL, HIGH }
+
+Class demo::ticket::Ticket
+{
+  id: String[1];
+  priority: Priority[1] = Priority.NORMAL;
+  assignee: String[0..1];
+  resolution: String[0..1];
+  resolvedAt: DateTime[0..1];
+  reopenCount: Integer[1] = 0;
+}
+
+Class demo::ticket::Comment
+{
+  author: String[1];
+  text: String[1];
+}
+
+// At most two comments: a third one makes the ticket invalid and is rejected.
+Association demo::ticket::TicketComments
+{
+  ticket: Ticket[1];
+  comments: Comment[0..2];
+}
+
+Class demo::ticket::AssignCommand
+{
+  assignee: String[1];
+  priority: Priority[0..1];
+}
+
+Class demo::ticket::CommentCommand
+{
+  author: String[1];
+  text: String[1];
+}
+
+Class demo::ticket::ResolveCommand
+{
+  resolution: String[1];
+}

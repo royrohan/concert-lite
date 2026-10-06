@@ -1,0 +1,124 @@
+###Pure
+// Order domain for the code generator tests.
+import demo::meta::*;
+
+Profile demo::meta::Governance
+{
+  stereotypes: [aggregate, pii];
+  tags: [owner, since];
+}
+
+Enum demo::order::Currency { EUR, USD, GBP }
+
+Enum demo::order::OrderStatus { NEW, PAID, SHIPPED, CANCELLED }
+
+// 'new' is a Java keyword: the constant is generated as new_ and serialized as "new".
+Enum demo::order::Channel { web, store, new }
+
+Class demo::order::Money
+{
+  amount: Decimal[1];
+  currency: Currency[1] = Currency.EUR;
+}
+
+Class demo::order::Entity
+{
+  id: String[1];
+}
+
+Class demo::order::Auditable
+{
+  createdAt: DateTime[0..1];
+  createdBy: String[0..1] = 'system';
+}
+
+Class <<Governance.aggregate>> {Governance.owner = 'team-orders'} demo::order::Order extends Entity, Auditable
+[
+  hasLines: $this.lines->size() > 0,
+  $this.discount->isEmpty() || ($this.discount->toOne() < 1.0)
+]
+{
+  status: OrderStatus[1] = OrderStatus.NEW;
+  channels: Channel[*] = [Channel.web, Channel.new];
+  express: Boolean[1] = false;
+  priority: Integer[1] = 3;
+  weight: Float[0..1] = 1.5;
+  discount: Decimal[0..1] = 0.25;
+  score: Number[0..1] = 7;
+  labels: String[*] = ['web', 'new'];
+  priorities: Integer[1..*] = [1, 2];
+  orderDate: StrictDate[0..1];
+  deliveryDate: Date[0..1];
+  total: Money[1];
+  payment: Payment[0..1];
+  <<Governance.pii>> {Governance.since = '2024'} customerEmail: String[0..1];
+  default: String[0..1];
+
+  lineCount() { $this.lines->size() } : Integer[1];
+}
+
+Class demo::order::OrderLine
+{
+  sku: String[1];
+  quantity: Integer[1] = 1;
+  price: Money[0..1];
+}
+
+Class demo::order::Payment
+{
+  reference: String[1];
+}
+
+Class demo::order::CardPayment extends Payment
+{
+  last4: String[1];
+}
+
+Class demo::order::WalletPayment extends Payment
+{
+  wallet: String[1];
+}
+
+Class demo::order::Shipment
+{
+  carrier: String[1];
+  trackingIds: String[0..3];
+}
+
+Class demo::order::Invoice
+{
+  number: String[1];
+}
+
+Class demo::order::Tag
+{
+  name: String[1];
+}
+
+// One-to-many: Order.lines is owned, OrderLine.order is the back-reference.
+Association demo::order::OrderLines
+{
+  order: Order[1];
+  lines: OrderLine[1..*];
+}
+
+// One-to-one: the composite end is owned.
+Association demo::order::OrderShipment
+{
+  (composite) shipment: Shipment[0..1];
+  order: Order[1];
+}
+
+// A second owned one-to-one end on the same class.
+Association demo::order::OrderInvoice
+{
+  order: Order[1];
+  (composite) invoice: Invoice[0..1];
+}
+
+// Many-to-many: neither end is serialized.
+Association demo::order::OrderTags
+{
+  orders: Order[*];
+  tags: Tag[*];
+}

@@ -1,0 +1,14 @@
+###Pure
+// Shared value types of the insurance example.
+
+Enum insurance::Product
+{
+  HOME, AUTO, TRAVEL
+}
+
+// A money amount; embedded (flattened into amount / currency columns by the analytics sinks).
+Class insurance::Money
+{
+  amount: Decimal[1];
+  currency: String[1] = 'USD';
+}

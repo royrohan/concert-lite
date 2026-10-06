@@ -1,0 +1,71 @@
+###Pure
+// Policy: quoted, bound (ACTIVE), endorsed while active, then expires or is cancelled.
+// The claim machine locks policy:{policyId} -- the policy entity's own key -- so claim approvals and payments
+// are serialized with the policy's events.
+
+Enum insurance::PolicyStatus
+{
+  QUOTED, ACTIVE, EXPIRED, CANCELLED, DECLINED
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'policy',
+  concert::sm.initial = 'QUOTED',
+  concert::sm.transitions = '
+    QUOTED -bind->    ACTIVE    : BindPolicy;
+    QUOTED -decline-> DECLINED  : DeclineQuote;
+    ACTIVE -endorse-> ACTIVE    : EndorsePolicy;
+    ACTIVE -expire->  EXPIRED   : ExpirePolicy;
+    ACTIVE -cancel->  CANCELLED : CancelPolicy',
+  concert::sm.statusProperty = 'status',
+  concert::sm.idProperty = 'policyId'
+}
+insurance::Policy
+{
+  policyId: String[1];
+  status: PolicyStatus[1] = PolicyStatus.QUOTED;
+  holderName: String[0..1];
+  product: Product[0..1];
+  premium: Money[0..1];
+  coverageLimit: Decimal[0..1];
+  deductible: Decimal[0..1];
+  startDate: StrictDate[0..1];
+  endDate: StrictDate[0..1];
+  endorsements: Integer[1] = 0;
+  boundAt: DateTime[0..1];
+  closedAt: DateTime[0..1];
+  closeReason: String[0..1];
+}
+
+Class <<concert::sm.command>> insurance::BindPolicy
+{
+  holderName: String[1];
+  product: Product[1];
+  premium: Money[1];
+  coverageLimit: Decimal[1];
+  deductible: Decimal[1];
+  startDate: StrictDate[1];
+  endDate: StrictDate[1];
+}
+
+Class <<concert::sm.command>> insurance::DeclineQuote
+{
+  reason: String[1];
+}
+
+Class <<concert::sm.command>> insurance::EndorsePolicy
+{
+  coverageLimit: Decimal[1];
+  note: String[0..1];
+}
+
+Class <<concert::sm.command>> insurance::ExpirePolicy
+{
+  endDate: StrictDate[1];
+}
+
+Class <<concert::sm.command>> insurance::CancelPolicy
+{
+  reason: String[1];
+}

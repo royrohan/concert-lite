@@ -1,0 +1,43 @@
+<!--
+  Users (local dev only, plain-text passwords):
+    concert / concert    admin, used by the sink-clickhouse provisioner (DDL)
+    readonly / readonly  the trace UI's SQL console and the Play UI: read-only, bounded queries
+  The image's "default" user stays passwordless and local to the container (healthcheck).
+-->
+<clickhouse>
+    <profiles>
+        <readonly_ui>
+            <!-- 2 = no writes or DDL, but settings may be changed: the Play UI and HTTP clients send some
+                 (default_format, max_result_rows, ...). The constraints below cap what they can change. -->
+            <readonly>2</readonly>
+            <max_execution_time>10</max_execution_time>
+            <max_result_rows>5000</max_result_rows>
+            <result_overflow_mode>break</result_overflow_mode>
+            <max_memory_usage>536870912</max_memory_usage>
+            <max_threads>2</max_threads>
+            <output_format_json_quote_64bit_integers>0</output_format_json_quote_64bit_integers>
+            <constraints>
+                <readonly><const/></readonly>
+                <max_execution_time><max>30</max></max_execution_time>
+                <max_result_rows><max>10000</max></max_result_rows>
+                <max_memory_usage><max>536870912</max></max_memory_usage>
+                <max_threads><max>4</max></max_threads>
+            </constraints>
+        </readonly_ui>
+    </profiles>
+    <users>
+        <concert>
+            <password>concert</password>
+            <profile>default</profile>
+            <quota>default</quota>
+            <networks><ip>::/0</ip></networks>
+            <access_management>1</access_management>
+        </concert>
+        <readonly>
+            <password>readonly</password>
+            <profile>readonly_ui</profile>
+            <quota>default</quota>
+            <networks><ip>::/0</ip></networks>
+        </readonly>
+    </users>
+</clickhouse>

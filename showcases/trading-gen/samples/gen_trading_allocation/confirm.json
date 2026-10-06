@@ -1,0 +1,9 @@
+{
+  "@type" : "trading::command::ConfirmAllocationCommand",
+  "orderId" : "GEN-TRADING-ORDER-1001",
+  "accountId" : "ACCOUNT-ID-1001",
+  "ts" : "2026-01-15T10:00:00Z",
+  "allocId" : "GEN-TRADING-ALLOCATION-1001",
+  "allocAccountId" : "ALLOC-ACCOUNT-ID-1001",
+  "confirmedBy" : "middle-office"
+}

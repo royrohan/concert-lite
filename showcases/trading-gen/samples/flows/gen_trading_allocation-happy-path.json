@@ -1,0 +1,34 @@
+{
+  "name" : "gen_trading_allocation-happy-path",
+  "description" : "PENDING -allocate-> ALLOCATED -confirm-> CONFIRMED",
+  "events" : [ {
+    "smType" : "gen_trading_allocation",
+    "instanceKey" : "GEN-TRADING-ALLOCATION-1001",
+    "eventType" : "allocate",
+    "payload" : {
+      "@type" : "trading::command::AllocateCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "allocId" : "GEN-TRADING-ALLOCATION-1001",
+      "allocAccountId" : "ALLOC-ACCOUNT-ID-1001",
+      "symbol" : "AAPL",
+      "side" : "BUY",
+      "quantity" : 10,
+      "avgPx" : 101.25
+    }
+  }, {
+    "smType" : "gen_trading_allocation",
+    "instanceKey" : "GEN-TRADING-ALLOCATION-1001",
+    "eventType" : "confirm",
+    "payload" : {
+      "@type" : "trading::command::ConfirmAllocationCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "allocId" : "GEN-TRADING-ALLOCATION-1001",
+      "allocAccountId" : "ALLOC-ACCOUNT-ID-1001",
+      "confirmedBy" : "middle-office"
+    }
+  } ]
+}

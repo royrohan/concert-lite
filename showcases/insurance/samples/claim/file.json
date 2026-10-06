@@ -1,0 +1,11 @@
+{
+  "policyId" : "POLICY-1001",
+  "claimant" : "claimant-1",
+  "lossType" : "FIRE",
+  "lossDate" : "2026-01-15",
+  "description" : "sample description",
+  "claimed" : {
+    "amount" : 1250.00,
+    "currency" : "USD"
+  }
+}

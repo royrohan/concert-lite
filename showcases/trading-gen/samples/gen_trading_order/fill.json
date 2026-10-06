@@ -1,0 +1,15 @@
+{
+  "@type" : "trading::command::FillCommand",
+  "orderId" : "GEN-TRADING-ORDER-1001",
+  "accountId" : "ACCOUNT-ID-1001",
+  "ts" : "2026-01-15T10:00:00Z",
+  "fillId" : "GEN-TRADING-FILL-1001",
+  "execId" : "GEN-TRADING-EXECUTION-1001",
+  "symbol" : "AAPL",
+  "side" : "BUY",
+  "quantity" : 10,
+  "price" : 101.25,
+  "venue" : "XNAS",
+  "liquidity" : "ADD",
+  "fee" : 1.50
+}

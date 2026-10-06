@@ -1,0 +1,34 @@
+###Pure
+// Event payloads referencing the shop domain from another file.
+Class shop::events::OrderPlaced
+{
+  order: shop::domain::Order[1];
+  customer: Customer[1];
+  currency: Currency[1] = Currency.USD;
+  placedOn: StrictDate[1];
+}
+
+###Mapping
+Mapping shop::mapping::Ignored
+(
+  shop::domain::Order: Pure { ~src shop::domain::Order  orderId: $src.orderId }
+)
+
+###Pure
+Class shop::events::Cart
+{
+  items: String[*];
+}
+
+// One-to-one without composite: end2 ('cart') is owned.
+Association shop::events::CustomerCart
+{
+  customer: shop::domain::Customer[1];
+  cart: Cart[0..1];
+}
+
+function shop::events::isLate(o: shop::domain::Order[1], days: Integer[1]): Boolean[1]
+{
+  let limit = $o.orderDate->adjust($days, DurationUnit.DAYS);
+  $limit < today();
+}

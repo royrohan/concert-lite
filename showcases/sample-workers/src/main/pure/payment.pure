@@ -1,0 +1,81 @@
+###Pure
+// Payment aggregate handled by PaymentStateMachine (sm type "payment").
+//   PENDING --authorize--> AUTHORIZED --capture--> CAPTURED --refund--> REFUNDED
+//   PENDING --decline--> DECLINED;  AUTHORIZED --void--> VOIDED
+import demo::common::*;
+
+Enum demo::payment::PaymentStatus
+{
+  PENDING, AUTHORIZED, CAPTURED, REFUNDED, DECLINED, VOIDED
+}
+
+Enum demo::payment::EntryKind
+{
+  AUTHORIZATION, CAPTURE, REFUND, VOID
+}
+
+Class demo::payment::Payment
+{
+  paymentId: String[1];
+  status: PaymentStatus[1] = PaymentStatus.PENDING;
+  orderId: String[0..1];
+  method: PaymentMethod[0..1];
+  authorized: Money[0..1];
+  captured: Money[0..1];
+  refunded: Money[0..1];
+  authorizationCode: String[0..1];
+  declineReason: String[0..1];
+  closedAt: DateTime[0..1];
+}
+
+// Every money movement, in order.
+Class demo::payment::PaymentEntry
+{
+  kind: EntryKind[1];
+  amount: Money[1];
+  at: DateTime[1];
+  reference: String[1];
+}
+
+Association demo::payment::PaymentEntries
+{
+  payment: Payment[1];
+  entries: PaymentEntry[*];
+}
+
+// ---- event payloads ----
+
+Class demo::payment::AuthorizeCommand
+{
+  amount: Money[1];
+  method: PaymentMethod[1];
+  orderId: String[0..1];
+  workMs: Integer[0..1];
+}
+
+// Captures the authorized amount unless a (smaller) amount is given.
+Class demo::payment::CaptureCommand
+{
+  amount: Money[0..1];
+  workMs: Integer[0..1];
+}
+
+// Refunds the captured amount unless a (smaller) amount is given.
+Class demo::payment::RefundCommand
+{
+  amount: Money[0..1];
+  reason: String[0..1];
+  workMs: Integer[0..1];
+}
+
+Class demo::payment::DeclineCommand
+{
+  reason: String[1];
+  workMs: Integer[0..1];
+}
+
+Class demo::payment::VoidCommand
+{
+  reason: String[0..1];
+  workMs: Integer[0..1];
+}

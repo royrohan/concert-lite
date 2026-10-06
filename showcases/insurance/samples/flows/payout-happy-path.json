@@ -1,0 +1,26 @@
+{
+  "name" : "payout-happy-path",
+  "description" : "PENDING -schedule-> SCHEDULED -disburse-> DISBURSED",
+  "events" : [ {
+    "smType" : "payout",
+    "instanceKey" : "PAYOUT-1001",
+    "eventType" : "schedule",
+    "payload" : {
+      "claimId" : "CLAIM-1001",
+      "payeeAccount" : "PAYEE-ACCOUNT-1001",
+      "method" : "ACH",
+      "amount" : {
+        "amount" : 1250.00,
+        "currency" : "USD"
+      }
+    }
+  }, {
+    "smType" : "payout",
+    "instanceKey" : "PAYOUT-1001",
+    "eventType" : "disburse",
+    "payload" : {
+      "claimId" : "CLAIM-1001",
+      "reference" : "reference-1"
+    }
+  } ]
+}

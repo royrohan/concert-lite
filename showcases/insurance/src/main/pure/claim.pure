@@ -1,0 +1,96 @@
+###Pure
+// Claim against a policy: filed, assessed, approved (or rejected) and paid.
+
+Enum insurance::ClaimStatus
+{
+  NEW, OPEN, ASSESSED, APPROVED, REJECTED, PAID, WITHDRAWN
+}
+
+Enum insurance::LossType
+{
+  FIRE, WATER, THEFT, COLLISION, OTHER
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'claim',
+  concert::sm.initial = 'NEW',
+  concert::sm.transitions = '
+    NEW      -file->     OPEN      : FileClaim;
+    OPEN     -assess->   ASSESSED  : AssessClaim;
+    OPEN     -withdraw-> WITHDRAWN : WithdrawClaim;
+    ASSESSED -approve->  APPROVED  : ApproveClaim;
+    ASSESSED -reject->   REJECTED  : RejectClaim;
+    APPROVED -pay->      PAID      : PayClaim',
+  concert::sm.locks = '
+    file, approve: policy:{policyId};
+    pay: policy:{policyId}, payee:{payeeAccount}',
+  concert::sm.statusProperty = 'status',
+  concert::sm.idProperty = 'claimId'
+}
+insurance::Claim
+{
+  claimId: String[1];
+  status: ClaimStatus[1] = ClaimStatus.NEW;
+  policyId: String[0..1];
+  claimant: String[0..1];
+  lossType: LossType[0..1];
+  lossDate: StrictDate[0..1];
+  description: String[0..1];
+  claimed: Money[0..1];
+  assessedAmount: Decimal[0..1];
+  assessor: String[0..1];
+  approvedAmount: Decimal[0..1];
+  rejectReason: String[0..1];
+  payeeAccount: String[0..1];
+  paidAmount: Decimal[0..1];
+  filedAt: DateTime[0..1];
+  closedAt: DateTime[0..1];
+}
+
+// The policy owns (serializes) its claims' list; each claim is also its own aggregate (sm type claim), so the
+// analytics sinks keep claims in their own table and join on policyId.
+Association insurance::PolicyClaims
+{
+  policy: Policy[0..1];
+  claims: Claim[*];
+}
+
+Class <<concert::sm.command>> insurance::FileClaim
+{
+  policyId: String[1];
+  claimant: String[1];
+  lossType: LossType[1];
+  lossDate: StrictDate[1];
+  description: String[0..1];
+  claimed: Money[1];
+}
+
+Class <<concert::sm.command>> insurance::AssessClaim
+{
+  assessor: String[1];
+  assessedAmount: Decimal[1];
+}
+
+Class <<concert::sm.command>> insurance::ApproveClaim
+{
+  policyId: String[1];
+  approvedAmount: Decimal[1];
+}
+
+Class <<concert::sm.command>> insurance::RejectClaim
+{
+  reason: String[1];
+}
+
+Class <<concert::sm.command>> insurance::WithdrawClaim
+{
+  reason: String[1];
+}
+
+Class <<concert::sm.command>> insurance::PayClaim
+{
+  policyId: String[1];
+  payeeAccount: String[1];
+  paidAmount: Decimal[1];
+}

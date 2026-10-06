@@ -1,0 +1,42 @@
+{
+  "ref.instruments" : {
+    "class" : "trading::refdata::Instrument",
+    "columns" : [ [ "Symbol", "symbol", "string" ], [ "Isin", "isin", "string" ], [ "Name", "name", "string" ], [ "AssetClass", "assetClass", "string" ], [ "Sector", "sector", "string" ], [ "Currency", "currency", "string" ], [ "LotSize", "lotSize", "long" ], [ "TickSize", "tickSize", "double" ], [ "RefPrice", "refPrice", "double" ], [ "PrimaryMic", "primaryMic", "string" ], [ "UpdatedAt", "updatedAt", "instant" ] ]
+  },
+  "ref.accounts" : {
+    "class" : "trading::refdata::Account",
+    "columns" : [ [ "AccountId", "accountId", "string" ], [ "Name", "name", "string" ], [ "Desk", "desk", "string" ], [ "Type", "type", "string" ], [ "BaseCurrency", "baseCurrency", "string" ], [ "CreditLimit", "creditLimit", "double" ], [ "UpdatedAt", "updatedAt", "instant" ] ]
+  },
+  "ref.venues" : {
+    "class" : "trading::refdata::Venue",
+    "columns" : [ [ "Mic", "mic", "string" ], [ "Name", "name", "string" ], [ "Type", "type", "string" ], [ "MakerFeePerShare", "makerFeePerShare", "double" ], [ "TakerFeePerShare", "takerFeePerShare", "double" ], [ "UpdatedAt", "updatedAt", "instant" ] ]
+  },
+  "md.ticks" : {
+    "class" : "trading::marketdata::Tick",
+    "columns" : [ [ "Symbol", "symbol", "string" ], [ "Ts", "ts", "instant" ], [ "TsMillis", "tsMillis", "long" ], [ "Seq", "seq", "long" ], [ "Bid", "bid", "double" ], [ "BidSize", "bidSize", "long" ], [ "Ask", "ask", "double" ], [ "AskSize", "askSize", "long" ], [ "Mid", "mid", "double" ], [ "Last", "last", "double" ], [ "LastSize", "lastSize", "long" ], [ "Volume", "volume", "long" ], [ "TradeVenue", "tradeVenue", "string" ] ]
+  },
+  "md.bars.1m" : {
+    "class" : "trading::marketdata::Bar",
+    "columns" : [ [ "Symbol", "symbol", "string" ], [ "Start", "start", "instant" ], [ "End", "end", "instant" ], [ "Open", "open", "double" ], [ "High", "high", "double" ], [ "Low", "low", "double" ], [ "Close", "close", "double" ], [ "Volume", "volume", "long" ], [ "Vwap", "vwap", "double" ], [ "Trades", "trades", "long" ], [ "Ticks", "ticks", "long" ] ]
+  },
+  "entity-snapshots" : {
+    "roots" : {
+      "trading_order" : {
+        "class" : "trading::order::Order",
+        "columns" : [ [ "OrderId", "/model/orderId", "string" ], [ "ClientId", "/model/clientId", "string" ], [ "AccountId", "/model/accountId", "string" ], [ "Symbol", "/model/symbol", "string" ], [ "Side", "/model/side", "string" ], [ "OrderType", "/model/orderType", "string" ], [ "LimitPrice", "/model/limitPrice", "double" ], [ "TimeInForce", "/model/timeInForce", "string" ], [ "Currency", "/model/currency", "string" ], [ "Quantity", "/model/quantity", "long" ], [ "FilledQty", "/model/filledQty", "long" ], [ "LeavesQty", "/model/leavesQty", "long" ], [ "RoutedQty", "/model/routedQty", "long" ], [ "AllocatedQty", "/model/allocatedQty", "long" ], [ "AvgPx", "/model/avgPx", "double" ], [ "ArrivalPx", "/model/arrivalPx", "double" ], [ "Notional", "/model/notional", "double" ], [ "TotalFees", "/model/totalFees", "double" ], [ "Status", "/model/status", "string" ], [ "RejectReason", "/model/rejectReason", "string" ], [ "CancelReason", "/model/cancelReason", "string" ], [ "CreatedAt", "/model/createdAt", "instant" ], [ "AckedAt", "/model/ackedAt", "instant" ], [ "FirstFillAt", "/model/firstFillAt", "instant" ], [ "LastFillAt", "/model/lastFillAt", "instant" ], [ "CompletedAt", "/model/completedAt", "instant" ] ]
+      },
+      "trading_execution" : {
+        "class" : "trading::order::Execution",
+        "columns" : [ [ "ExecId", "/model/execId", "string" ], [ "OrderId", "/model/orderId", "string" ], [ "Symbol", "/model/symbol", "string" ], [ "Side", "/model/side", "string" ], [ "Venue", "/model/venue", "string" ], [ "Quantity", "/model/quantity", "long" ], [ "FilledQty", "/model/filledQty", "long" ], [ "LimitPrice", "/model/limitPrice", "double" ], [ "AvgPx", "/model/avgPx", "double" ], [ "TotalFees", "/model/totalFees", "double" ], [ "Status", "/model/status", "string" ], [ "RoutedAt", "/model/routedAt", "instant" ], [ "CompletedAt", "/model/completedAt", "instant" ] ]
+      },
+      "trading_fill" : {
+        "class" : "trading::order::Fill",
+        "columns" : [ [ "FillId", "/model/fillId", "string" ], [ "ExecId", "/model/execId", "string" ], [ "OrderId", "/model/orderId", "string" ], [ "AccountId", "/model/accountId", "string" ], [ "Symbol", "/model/symbol", "string" ], [ "Side", "/model/side", "string" ], [ "Quantity", "/model/quantity", "long" ], [ "Price", "/model/price", "double" ], [ "Venue", "/model/venue", "string" ], [ "Liquidity", "/model/liquidity", "string" ], [ "Fee", "/model/fee", "double" ], [ "Status", "/model/status", "string" ], [ "Ts", "/model/ts", "instant" ] ]
+      },
+      "trading_allocation" : {
+        "class" : "trading::order::Allocation",
+        "columns" : [ [ "AllocId", "/model/allocId", "string" ], [ "OrderId", "/model/orderId", "string" ], [ "AccountId", "/model/accountId", "string" ], [ "Symbol", "/model/symbol", "string" ], [ "Side", "/model/side", "string" ], [ "Quantity", "/model/quantity", "long" ], [ "AvgPx", "/model/avgPx", "double" ], [ "Status", "/model/status", "string" ], [ "AllocatedAt", "/model/allocatedAt", "instant" ], [ "ConfirmedAt", "/model/confirmedAt", "instant" ] ]
+      }
+    }
+  }
+}

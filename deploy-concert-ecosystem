@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# Deploy a generated ecosystem (showcases/<name>, from ./generate-concert-ecosystem) into the local stack:
+#   ./deploy-concert-ecosystem <name> [--store postgres|dynamo|spanner] [--no-analytics]
+# Builds the module, runs docker compose with the module's compose.yml override and the profiles
+# <store>, apps, analytics (unless --no-analytics) and <name>, waits for health, re-provisions ClickHouse,
+# restarts the DuckDB sink / Deephaven when they predate the ecosystem's models, then prints the UI links,
+# the commands to send events and example SQL. Safe to re-run. Store default: STORE_KIND in .env.
+set -euo pipefail
+root=$(cd "$(dirname "$0")" && pwd)
+cd "$root"
+. scripts/java-env.sh
+
+usage() {
+  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+}
+
+name=${1:-}
+case $name in ''|-*) usage ;; esac
+shift
+store=$(grep -E '^STORE_KIND=' .env 2>/dev/null | cut -d= -f2 || true)
+store=${store:-postgres}
+analytics=1
+while [ $# -gt 0 ]; do
+  case $1 in
+    --store) [ $# -ge 2 ] || usage; store=$2; shift 2 ;;
+    --store=*) store=${1#*=}; shift ;;
+    --no-analytics) analytics=0; shift ;;
+    *) usage ;;
+  esac
+done
+override="showcases/$name/compose.yml"
+if [ ! -f "$override" ]; then
+  echo "no $override: generate it first with ./generate-concert-ecosystem <models-dir> --name $name" >&2
+  exit 2
+fi
+case $store in
+  postgres) db_profile=postgres ;;
+  spanner) db_profile=spanner ;;
+  dynamo) db_profile="" ;;
+  *) usage ;;
+esac
+
+dc() { docker compose -f docker-compose.yml -f "$override" "$@"; }
+
+# wait_until <description> <seconds> <command...>
+wait_until() {
+  desc=$1 secs=$2
+  shift 2
+  printf '    waiting for %s ' "$desc"
+  i=0
+  while ! "$@" >/dev/null 2>&1; do
+    i=$((i + 2))
+    if [ $i -ge "$secs" ]; then
+      echo " timed out after ${secs}s" >&2
+      return 1
+    fi
+    printf '.'
+    sleep 2
+  done
+  echo " ok"
+}
+
+# seconds since the epoch of an RFC 3339 timestamp (docker's StartedAt), macOS or GNU date
+epoch() {
+  t=${1%%.*}
+  t=${t%Z}
+  date -u -j -f "%Y-%m-%dT%H:%M:%S" "$t" +%s 2>/dev/null || date -u -d "$t" +%s 2>/dev/null || echo 0
+}
+
+# newest modification time (epoch seconds) of the given files
+newest() {
+  n=0
+  for f in "$@"; do
+    [ -e "$f" ] || continue
+    m=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f")
+    [ "$m" -gt "$n" ] && n=$m
+  done
+  echo "$n"
+}
+
+started() { epoch "$(docker inspect -f '{{.State.StartedAt}}' "$(dc ps -q "$1")" 2>/dev/null || echo 0)"; }
+
+worker_up() { dc logs "$name-worker" 2>&1 | grep -q "worker up for sm-"; }
+http_ok() { curl -sf -o /dev/null --max-time 3 "$1"; }
+deephaven_loaded() { dc logs deephaven 2>&1 | grep -q "\[concert\] ecosystem $name:"; }
+duckdb_has() { curl -sf --max-time 3 http://localhost:8090/tables | grep -q "\"$1\""; }
+
+echo "==> building :$name"
+./gradlew -q --console=plain ":$name:installDist" ":ecosystem-gen:installDist"
+
+profiles="${db_profile:+$db_profile,}apps"
+if [ $analytics = 1 ]; then
+  profiles="$profiles,analytics"
+  unset KAFKA_BOOTSTRAP
+else
+  export KAFKA_BOOTSTRAP=""
+fi
+export STORE_KIND=$store
+export COMPOSE_PROFILES="$profiles,$name"
+echo "==> docker compose -f docker-compose.yml -f $override up -d --build   (STORE_KIND=$STORE_KIND COMPOSE_PROFILES=$COMPOSE_PROFILES)"
+dc up -d --build
+
+echo "==> health"
+wait_until "trace UI" 180 http_ok http://localhost:8088/api/recent
+wait_until "$name-worker" 240 worker_up
+if [ $analytics = 1 ]; then
+  wait_until "ClickHouse" 180 http_ok http://localhost:8123/ping
+  wait_until "DuckDB sink" 180 http_ok http://localhost:8090/health
+
+  echo "==> ClickHouse schema (provisioner)"
+  dc run --rm --no-deps sink-clickhouse 2>&1 | grep -E "ClickHouse ready|ERROR|Exception" || true
+
+  models=$(ls "showcases/$name/src/main/pure/"*.pure)
+  # shellcheck disable=SC2086
+  changed=$(newest $models)
+  if [ "$(started sink-duckdb)" -lt "$changed" ]; then
+    echo "==> restarting sink-duckdb (models changed since it started)"
+    dc restart sink-duckdb
+    wait_until "DuckDB sink" 180 http_ok http://localhost:8090/health
+  fi
+  first_table=$(sed -n 's/.*"table" : "\([^"]*\)".*/\1/p' "showcases/$name/ecosystem.json" | head -1)
+  wait_until "DuckDB table $first_table" 60 duckdb_has "$first_table" || echo "    (check: docker compose logs sink-duckdb)" >&2
+
+  snippet="infra/deephaven/app.d/ecosystems/$name.py"
+  if [ "$(started deephaven)" -lt "$(newest "$snippet" infra/deephaven/app.d/concert.py)" ] || ! deephaven_loaded; then
+    echo "==> restarting deephaven (loads $snippet)"
+    dc restart deephaven
+  fi
+  wait_until "Deephaven tables of $name" 240 deephaven_loaded || echo "    (check: docker compose logs deephaven)" >&2
+fi
+
+analytics_flag=""
+[ $analytics = 1 ] || analytics_flag="--no-analytics"
+"$root/core/ecosystem-gen/build/install/ecosystem-gen/bin/ecosystem-gen" summary "$name" --store "$store" $analytics_flag --repo "$root"

@@ -1,0 +1,8 @@
+{
+  "@type" : "trading::command::CloseOrderCommand",
+  "orderId" : "GEN-TRADING-ORDER-1001",
+  "accountId" : "ACCOUNT-ID-1001",
+  "ts" : "2026-01-15T10:00:00Z",
+  "allocatedQty" : 10,
+  "allocationCount" : 10
+}

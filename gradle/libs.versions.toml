@@ -10,6 +10,8 @@ jqwik = "1.10.1"
 testcontainers = "2.0.5"
 hdrhistogram = "2.2.2"
 dsql = "1.5.0"
+gcloud-bom = "26.90.0"
+javapoet = "0.20.0"
 
 [libraries]
 temporal-sdk = { module = "io.temporal:temporal-sdk", version.ref = "temporal" }
@@ -17,8 +19,14 @@ temporal-testing = { module = "io.temporal:temporal-testing", version.ref = "tem
 aws-bom = { module = "software.amazon.awssdk:bom", version.ref = "awssdk" }
 aws-kinesis = { module = "software.amazon.awssdk:kinesis" }
 aws-netty = { module = "software.amazon.awssdk:netty-nio-client" }
+aws-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
+aws-apache = { module = "software.amazon.awssdk:apache5-client" }
+gcloud-bom = { module = "com.google.cloud:libraries-bom", version.ref = "gcloud-bom" }
+gcloud-spanner = { module = "com.google.cloud:google-cloud-spanner" }
 jackson-bom = { module = "com.fasterxml.jackson:jackson-bom", version.ref = "jackson" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind" }
+jackson-jsr310 = { module = "com.fasterxml.jackson.datatype:jackson-datatype-jsr310" }
+javapoet = { module = "com.palantir.javapoet:javapoet", version.ref = "javapoet" }
 postgres = { module = "org.postgresql:postgresql", version.ref = "postgres" }
 hikari = { module = "com.zaxxer:HikariCP", version.ref = "hikari" }
 dsql-connector = { module = "software.amazon.dsql:aurora-dsql-jdbc-connector", version.ref = "dsql" }
@@ -32,3 +40,7 @@ testcontainers-bom = { module = "org.testcontainers:testcontainers-bom", version
 testcontainers = { module = "org.testcontainers:testcontainers" }
 testcontainers-junit = { module = "org.testcontainers:testcontainers-junit-jupiter" }
 hdrhistogram = { module = "org.hdrhistogram:HdrHistogram", version.ref = "hdrhistogram" }
+# Step 6 analytics sinks (inline versions so this block only appends)
+kafka-clients = { module = "org.apache.kafka:kafka-clients", version = "4.3.1" }
+duckdb-jdbc = { module = "org.duckdb:duckdb_jdbc", version = "1.5.6.0" }
+testcontainers-kafka = { module = "org.testcontainers:testcontainers-kafka" }

@@ -1,0 +1,30 @@
+###Pure
+// Value types shared by the order, payment and shipment models. Each handler lists this file next to
+// its own model (@LegendModel(files = {"common.pure", ...})); it is generated once. Other files may use
+// these classes as property types, but must not extend them or associate them, since that would change
+// their generated code per file set.
+
+Enum demo::common::Currency
+{
+  USD, EUR, GBP
+}
+
+Enum demo::common::PaymentMethod
+{
+  CARD, BANK_TRANSFER, WALLET
+}
+
+Class demo::common::Money
+{
+  amount: Decimal[1];
+  currency: Currency[1] = Currency.USD;
+}
+
+Class demo::common::Address
+{
+  line1: String[1];
+  line2: String[0..1];
+  city: String[1];
+  postalCode: String[1];
+  country: String[1];
+}

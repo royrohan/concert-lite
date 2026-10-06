@@ -1,0 +1,57 @@
+###Pure
+// Reference data. It never goes through concert: marketdata-sim publishes it straight to the compacted
+// Kafka topics ref.instruments, ref.accounts and ref.venues (key = symbol / accountId / mic). Orders,
+// fills and allocations reference it by id, and analytics joins on those ids.
+import trading::common::*;
+
+Enum trading::refdata::AccountType
+{
+  INSTITUTIONAL, HEDGE_FUND, PROPRIETARY, RETAIL_OMNIBUS
+}
+
+Enum trading::refdata::VenueType
+{
+  LIT, DARK
+}
+
+Class trading::refdata::Instrument
+[
+  positiveTick: $this.tickSize > 0,
+  positiveLot: $this.lotSize > 0
+]
+{
+  symbol: String[1];
+  isin: String[1];
+  name: String[1];
+  assetClass: AssetClass[1] = AssetClass.EQUITY;
+  sector: Sector[1];
+  currency: Currency[1] = Currency.USD;
+  lotSize: Integer[1] = 100;
+  tickSize: Decimal[1] = 0.01;
+  // Level the simulated price reverts to.
+  refPrice: Decimal[1];
+  primaryMic: String[1];
+  updatedAt: DateTime[0..1];
+}
+
+Class trading::refdata::Account
+{
+  accountId: String[1];
+  name: String[1];
+  desk: String[1];
+  type: AccountType[1];
+  baseCurrency: Currency[1] = Currency.USD;
+  creditLimit: Decimal[1];
+  updatedAt: DateTime[0..1];
+}
+
+Class trading::refdata::Venue
+{
+  mic: String[1];
+  name: String[1];
+  type: VenueType[1] = VenueType.LIT;
+  // Per share; negative = rebate.
+  makerFeePerShare: Decimal[1];
+  takerFeePerShare: Decimal[1];
+  updatedAt: DateTime[0..1];
+}

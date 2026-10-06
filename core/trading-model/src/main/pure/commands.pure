@@ -1,0 +1,95 @@
+###Pure
+// Event payloads. Every command extends OrderEvent, so each carries the parent order id and its account:
+// the lock keys of every trading event are rendered from payload fields (TradingFlows), and every event
+// of an order's flow must be able to name trading_order:<orderId> and account:<accountId>.
+// One venue report fans out to several entities: e.g. a FillCommand is sent to trading_fill (book),
+// trading_execution (fill) and trading_order (fill), each event with the same payload.
+import trading::common::*;
+
+Class trading::command::OrderEvent
+{
+  orderId: String[1];
+  // The order's parent account.
+  accountId: String[1];
+  // Producer timestamp, ISO-8601 UTC.
+  ts: DateTime[1];
+}
+
+Class trading::command::NewOrderCommand extends OrderEvent
+{
+  clientId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  orderType: OrderType[1];
+  limitPrice: Decimal[0..1];
+  timeInForce: TimeInForce[1] = TimeInForce.DAY;
+  currency: Currency[1] = Currency.USD;
+  quantity: Integer[1];
+  arrivalPx: Decimal[0..1];
+}
+
+Class trading::command::AckCommand extends OrderEvent
+{
+  ackedBy: String[1] = 'OMS';
+}
+
+Class trading::command::RejectCommand extends OrderEvent
+{
+  reason: String[1];
+  // Set when a venue rejects an execution.
+  execId: String[0..1];
+}
+
+Class trading::command::RouteCommand extends OrderEvent
+{
+  execId: String[1];
+  venue: String[1];
+  symbol: String[1];
+  side: Side[1];
+  quantity: Integer[1];
+  limitPrice: Decimal[0..1];
+}
+
+Class trading::command::FillCommand extends OrderEvent
+{
+  fillId: String[1];
+  execId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  quantity: Integer[1];
+  price: Decimal[1];
+  venue: String[1];
+  liquidity: Liquidity[1];
+  fee: Decimal[1];
+}
+
+Class trading::command::CancelCommand extends OrderEvent
+{
+  reason: String[1];
+  // Set when the cancel targets an execution.
+  execId: String[0..1];
+}
+
+Class trading::command::AllocateCommand extends OrderEvent
+{
+  allocId: String[1];
+  // Receiving account (OrderEvent.accountId is the order's parent account).
+  allocAccountId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  quantity: Integer[1];
+  avgPx: Decimal[1];
+}
+
+Class trading::command::ConfirmAllocationCommand extends OrderEvent
+{
+  allocId: String[1];
+  allocAccountId: String[1];
+  confirmedBy: String[1] = 'middle-office';
+}
+
+Class trading::command::CloseOrderCommand extends OrderEvent
+{
+  allocatedQty: Integer[1];
+  allocationCount: Integer[1];
+}

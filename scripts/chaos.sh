@@ -4,6 +4,7 @@
 #
 #   scripts/chaos.sh                         # defaults below
 #   DURATION=300 RATE=200 CHAOS_TEMPORAL=1 scripts/chaos.sh
+#   STORE_KIND=spanner scripts/chaos.sh      # same experiment on another backend
 #
 # What it exercises (all Temporal out of the box, no custom failover code):
 #   kill -9 coordinator  -> shard-consumer activity heartbeat times out, retried on the other coordinator
@@ -35,12 +36,20 @@ export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@25}
 export PATH="/opt/homebrew/bin:$PATH"
 export KINESIS_ENDPOINT=${KINESIS_ENDPOINT:-http://localhost:4566}
 export TEMPORAL_ADDRESS=${TEMPORAL_ADDRESS:-localhost:7233}
+export STORE_KIND=${STORE_KIND:-postgres}            # postgres | dynamo | spanner
 export STORE_JDBC_URL=${STORE_JDBC_URL:-jdbc:postgresql://localhost:5433/concert}
+export DYNAMO_ENDPOINT=${DYNAMO_ENDPOINT:-http://localhost:4566}
+export SPANNER_EMULATOR_HOST=${SPANNER_EMULATOR_HOST:-localhost:9010}
+case $STORE_KIND in                                 # infra only: the apps run as local processes here
+  postgres) export COMPOSE_PROFILES=postgres ;;
+  spanner)  export COMPOSE_PROFILES=spanner ;;
+  *)        export COMPOSE_PROFILES= ;;
+esac
 export INGEST_SHARD_LIST_SEC=${INGEST_SHARD_LIST_SEC:-5}
 
-ORCH="$ROOT/orchestration/build/install/orchestration/bin/orchestration"
-WORKER="$ROOT/sample-workers/build/install/sample-workers/bin/sample-workers"
-TOOLS="$ROOT/tools/build/install/tools/bin/tools"
+ORCH="$ROOT/platform/orchestration/build/install/orchestration/bin/orchestration"
+WORKER="$ROOT/showcases/sample-workers/build/install/sample-workers/bin/sample-workers"
+TOOLS="$ROOT/showcases/tools/build/install/tools/bin/tools"
 
 log() { echo "[chaos $(date +%H:%M:%S)] $*"; }
 mark() { echo "$(($(date +%s) * 1000)) $1 $2" >> "$CHAOS_LOG"; log "$1 $2"; }
@@ -82,7 +91,7 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- setup
 mkdir -p "$RUN_DIR"; : > "$CHAOS_LOG"
-log "run $RUN_ID: ${DURATION}s @ ${RATE}/s over $KEYS keys, chaos every ${KILL_EVERY}s, $COORDINATORS coordinators, $WORKERS workers"
+log "run $RUN_ID (store: $STORE_KIND): ${DURATION}s @ ${RATE}/s over $KEYS keys, chaos every ${KILL_EVERY}s, $COORDINATORS coordinators, $WORKERS workers"
 log "logs: $RUN_DIR"
 
 (cd "$ROOT" && docker compose up -d >/dev/null 2>&1) || { log "docker compose up failed"; exit 1; }

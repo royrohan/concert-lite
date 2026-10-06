@@ -1,0 +1,9 @@
+{
+  "claimId" : "CLAIM-1001",
+  "payeeAccount" : "PAYEE-ACCOUNT-1001",
+  "method" : "ACH",
+  "amount" : {
+    "amount" : 1250.00,
+    "currency" : "USD"
+  }
+}
