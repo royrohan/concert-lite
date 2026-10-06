@@ -24,7 +24,11 @@ import software.amazon.awssdk.services.kinesis.model.PutRecordsResponse;
  *       same first lock key (the platform guarantees order on the first key).
  * </ul>
  *
- * A key appears at most once per publish call and calls are sequential, so per-key publish order is
+ * With {@code --style event} it publishes event-style {@code Tick}s of the DemoEvents domain ({@code demo}) instead:
+ * the same keys, seqs and account keys ({@code evc:<runId>-K<i>}, odd keys also {@code account:...}), every
+ * {@code --chain-every}-th Tick of a key (default 5) with {@code chain = true}, which emits a child event.
+ *
+ * <p>A key appears at most once per publish call and calls are sequential, so per-key publish order is
  * unambiguous even with PutRecords.
  */
 final class LoadGen {
@@ -38,11 +42,14 @@ final class LoadGen {
         int accounts = Integer.parseInt(o.getOrDefault("accounts", "20"));
         Path out = Path.of(o.getOrDefault("out", "build/chaos/" + runId + ".json"));
         String stream = Env.get("INGEST_STREAM", "concert-events");
+        boolean eventStyle = "event".equals(o.getOrDefault("style", "entity"));
+        int chainEvery = Integer.parseInt(o.getOrDefault("chain-every", "5"));
 
         int ticksPerSec = 10;
         int perTick = Math.min(keys, Math.max(1, rate / ticksPerSec));
         long total = (long) rate * seconds;
         long[] perKey = new long[keys];
+        long[] chained = new long[keys];
         long started = System.currentTimeMillis();
         long next = System.nanoTime();
         long sent = 0;
@@ -54,8 +61,21 @@ final class LoadGen {
                     int k = cursor;
                     cursor = (cursor + 1) % keys;
                     List<String> extra = k % 2 == 1 ? List.of("account:" + runId + "-A" + (k / 2) % accounts) : List.of();
-                    EventEnvelope e = new EventEnvelope(runId + "-" + sent, "ledger", runId + "-K" + k, "append", extra,
-                            "{\"seq\":" + perKey[k]++ + "}", System.currentTimeMillis(), 0);
+                    EventEnvelope e;
+                    if (eventStyle) {
+                        long seq = perKey[k]++;
+                        boolean chain = chainEvery > 0 && seq % chainEvery == chainEvery - 1;
+                        if (chain) {
+                            chained[k]++;
+                        }
+                        List<String> locks = new ArrayList<>(extra);
+                        locks.add("evc:" + runId + "-K" + k);
+                        e = EventEnvelope.event(runId + "-" + sent, "demo", "Tick", locks,
+                                "{\"key\":\"" + runId + "-K" + k + "\",\"seq\":" + seq + ",\"chain\":" + chain + "}", System.currentTimeMillis());
+                    } else {
+                        e = new EventEnvelope(runId + "-" + sent, "ledger", runId + "-K" + k, "append", extra,
+                                "{\"seq\":" + perKey[k]++ + "}", System.currentTimeMillis(), 0);
+                    }
                     batch.add(PutRecordsRequestEntry.builder()
                             .partitionKey(e.effectiveLockKeys().get(0))
                             .data(SdkBytes.fromUtf8String(Json.write(e)))
@@ -72,7 +92,8 @@ final class LoadGen {
                 }
             }
         }
-        Manifest m = new Manifest(runId, keys, accounts, total, perKey, started, System.currentTimeMillis());
+        Manifest m = new Manifest(runId, keys, accounts, total, perKey, started, System.currentTimeMillis(),
+                eventStyle ? "event" : "entity", chained);
         Files.createDirectories(out.toAbsolutePath().getParent());
         Files.writeString(out, Json.write(m));
         System.out.printf("[loadgen] done: %d events over %d keys, manifest %s%n", total, keys, out);

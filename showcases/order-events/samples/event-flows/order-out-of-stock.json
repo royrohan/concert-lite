@@ -1,0 +1,20 @@
+{
+  "name" : "order-out-of-stock",
+  "description" : "an order for a SKU without stock: its ReserveInventoryEvent is parked (ERROR_NON_BLOCKING); retry it after a RestockEvent",
+  "events" : [ {
+    "style" : "event",
+    "eventType" : "OrderCreateEvent",
+    "payload" : {
+      "orderId" : "ORDER-OOS-1",
+      "customerId" : "CUST-8",
+      "currency" : "USD",
+      "lines" : [ { "sku" : "SKU-NONE", "quantity" : 5, "unitPrice" : 3.50 } ],
+      "expirySeconds" : 600
+    }
+  } ],
+  "expect" : {
+    "OrderCreateEvent" : "DONE",
+    "OrderAcceptedEvent" : "DONE",
+    "ReserveInventoryEvent" : "ERROR_NON_BLOCKING"
+  }
+}

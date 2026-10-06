@@ -3,7 +3,10 @@ package io.concert.sdk;
 import io.concert.common.Env;
 import io.concert.common.TaskQueues;
 import io.concert.common.WorkerTuning;
+import io.concert.sdk.events.EventEnqueueActivities;
+import io.concert.sdk.events.EventEnqueueActivitiesImpl;
 import io.concert.store.StateStore;
+import io.concert.store.TraceWriter;
 import io.temporal.client.WorkflowClient;
 import io.temporal.worker.Worker;
 import io.temporal.worker.WorkerFactory;
@@ -19,7 +22,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Starts a Temporal worker for one state machine type on task queue {@code sm-<type>}. Besides the
- * persistence activities it registers an {@link EntitySnapshotPublisher} (used by typed machines on
+ * persistence activities and the {@link EventEnqueueActivities} behind {@code ModelStateMachine.emit}, it registers an {@link EntitySnapshotPublisher} (used by typed machines on
  * terminal transitions): the one passed in {@code extraActivities}, else
  * {@link EntitySnapshotPublisher#fromEnv()}. Typed machines also get reconciliation for their type
  * ({@link ReconcileWorkflow}; with Kafka configured, the Temporal Schedule {@code reconcile-<type>} runs it
@@ -50,6 +53,10 @@ public final class WorkerBootstrap {
         worker.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store));
         if (extraActivities.length > 0) {
             worker.registerActivitiesImplementations(extraActivities);
+        }
+        if (Arrays.stream(extraActivities).noneMatch(a -> a instanceof EventEnqueueActivities)) {
+            // ModelStateMachine.emit: entity transitions emitting event-style (or other entity) events
+            worker.registerActivitiesImplementations(new EventEnqueueActivitiesImpl(client, new TraceWriter(store)));
         }
         EntitySnapshotPublisher publisher = Arrays.stream(extraActivities)
                 .filter(a -> a instanceof EntitySnapshotPublisher).map(a -> (EntitySnapshotPublisher) a)

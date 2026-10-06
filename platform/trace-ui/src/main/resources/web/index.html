@@ -71,6 +71,21 @@
   .widgets h4 { margin: 2px 4px 6px; font: 600 13px ui-monospace, monospace; }
   .widgets iframe { width: 100%; height: 360px; border: 0; border-radius: 4px; }
   .hint code { background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  /* Event style */
+  .SCHEDULED, .LOCK_WAIT { color: var(--accent); } .ERROR_BLOCKING, .BLOCKED { color: var(--bad); }
+  .ERROR_NON_BLOCKING, .PARKED { color: var(--warn); } .PENDING, .NEW { color: var(--muted); }
+  button.op { background: none; border: 1px solid var(--line); color: var(--text); padding: 2px 10px; border-radius: 12px; cursor: pointer; font-size: 12px; }
+  button.op:hover { border-color: var(--accent); color: var(--accent); }
+  button.op.retry:hover { border-color: var(--ok); color: var(--ok); }
+  button.op.skip:hover { border-color: var(--bad); color: var(--bad); }
+  .lifecycle { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .lifecycle .arrow { color: var(--muted); }
+  ul.tree { list-style: none; margin: 0; padding-left: 18px; border-left: 1px dashed var(--line); }
+  ul.tree.top { border-left: 0; padding-left: 0; }
+  ul.tree li { margin: 3px 0; font-size: 13px; }
+  ul.tree li.focus > .node { background: var(--chip); border-radius: 6px; padding: 1px 6px; }
+  pre.json { margin: 0; font: 12.5px/1.45 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
+  .proc { margin-top: 8px; font-size: 12.5px; }
 </style>
 </head>
 <body>
@@ -80,6 +95,7 @@
     <button data-view="event" class="on">Event</button>
     <button data-view="entity">Entity</button>
     <button data-view="lock">Lock</button>
+    <button data-view="events">Events</button>
     <button data-view="analytics">Analytics</button>
   </nav>
   <form id="search"><input id="q" placeholder="event id" autocomplete="off"><button>Go</button></form>
@@ -90,28 +106,28 @@
 <script>
 const out = document.getElementById('out'), q = document.getElementById('q');
 let view = 'event';
-const placeholders = { event: 'event id', entity: 'smType:instanceKey, e.g. order:o1', lock: 'lock key, e.g. account:3' };
+const placeholders = { event: 'event id', entity: 'smType:instanceKey, e.g. order:o1', lock: 'lock key, e.g. account:3', events: '' };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const time = ms => new Date(ms).toISOString().slice(11, 23);
 const link = (v, id) => `<a onclick="go('${v}','${esc(id)}')">${esc(id)}</a>`;
 mermaid.initialize({ startOnLoad: false, theme: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });
 
 document.querySelectorAll('nav button').forEach(b => b.onclick = () =>
-  b.dataset.view === 'analytics' ? showAnalytics('duckdb') : setView(b.dataset.view));
+  b.dataset.view === 'analytics' ? showAnalytics('duckdb') : b.dataset.view === 'events' ? go('events', 'errors') : setView(b.dataset.view));
 document.getElementById('search').onsubmit = e => { e.preventDefault(); if (q.value.trim()) go(view, q.value.trim()); };
 function setView(v) {
   view = v; q.placeholder = placeholders[v] ?? '';
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
-  document.getElementById('search').style.visibility = v === 'analytics' ? 'hidden' : '';
+  document.getElementById('search').style.visibility = v === 'analytics' || v === 'events' ? 'hidden' : '';
   out.classList.toggle('wide', v === 'analytics');
 }
 async function api(path) { const r = await fetch(path); return r.json(); }
 
 async function go(v, id) {
   if (v === 'analytics') { showAnalytics(id || 'duckdb'); return; }
-  setView(v); q.value = id; location.hash = v + '/' + encodeURIComponent(id);
+  setView(v); q.value = v === 'events' ? '' : id; location.hash = v + '/' + encodeURIComponent(id);
   out.innerHTML = '<div class="panel muted">Loading…</div>';
-  try { await ({ event: showEvent, entity: showEntity, lock: showLock })[v](id); }
+  try { await ({ event: showEvent, entity: showEntity, lock: showLock, events: showEvents })[v](id); }
   catch (e) { out.innerHTML = `<div class="panel FAILED">${esc(e)}</div>`; }
 }
 
@@ -124,25 +140,146 @@ async function showRecent() {
       <td class="mono muted">${esc(t.detail)}</td></tr>`).join('')}</table></div>`;
 }
 
+const chip = st => `<span class="stage ${esc(st)}">${esc(st)}</span>`;
+const STAGE_STATUS = { SCHEDULED: 'SCHEDULED', LOCK_WAIT: 'NEW', BLOCKED: 'ERROR_BLOCKING', PARKED: 'ERROR_NON_BLOCKING', DONE: 'DONE' };
+
+/** Status timeline of an event-style event: NEW, then the lifecycle states its trace rows show, ending in the row's status. */
+function lifecycleSteps(trace, lc) {
+  const steps = [lc.scheduledAt ? 'SCHEDULED' : 'NEW'];
+  for (const t of trace) {
+    const s = STAGE_STATUS[t.stage];
+    if (s && steps[steps.length - 1] !== s && !(s === 'NEW' && steps.length === 1)) steps.push(s);
+  }
+  if (steps[steps.length - 1] !== lc.row.status) steps.push(lc.row.status);
+  return steps;
+}
+
+function treeHtml(n) {
+  const kids = n.children.length ? `<ul class="tree">${n.children.map(treeHtml).join('')}</ul>` : '';
+  return `<li class="${n.focus ? 'focus' : ''}"><span class="node">${chip(n.status)} <span class="mono">${link('event', n.eventId)}</span>
+    ${n.eventType ? `<b>${esc(n.eventType)}</b> <span class="muted">${esc(n.domain)}</span>` : '<span class="muted">emitted, not processed yet</span>'}
+    ${n.attempts > 1 ? `<span class="muted">· ${n.attempts} attempts</span>` : ''}
+    ${n.error ? `<span class="mono FAILED"> · ${esc(n.error)}</span>` : ''}${n.truncated ? ' <span class="muted">(more children not shown)</span>' : ''}</span>${kids}</li>`;
+}
+
+async function eventOp(id, op) {
+  let url = `/api/ops/events/${encodeURIComponent(id)}/${op}`;
+  if (op === 'skip') {
+    const reason = prompt(`Skip ${id}: it goes DONE without running. Reason?`, 'skipped by operator');
+    if (reason === null) return;
+    url += '?reason=' + encodeURIComponent(reason);
+  }
+  const d = await apiJson(url, { method: 'POST' });
+  alert(d.error ? `${op} failed: ${d.error}` : `${id} -> ${d.status}${d.detail ? ' (' + d.detail + ')' : ''}`);
+  return d;
+}
+
+async function showProcessor(id, el) {
+  const s = await apiJson(`/api/ops/events/${encodeURIComponent(id)}/processor`);
+  if (s.error) { el.innerHTML = `<span class="FAILED">${esc(s.error)}</span>`; return; }
+  const items = (label, xs) => xs.length ? `<div><b>${label}</b> ${xs.map(i => `${link('event', i.eventId)} ${esc(i.eventType)}`
+      + (i.error ? ` <span class="muted">${esc(i.error)}</span>` : '') + (label === 'scheduled' ? ` <span class="muted">at ${new Date(i.atMillis).toISOString()}</span>` : '')).join(', ')}</div>` : '';
+  el.innerHTML = `<div class="muted">processor <span class="mono">evproc:${esc(s.domain)}:${esc(s.key)}</span> · processed this run ${s.processedThisRun}</div>`
+    + items('blocked', s.blocked) + items('parked', s.parked) + items('scheduled', s.scheduled)
+    + (s.recent.length ? `<div><b>recent</b> ${s.recent.slice(-8).map(r => `${link('event', r.eventId)} ${chip(r.status)}`).join(' ')}</div>` : '');
+}
+
 async function showEvent(id) {
   const d = await api('/api/events/' + encodeURIComponent(id));
-  const tr = d.trace;
-  if (!tr.length) { out.innerHTML = `<div class="panel muted">No trace for ${esc(id)}.</div>`; return; }
-  const t0 = tr[0].tsMillis, span = Math.max(1, tr[tr.length - 1].tsMillis - t0);
+  const tr = d.trace, lc = d.lifecycle;
+  if (!tr.length && !lc) { out.innerHTML = `<div class="panel muted">No trace for ${esc(id)}.</div>`; return; }
+  const t0 = tr.length ? tr[0].tsMillis : 0, span = tr.length ? Math.max(1, tr[tr.length - 1].tsMillis - t0) : 0;
   const entity = tr.find(t => t.workflowId)?.workflowId;
-  out.innerHTML = `<div class="panel"><div class="kv">
+  let html = '';
+  if (lc) {
+    const r = lc.row, err = r.status.startsWith('ERROR_');
+    html += `<div class="panel"><div class="lifecycle">${lifecycleSteps(tr, lc).map(chip).join('<span class="arrow">→</span>')}
+        ${err ? `<span style="flex:1"></span><button class="op retry" onclick="eventOp('${esc(id)}','retry').then(() => go('event','${esc(id)}'))">Retry</button>
+        <button class="op skip" onclick="eventOp('${esc(id)}','skip').then(() => go('event','${esc(id)}'))">Skip</button>` : ''}</div>
+      <div class="kv" style="margin-top:12px">
+      <span class="muted">event</span><span class="mono">${esc(id)} · <b>${esc(r.eventType)}</b> · domain ${esc(r.domain)}</span>
+      <span class="muted">status</span><span>${chip(r.status)} <span class="muted">${esc(r.outcome ?? '')} · v${r.version} · updated ${new Date(r.updatedAtMillis).toISOString()}</span></span>
+      <span class="muted">attempts</span><span>${r.attempts}${lc.retries ? ` · operator retries ${lc.retries}` : ''}${d.type ? ` <span class="muted">(max ${d.type.maxAttempts}, on error ${esc(d.type.onError)})</span>` : ''}</span>
+      ${r.error ? `<span class="muted">error</span><span class="mono FAILED">${esc(r.error)}</span>` : ''}
+      <span class="muted">lock keys</span><span class="mono">${r.keys.map(k => link('lock', k)).join(', ')}${d.type?.lockTemplates?.length ? ` <span class="muted">(${esc(d.type.lockTemplates.join(', '))})</span>` : ''}</span>
+      <span class="muted">processor</span><span class="mono">${esc(r.processor)} <a onclick="showProcessor('${esc(id)}', document.getElementById('proc'))">status</a><div id="proc" class="proc"></div></span>
+      ${lc.scheduledAt ? `<span class="muted">scheduled at</span><span class="mono">${new Date(lc.scheduledAt).toISOString()}</span>` : ''}
+      <span class="muted">parent</span><span class="mono">${r.parentEventId ? link('event', r.parentEventId) : '–'}</span>
+      <span class="muted">causation</span><span class="mono">root ${link('event', r.causationRoot ?? id)} · depth ${lc.depth}${r.children.length ? ' · children ' + r.children.map(c => link('event', c)).join(', ') : ''}</span>
+      ${d.type?.emits?.length ? `<span class="muted">may emit</span><span class="mono">${esc(d.type.emits.join(', '))}</span>` : ''}
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">workflows touched by this event ↗</a></span>
+    </div></div>
+    <div class="panel"><h3>Causation tree</h3><ul class="tree top">${treeHtml(d.tree)}</ul></div>
+    <div class="panel"><h3>Payload</h3><pre class="json">${esc(JSON.stringify(lc.payload, null, 2))}</pre></div>`;
+  } else {
+    html += `<div class="panel"><div class="kv">
       <span class="muted">event</span><span class="mono">${esc(id)}</span>
       <span class="muted">dedupe</span><span>${esc(d.dedupeStatus)}</span>
       <span class="muted">entity</span><span class="mono">${entity ? link('entity', entity) : '-'}</span>
       <span class="muted">total</span><span>${span} ms (first to last trace row)</span>
       <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">workflows touched by this event ↗</a></span>
-    </div></div>
-    <div class="panel"><h3>Timeline</h3><table>
+    </div></div>`;
+  }
+  if (tr.length) {
+    html += `<div class="panel"><h3>Timeline</h3><p class="muted" style="margin-top:0">dedupe ${esc(d.dedupeStatus)} · ${span} ms first to last trace row</p><table>
     <tr><th>+ms</th><th>stage</th><th>lock</th><th>detail</th><th style="width:30%"></th></tr>
     ${tr.map(t => `<tr><td class="mono">+${t.tsMillis - t0}</td><td><span class="stage ${t.stage}">${t.stage}</span></td>
       <td class="mono">${t.lockKey ? link('lock', t.lockKey) : ''}</td><td class="mono muted">${esc(t.detail)}</td>
       <td><div class="bar" style="margin-left:${(t.tsMillis - t0) / span * 100}%;width:2px"></div></td></tr>`).join('')}
     </table></div>`;
+  }
+  if (d.flowMermaid) html += '<div class="panel"><details><summary><h3 style="display:inline">Event flow</h3> <span class="muted">(concert::event.emits)</span></summary><div id="flow-diagram"></div></details></div>';
+  out.innerHTML = html;
+  if (d.flowMermaid) {
+    try { const { svg } = await mermaid.render('f' + Date.now(), d.flowMermaid); document.getElementById('flow-diagram').innerHTML = svg; }
+    catch (e) { document.getElementById('flow-diagram').textContent = 'flow diagram: ' + e; }
+  }
+}
+
+// ---------------------------------------------------------------- Events (event style operator view)
+const EVENT_TABS = { errors: 'Errors (blocking + non-blocking)', ERROR_BLOCKING: 'Blocking', ERROR_NON_BLOCKING: 'Non-blocking',
+  SCHEDULED: 'Scheduled', DONE: 'Done', types: 'Event types' };
+
+async function showEvents(sub) {
+  if (!EVENT_TABS[sub]) sub = 'errors';
+  const tabs = Object.entries(EVENT_TABS).map(([k, l]) => `<button class="${k === sub ? 'on' : ''}" onclick="go('events','${k}')">${l}</button>`).join('');
+  if (sub === 'types') { await showEventTypes(tabs); return; }
+  const d = await apiJson(`/api/ops/events?status=${encodeURIComponent(sub)}&limit=200`);
+  if (d.error) { out.innerHTML = `<div class="subtabs">${tabs}</div><div class="panel FAILED">${esc(d.error)}</div>`; return; }
+  const ops = r => r.status.startsWith('ERROR_') ? `<button class="op retry" onclick="eventOp('${esc(r.eventId)}','retry').then(() => go('events','${sub}'))">Retry</button>
+      <button class="op skip" onclick="eventOp('${esc(r.eventId)}','skip').then(() => go('events','${sub}'))">Skip</button>` : '';
+  const hint = { errors: 'ERROR_BLOCKING keeps the event’s lock keys held (later events on them wait); ERROR_NON_BLOCKING is parked with its keys released. Retry runs it again (a parked one re-enters its lock chain), Skip makes it DONE without running.',
+    SCHEDULED: 'Future-dated events wait on a durable timer in their processor, holding no locks; they join their lock chain as NEW when due.' }[sub === 'ERROR_BLOCKING' || sub === 'ERROR_NON_BLOCKING' ? 'errors' : sub] ?? '';
+  out.innerHTML = `<div class="subtabs">${tabs}</div><div class="panel"><h3 style="margin-top:0">${esc(EVENT_TABS[sub])} <span class="muted">(${d.total})</span></h3>
+    ${hint ? `<p class="muted">${esc(hint)}</p>` : ''}
+    <table><tr><th>updated</th><th>event</th><th>type</th><th>status</th><th>attempts</th><th>keys</th><th>error / children</th><th></th></tr>
+    ${d.events.map((r, i) => `<tr><td class="mono">${time(r.updatedAtMillis)}</td><td class="mono">${link('event', r.eventId)}</td>
+      <td>${esc(r.eventType)} <span class="muted">${esc(r.domain)}</span></td><td>${chip(r.status)}</td><td>${r.attempts}</td>
+      <td class="mono">${r.keys.map(k => link('lock', k)).join(', ')}</td>
+      <td class="mono ${r.error ? 'FAILED' : 'muted'}">${esc(r.error ?? r.children.join(', '))}</td>
+      <td style="white-space:nowrap">${ops(r)} <button class="op" onclick="showProcessor('${esc(r.eventId)}', document.getElementById('p${i}'))">processor</button>
+        <div id="p${i}" class="proc"></div></td></tr>`).join('')}
+    </table>${d.events.length ? '' : '<p class="muted">None.</p>'}</div>`;
+}
+
+async function showEventTypes(tabs) {
+  const d = await apiJson('/api/event-types');
+  const cats = d.catalogs || [];
+  out.innerHTML = `<div class="subtabs">${tabs}</div>` + (cats.length ? '' : '<div class="panel muted">No event catalogs on the trace UI’s class path.</div>')
+    + cats.map((c, i) => `<div class="panel"><h3 style="margin-top:0">${esc(c.name)}</h3>
+      <table><tr><th>event type</th><th>domain</th><th>lock templates</th><th>on error</th><th>attempts</th><th>emits</th><th>payload class</th></tr>
+      ${c.events.map(e => `<tr><td><b>${esc(e.name)}</b></td><td>${esc(e.domain)}</td><td class="mono">${esc(e.lockTemplates.join(', ') || e.domain + ':{id}')}</td>
+        <td>${esc(e.onError)}</td><td>${e.maxAttempts}</td><td>${esc(e.emits.join(', '))}</td><td class="mono muted">${esc(e.payloadClass)}</td></tr>`).join('')}</table>
+      ${c.states.length ? `<p><b>keyed states</b> ${c.states.map(s => `<code>${esc(s.name)}</code> <span class="mono muted">state:${esc(s.keyTemplate ?? '<key>')}</span>`).join(', ')}</p>` : ''}
+      ${c.flowMermaid ? `<details open><summary><b>Event flow</b></summary><div id="tf${i}"></div></details>` : ''}
+      ${c.modelMermaid ? `<details><summary><b>Payload and state models</b></summary><div id="tm${i}"></div></details>` : ''}</div>`).join('');
+  for (const [i, c] of cats.entries()) {
+    for (const [k, src] of [['tf', c.flowMermaid], ['tm', c.modelMermaid]]) {
+      if (!src) continue;
+      try { const { svg } = await mermaid.render(k + i + Date.now(), src); document.getElementById(k + i).innerHTML = svg; }
+      catch (e) { document.getElementById(k + i).textContent = 'diagram: ' + e; }
+    }
+  }
 }
 
 async function showEntity(id) {
@@ -383,6 +520,7 @@ async function showDeephaven() {
 
 const [hv, hid, hextra] = location.hash.slice(1).split('/');
 if (hv === 'analytics') showAnalytics(hid || 'duckdb', hextra ? decodeURIComponent(hextra) : undefined);
+else if (hv === 'events') go('events', hid ? decodeURIComponent(hid) : 'errors');
 else if (hv && hid) go(hv, decodeURIComponent(hid)); else showRecent();
 </script>
 </body>

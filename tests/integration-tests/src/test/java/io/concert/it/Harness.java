@@ -6,7 +6,9 @@ import io.concert.common.api.IngestConfig;
 import io.concert.orchestration.OrchestrationWorker;
 import io.concert.samples.SampleMachines;
 import io.concert.samples.SimulatedWork;
+import io.concert.samples.events.DemoEvents;
 import io.concert.sdk.WorkerBootstrap;
+import io.concert.sdk.events.EventWorkerBootstrap;
 import io.concert.store.JdbcStateStore;
 import io.temporal.client.WorkflowClient;
 import io.temporal.worker.WorkerFactory;
@@ -71,6 +73,11 @@ final class Harness implements AutoCloseable {
     void startWorker(String smType, int localActivitySlots) {
         workers.add(WorkerBootstrap.startWithSlots(newClient(), store, smType, SampleMachines.get(smType).impl(),
                 localActivitySlots, new SimulatedWork.Impl()));
+    }
+
+    /** The event-style demo domain's worker (task queue ev-demo). */
+    void startEventWorker() {
+        workers.add(EventWorkerBootstrap.start(newClient(), store, DemoEvents.handlers(), EventWorkerBootstrap.Options.defaults()));
     }
 
     void stopCoordinator(OrchestrationWorker w) {
@@ -246,6 +253,14 @@ final class Harness implements AutoCloseable {
             }
         } catch (SQLException e) {
             throw new IllegalStateException(e);
+        }
+    }
+
+    static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

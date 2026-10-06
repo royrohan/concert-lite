@@ -41,7 +41,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-class ModelStateMachineTest {
+/** Public: the event-style interop tests reuse {@link TicketMachine}. */
+public class ModelStateMachineTest {
 
     /** Event ids that reached a terminal state, recorded by {@link TicketMachine#onTerminal}. */
     static final Set<String> TERMINAL_EVENTS = ConcurrentHashMap.newKeySet();

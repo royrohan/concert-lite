@@ -2,7 +2,8 @@
 # Deploy a generated ecosystem (showcases/<name>, from ./generate-concert-ecosystem) into the local stack:
 #   ./deploy-concert-ecosystem <name> [--store postgres|dynamo|spanner] [--no-analytics]
 # Builds the module, runs docker compose with the module's compose.yml override and the profiles
-# <store>, apps, analytics (unless --no-analytics) and <name>, waits for health, re-provisions ClickHouse,
+# <store>, apps, analytics (unless --no-analytics) and <name>, waits for health (its state machine worker and / or
+# event worker), re-provisions ClickHouse,
 # restarts the DuckDB sink / Deephaven when they predate the ecosystem's models, then prints the UI links,
 # the commands to send events and example SQL. Safe to re-run. Store default: STORE_KIND in .env.
 set -euo pipefail
@@ -11,7 +12,7 @@ cd "$root"
 . scripts/java-env.sh
 
 usage() {
-  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -81,7 +82,11 @@ newest() {
 
 started() { epoch "$(docker inspect -f '{{.State.StartedAt}}' "$(dc ps -q "$1")" 2>/dev/null || echo 0)"; }
 
+manifest="showcases/$name/ecosystem.json"
+has_machines() { grep -q '"service" :' "$manifest"; }
+has_events() { grep -q '"eventService" :' "$manifest"; }
 worker_up() { dc logs "$name-worker" 2>&1 | grep -q "worker up for sm-"; }
+event_worker_up() { dc logs "$name-event-worker" 2>&1 | grep -q "event worker up for ev-"; }
 http_ok() { curl -sf -o /dev/null --max-time 3 "$1"; }
 deephaven_loaded() { dc logs deephaven 2>&1 | grep -q "\[concert\] ecosystem $name:"; }
 duckdb_has() { curl -sf --max-time 3 http://localhost:8090/tables | grep -q "\"$1\""; }
@@ -103,7 +108,8 @@ dc up -d --build
 
 echo "==> health"
 wait_until "trace UI" 180 http_ok http://localhost:8088/api/recent
-wait_until "$name-worker" 240 worker_up
+if has_machines; then wait_until "$name-worker" 240 worker_up; fi
+if has_events; then wait_until "$name-event-worker" 240 event_worker_up; fi
 if [ $analytics = 1 ]; then
   wait_until "ClickHouse" 180 http_ok http://localhost:8123/ping
   wait_until "DuckDB sink" 180 http_ok http://localhost:8090/health

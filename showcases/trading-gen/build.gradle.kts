@@ -2,8 +2,8 @@
 // logic in extra.gradle.kts next to this file (applied below when present; use string configuration
 // names there, e.g. dependencies { "testImplementation"(project(":x")) }).
 //
-// Ecosystem "trading-gen": the state machines declared in src/main/pure (concert::sm profile). bin/trading-gen and
-// bin/ecosystem-worker run the workers, bin/events sends events (./showcases/trading-gen/send).
+// Ecosystem "trading-gen": the state machines declared in src/main/pure (concert::sm profile).
+// bin/ecosystem-worker runs the state machine workers, bin/events sends events (./showcases/trading-gen/send).
 plugins { application }
 
 dependencies {
@@ -11,7 +11,7 @@ dependencies {
     // POJOs generated from src/main/pure (the root build passes the directory to the processor)
     implementation(project(":model-runtime"))
     annotationProcessor(project(":model-codegen"))
-    // TradingGenEvents: KinesisClients
+    // TradingGenEvents: KinesisClients; the generated tests run the real lock chain
     implementation(project(":orchestration"))
     implementation(platform(libs.aws.bom))
     implementation(libs.aws.kinesis)
@@ -33,7 +33,7 @@ application {
     applicationDefaultJvmArgs = jvmArgs
 }
 
-// bin/ecosystem-worker: the same worker under a fixed name (the generic showcase-worker Docker target)
+// bin/ecosystem-worker: the state machine worker under a fixed name (the generic showcase-worker Docker target)
 val workerScripts = tasks.register<CreateStartScripts>("workerStartScripts") {
     mainClass.set("io.concert.eco.trading_gen.TradingGenWorkerMain")
     applicationName = "ecosystem-worker"
@@ -60,6 +60,8 @@ distributions.main {
 
 tasks.test {
     systemProperty("ecosystem.samples", layout.projectDirectory.dir("samples").asFile.absolutePath)
+    // the in-memory Temporal server cancels still-running workflows on close: keep its warnings out of the build
+    systemProperty("org.slf4j.simpleLogger.log.io.temporal.internal", "error")
     inputs.dir(layout.projectDirectory.dir("samples")).withPathSensitivity(PathSensitivity.RELATIVE)
 }
 

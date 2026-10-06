@@ -1,0 +1,106 @@
+###Pure
+// Event-style order flow (concert::event profile): every event has the same lifecycle NEW -> DONE; handlers
+// (showcases/order-events/.../*Handler.java) save keyed state and emit the next events.
+//
+//   OrderCreateEvent --> OrderAcceptedEvent --> ReserveInventoryEvent (inventory, one per line)
+//                    |                     \--> OrderExpiryCheckEvent (scheduled, +expirySeconds)
+//                    \-> OrderRejectedEvent
+//   PaymentCaptureEvent (poison = true: BlockingError, the order's key stays held until an operator acts)
+
+Enum orders::OrderStatus
+{
+  CREATED, ACCEPTED, REJECTED, PAID, EXPIRED
+}
+
+Class orders::OrderLine
+{
+  sku: String[1];
+  quantity: Integer[1];
+  unitPrice: Decimal[1];
+}
+
+// Keyed state: one document per order, state:order:<orderId>.
+Class <<concert::event.state>> { concert::event.key = 'order:{orderId}' } orders::Order
+{
+  orderId: String[1];
+  customerId: String[1];
+  status: OrderStatus[1] = OrderStatus.CREATED;
+  currency: String[1];
+  lines: OrderLine[*];
+  total: Decimal[0..1];
+  paidAmount: Decimal[0..1];
+  rejectReason: String[0..1];
+  reservedLines: Integer[0..1];
+  createdAt: DateTime[0..1];
+  updatedAt: DateTime[0..1];
+  expiresAt: DateTime[0..1];
+}
+
+// Locked on the order and the customer: orders of one customer are applied one at a time.
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'orders',
+  concert::event.locks = 'order:{orderId}, customer:{customerId}',
+  concert::event.emits = 'OrderAcceptedEvent, OrderRejectedEvent'
+}
+orders::OrderCreateEvent
+{
+  orderId: String[1];
+  customerId: String[1];
+  currency: String[1];
+  lines: OrderLine[1..*];
+  expirySeconds: Integer[1] = 120;
+}
+
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'orders',
+  concert::event.locks = 'order:{orderId}',
+  concert::event.emits = 'ReserveInventoryEvent, OrderExpiryCheckEvent'
+}
+orders::OrderAcceptedEvent
+{
+  orderId: String[1];
+  customerId: String[1];
+  lines: OrderLine[1..*];
+  expirySeconds: Integer[1] = 120;
+}
+
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'orders',
+  concert::event.locks = 'order:{orderId}'
+}
+orders::OrderRejectedEvent
+{
+  orderId: String[1];
+  customerId: String[1];
+  reason: String[1];
+}
+
+// Scheduled by OrderAcceptedEvent's handler (ctx.emitAt): expires the order unless it was paid by then.
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'orders',
+  concert::event.locks = 'order:{orderId}',
+  concert::event.retries = '1'
+}
+orders::OrderExpiryCheckEvent
+{
+  orderId: String[1];
+}
+
+// poison = true makes the handler throw a BlockingError: the event goes ERROR_BLOCKING and keeps order:<orderId>
+// held, so later events of the order wait until an operator retries or skips it.
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'orders',
+  concert::event.locks = 'order:{orderId}',
+  concert::event.onError = 'BLOCKING'
+}
+orders::PaymentCaptureEvent
+{
+  orderId: String[1];
+  amount: Decimal[1];
+  poison: Boolean[1] = false;
+}

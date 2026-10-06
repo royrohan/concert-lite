@@ -56,7 +56,7 @@ final class JavaSources {
         return eco.pascalName() + "GeneratedTest";
     }
 
-    private static String q(String s) {
+    static String q(String s) {
         StringBuilder sb = new StringBuilder("\"");
         for (char c : s.toCharArray()) {
             switch (c) {
@@ -69,7 +69,7 @@ final class JavaSources {
         return sb.append('"').toString();
     }
 
-    private static String html(String s) {
+    static String html(String s) {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("*/", "*&#47;").replace("@", "&#64;");
     }
 
@@ -100,7 +100,7 @@ final class JavaSources {
                 + " * Generates the Java classes of the ecosystem's Pure models ({@code src/main/pure}) at compile time:\n"
                 + " * {@code a::b::X} becomes {@code " + eco.modelPackage() + ".a.b.X}.\n"
                 + " */\n"
-                + "@LegendModel(files = {" + files + "}, root = " + q(eco.machines().getFirst().root().qualifiedName())
+                + "@LegendModel(files = {" + files + "}, root = " + q(eco.legendRoot())
                 + ", javaPackage = " + q(eco.modelPackage()) + ")\n"
                 + "public final class " + modelsClass() + " {\n"
                 + "    private " + modelsClass() + "() {}\n\n"
@@ -411,162 +411,333 @@ final class JavaSources {
 
     // ---- <Name>Events ----
 
+    /** The Kinesis sender: entity-style events of the machines and / or event-style events of the event types. */
     String events() {
         String cls = eventsClass();
         String m = machinesClass();
-        return GENERATED_HEADER + "package " + pkg() + ";\n\n"
-                + """
-                import com.fasterxml.jackson.databind.JsonNode;
-                import io.concert.common.Env;
-                import io.concert.common.EventEnvelope;
-                import io.concert.common.Json;
-                import io.concert.model.runtime.ModelJson;
-                import io.concert.model.runtime.ModelObject;
-                import io.concert.orchestration.KinesisClients;
-                import io.concert.sdk.LockTemplates;
-                import io.concert.sdk.MachineCatalog;
-                import io.concert.sdk.StateMachineSpec;
-                import java.io.IOException;
-                import java.nio.charset.StandardCharsets;
-                import java.nio.file.Files;
-                import java.nio.file.Path;
-                import java.util.ArrayList;
-                import java.util.List;
-                import java.util.Map;
-                import java.util.UUID;
-                import software.amazon.awssdk.core.SdkBytes;
-                import software.amazon.awssdk.services.kinesis.KinesisClient;
-
-                """
-                + "/**\n * Sends events of ecosystem {@code " + eco.name() + "} to Kinesis ({@code INGEST_STREAM}, default\n"
+        String t = eco.pascalName() + "EventTypes";
+        boolean sm = eco.hasMachines();
+        boolean ev = eco.hasEvents();
+        TreeSet<String> imports = new TreeSet<>(List.of("com.fasterxml.jackson.databind.JsonNode", "io.concert.common.Env",
+                "io.concert.common.EventEnvelope", "io.concert.common.Json", "io.concert.model.runtime.ModelJson",
+                "io.concert.model.runtime.ModelObject", "io.concert.orchestration.KinesisClients", "io.concert.sdk.LockTemplates",
+                "java.io.IOException", "java.nio.charset.StandardCharsets", "java.nio.file.Files", "java.nio.file.Path",
+                "java.util.ArrayList", "java.util.List", "java.util.UUID", "software.amazon.awssdk.core.SdkBytes",
+                "software.amazon.awssdk.services.kinesis.KinesisClient"));
+        if (sm) {
+            imports.addAll(List.of("io.concert.sdk.MachineCatalog", "io.concert.sdk.StateMachineSpec", "java.util.Map"));
+        }
+        if (ev) {
+            imports.addAll(List.of("io.concert.sdk.events.EventCatalog", "java.time.Duration", "java.time.Instant",
+                    "java.time.OffsetDateTime", "java.time.format.DateTimeParseException"));
+        }
+        StringBuilder sb = new StringBuilder(GENERATED_HEADER);
+        sb.append("package ").append(pkg()).append(";\n\n");
+        imports.forEach(i -> sb.append("import ").append(i).append(";\n"));
+        sb.append("\n/**\n * Sends events of ecosystem {@code ").append(eco.name()).append("} to Kinesis ({@code INGEST_STREAM}, default\n"
                 + " * {@code concert-events}; {@code KINESIS_ENDPOINT}, e.g. {@code http://localhost:4566}), addressed and locked as\n"
-                + " * the Pure annotations declare: lock keys are rendered from the payload ({@code <Root>Spec.LOCKS}), the partition\n"
-                + " * key is the first sorted lock key. Payloads are checked against their model class before sending.\n *\n"
-                + " * <pre>\n"
-                + " * send &lt;smType&gt; &lt;eventType&gt; &lt;instanceKey&gt; [payload.json | - | '{...json...}']\n"
-                + " * flow &lt;flow.json&gt; [--delay-ms 500]     {\"events\": [{smType, instanceKey, eventType, payload}, ...]}\n"
-                + " * list\n"
-                + " * </pre>\n */\n"
-                + "public final class " + cls + " {\n"
-                + "    private " + cls + "() {}\n\n"
-                + "    public static void main(String[] args) throws Exception {\n"
-                + "        try {\n"
-                + "            run(args);\n"
-                + "        } catch (IllegalArgumentException | java.io.UncheckedIOException e) {\n"
-                + "            System.err.println(\"error: \" + e.getMessage());\n"
-                + "            System.exit(1);\n"
-                + "        }\n"
-                + "    }\n\n"
-                + "    private static void run(String[] args) throws Exception {\n"
-                + "        if (args.length == 0) {\n"
-                + "            usage();\n"
-                + "            System.exit(2);\n"
-                + "        }\n"
-                + "        switch (args[0]) {\n"
-                + "            case \"list\" -> list();\n"
-                + "            case \"send\" -> {\n"
-                + "                if (args.length < 4) {\n"
-                + "                    usage();\n"
-                + "                    System.exit(2);\n"
-                + "                }\n"
-                + "                String payload = args.length > 4 ? readPayload(args[4]) : null;\n"
-                + "                EventEnvelope e = envelope(args[1], args[2], args[3], payload);\n"
-                + "                try (KinesisClient kinesis = KinesisClients.fromEnv()) {\n"
-                + "                    publish(kinesis, e);\n"
-                + "                }\n"
-                + "            }\n"
-                + "            case \"flow\" -> {\n"
-                + "                if (args.length < 2) {\n"
-                + "                    usage();\n"
-                + "                    System.exit(2);\n"
-                + "                }\n"
-                + "                long delay = args.length > 3 && args[2].equals(\"--delay-ms\") ? Long.parseLong(args[3]) : 500;\n"
-                + "                flow(Path.of(args[1]), delay);\n"
-                + "            }\n"
-                + "            default -> {\n"
-                + "                usage();\n"
-                + "                System.exit(2);\n"
-                + "            }\n"
-                + "        }\n"
-                + "    }\n\n"
-                + "    private static void usage() {\n"
-                + "        System.err.println(\"usage: send <smType> <eventType> <instanceKey> [payload.json | - | '{json}']\\n\"\n"
-                + "                + \"       flow <flow.json> [--delay-ms N]\\n       list\\nsmTypes: \" + " + m + ".ALL.keySet());\n"
-                + "    }\n\n"
-                + "    private static void list() {\n"
-                + "        " + m + ".ALL.forEach((type, machine) -> {\n"
-                + "            System.out.println(type + \"  (initial \" + machine.spec().initialState() + \", terminal \" + machine.spec().terminalStates() + \")\");\n"
-                + "            for (StateMachineSpec.Edge e : machine.spec().edges()) {\n"
-                + "                System.out.printf(\"  %-14s %s -> %s  payload %s  locks %s%n\", e.eventType(), e.from(), e.to(),\n"
-                + "                        e.payloadType() == null ? \"-\" : e.payloadType().getSimpleName(), " + m + ".LOCKS.get(type).get(e.eventType()));\n"
-                + "            }\n"
-                + "        });\n"
-                + "    }\n\n"
-                + "    private static String readPayload(String arg) throws IOException {\n"
-                + "        if (arg.equals(\"-\")) {\n"
-                + "            return new String(System.in.readAllBytes(), StandardCharsets.UTF_8);\n"
-                + "        }\n"
-                + "        String t = arg.strip();\n"
-                + "        return t.startsWith(\"{\") || t.equals(\"null\") ? t : Files.readString(Path.of(arg), StandardCharsets.UTF_8);\n"
-                + "    }\n\n"
-                + "    /**\n"
-                + "     * The event, validated: the smType and event type exist, the payload binds to the event's payload class and\n"
-                + "     * satisfies its multiplicities, and every lock key renders.\n"
-                + "     */\n"
-                + "    public static EventEnvelope envelope(String smType, String eventType, String instanceKey, String payload) {\n"
-                + "        MachineCatalog.Machine machine = " + m + ".get(smType);\n"
-                + "        StateMachineSpec.Edge edge = machine.spec().edges().stream().filter(x -> x.eventType().equals(eventType)).findFirst()\n"
-                + "                .orElseThrow(() -> new IllegalArgumentException(smType + \" has no event \" + eventType + \"; events: \"\n"
-                + "                        + machine.spec().edges().stream().map(StateMachineSpec.Edge::eventType).distinct().toList()));\n"
-                + "        String json = payload == null || payload.isBlank() || payload.strip().equals(\"null\") ? null : payload.strip();\n"
-                + "        if (edge.payloadType() != null && json != null) {\n"
-                + "            Object bound = ModelJson.read(json, edge.payloadType());\n"
-                + "            if (bound instanceof ModelObject mo && !mo.validationErrors().isEmpty()) {\n"
-                + "                throw new IllegalArgumentException(\"invalid \" + edge.payloadType().getSimpleName() + \" payload: \"\n"
-                + "                        + String.join(\"; \", mo.validationErrors()));\n"
-                + "            }\n"
-                + "            json = ModelJson.write(bound);\n"
-                + "        }\n"
-                + "        JsonNode tree;\n"
-                + "        try {\n"
-                + "            tree = json == null ? null : Json.MAPPER.readTree(json);\n"
-                + "        } catch (com.fasterxml.jackson.core.JsonProcessingException x) {\n"
-                + "            throw new IllegalArgumentException(\"payload is not JSON: \" + x.getOriginalMessage(), x);\n"
-                + "        }\n"
-                + "        List<String> locks = LockTemplates.render(" + m + ".LOCKS.get(smType).get(eventType), instanceKey, tree);\n"
-                + "        return new EventEnvelope(smType + \"-\" + eventType + \"-\" + UUID.randomUUID(), smType, instanceKey, eventType, locks, json,\n"
-                + "                System.currentTimeMillis(), 0);\n"
-                + "    }\n\n"
-                + "    private static void publish(KinesisClient kinesis, EventEnvelope e) {\n"
-                + "        String stream = Env.get(\"INGEST_STREAM\", \"concert-events\");\n"
-                + "        String partitionKey = e.effectiveLockKeys().getFirst();\n"
-                + "        kinesis.putRecord(b -> b.streamName(stream).partitionKey(partitionKey).data(SdkBytes.fromUtf8String(Json.write(e))));\n"
-                + "        System.out.printf(\"sent %s %s:%s %s  locks %s  (partition key %s)%n\", e.eventId(), e.smType(), e.instanceKey(), e.eventType(),\n"
-                + "                e.effectiveLockKeys(), partitionKey);\n"
-                + "    }\n\n"
-                + "    private static void flow(Path file, long delayMs) throws IOException, InterruptedException {\n"
-                + "        JsonNode flow = Json.MAPPER.readTree(Files.readString(file, StandardCharsets.UTF_8));\n"
-                + "        List<EventEnvelope> events = new ArrayList<>();\n"
-                + "        for (JsonNode e : flow.path(\"events\")) {\n"
-                + "            JsonNode p = e.get(\"payload\");\n"
-                + "            events.add(envelope(e.path(\"smType\").asText(), e.path(\"eventType\").asText(), e.path(\"instanceKey\").asText(),\n"
-                + "                    p == null || p.isNull() ? null : Json.write(p)));\n"
-                + "        }\n"
-                + "        System.out.printf(\"flow %s: %d events%n\", flow.path(\"name\").asText(file.getFileName().toString()), events.size());\n"
-                + "        try (KinesisClient kinesis = KinesisClients.fromEnv()) {\n"
-                + "            for (int i = 0; i < events.size(); i++) {\n"
-                + "                if (i > 0 && delayMs > 0) {\n"
-                + "                    Thread.sleep(delayMs); // events of one entity in order, even across shards\n"
-                + "                }\n"
-                + "                publish(kinesis, events.get(i));\n"
-                + "            }\n"
-                + "        }\n"
-                + "    }\n\n"
-                + "    /** smType to machine, for tests and tools. */\n"
-                + "    public static Map<String, MachineCatalog.Machine> machines() {\n"
-                + "        return " + m + ".ALL;\n"
-                + "    }\n"
-                + "}\n";
+                + " * the Pure annotations declare: lock keys are rendered from the payload, the partition key is the first sorted\n"
+                + " * lock key. Payloads are checked against their model class before sending.\n *\n * <pre>\n");
+        if (sm) {
+            sb.append(" * send &lt;smType&gt; &lt;eventType&gt; &lt;instanceKey&gt; [payload.json | - | '{...json...}']        entity style\n");
+        }
+        if (ev) {
+            sb.append(" * send &lt;EventType&gt; [payload.json | - | '{...json...}'] [--at ISO|+30s|+5m|+2h] [--id ID]   event style\n"
+                    + " *      (no payload: $ECOSYSTEM_SAMPLES/events/&lt;EventType&gt;.json)\n");
+        }
+        sb.append(" * flow &lt;flow.json&gt; [--delay-ms 500]     {\"events\": [...]}: ");
+        if (sm) {
+            sb.append("{smType, instanceKey, eventType, payload}");
+        }
+        if (sm && ev) {
+            sb.append(" or ");
+        }
+        if (ev) {
+            sb.append("{style: event, eventType, payload, at?, id?}");
+        }
+        sb.append("\n * list\n * </pre>\n */\n");
+        sb.append("public final class ").append(cls).append(" {\n    private ").append(cls).append("() {}\n\n");
+        sb.append("""
+                    public static void main(String[] args) throws Exception {
+                        try {
+                            run(args);
+                        } catch (IllegalArgumentException | java.io.UncheckedIOException e) {
+                            System.err.println("error: " + e.getMessage());
+                            System.exit(1);
+                        }
+                    }
+
+                    private static void run(String[] args) throws Exception {
+                        if (args.length == 0) {
+                            usage();
+                            System.exit(2);
+                        }
+                        switch (args[0]) {
+                            case "list" -> list();
+                            case "send" -> {
+                """);
+        if (ev) {
+            sb.append("                if (args.length >= 2 && ").append(t).append(".isEventType(args[1])) {\n");
+            sb.append("                    sendEvent(args);\n                    return;\n                }\n");
+        }
+        if (sm) {
+            sb.append("""
+                                    if (args.length < 4) {
+                                        usage();
+                                        System.exit(2);
+                                    }
+                                    String payload = args.length > 4 ? readPayload(args[4]) : null;
+                                    EventEnvelope e = envelope(args[1], args[2], args[3], payload);
+                                    try (KinesisClient kinesis = KinesisClients.fromEnv()) {
+                                        publish(kinesis, e);
+                                    }
+                    """);
+        } else {
+            sb.append("                usage();\n                System.exit(2);\n");
+        }
+        sb.append("""
+                            }
+                            case "flow" -> {
+                                if (args.length < 2) {
+                                    usage();
+                                    System.exit(2);
+                                }
+                                long delay = args.length > 3 && args[2].equals("--delay-ms") ? Long.parseLong(args[3]) : 500;
+                                flow(Path.of(args[1]), delay);
+                            }
+                            default -> {
+                                usage();
+                                System.exit(2);
+                            }
+                        }
+                    }
+
+                    private static void usage() {
+                        System.err.println("usage: "
+                """);
+        if (sm) {
+            sb.append("                + \"send <smType> <eventType> <instanceKey> [payload.json | - | '{json}']\\n       \"\n");
+        }
+        if (ev) {
+            sb.append("                + \"send <EventType> [payload.json | - | '{json}'] [--at ISO|+30s|+5m|+2h] [--id ID]\\n       \"\n");
+        }
+        sb.append("                + \"flow <flow.json> [--delay-ms N]\\n       list\"");
+        if (sm) {
+            sb.append("\n                + \"\\nsmTypes: \" + ").append(m).append(".ALL.keySet()");
+        }
+        if (ev) {
+            sb.append("\n                + \"\\nevent types: \" + ").append(t).append(".typeNames()");
+        }
+        sb.append(");\n    }\n\n");
+
+        sb.append("    private static void list() {\n");
+        if (sm) {
+            sb.append("        ").append(m).append(".ALL.forEach((type, machine) -> {\n")
+                    .append("            System.out.println(type + \"  (initial \" + machine.spec().initialState() + \", terminal \" + machine.spec().terminalStates() + \")\");\n")
+                    .append("            for (StateMachineSpec.Edge e : machine.spec().edges()) {\n")
+                    .append("                System.out.printf(\"  %-14s %s -> %s  payload %s  locks %s%n\", e.eventType(), e.from(), e.to(),\n")
+                    .append("                        e.payloadType() == null ? \"-\" : e.payloadType().getSimpleName(), ").append(m)
+                    .append(".LOCKS.get(type).get(e.eventType()));\n")
+                    .append("            }\n        });\n");
+        }
+        if (ev) {
+            sb.append("        for (String domain : ").append(t).append(".DOMAINS) {\n")
+                    .append("            System.out.println(\"event domain \" + domain + \"  (task queue ev-\" + domain + \")\");\n")
+                    .append("            for (EventCatalog.EventType e : ").append(t).append(".types()) {\n")
+                    .append("                if (e.domain().equals(domain)) {\n")
+                    .append("                    System.out.printf(\"  %-24s locks %s  onError %s  attempts %d  emits %s%n\", e.name(),\n")
+                    .append("                            e.lockTemplates().isEmpty() ? \"[\" + domain + \":{id}]\" : e.lockTemplates(), e.onError(), e.maxAttempts(), ")
+                    .append(t).append(".emits(e.name()));\n")
+                    .append("                }\n            }\n        }\n");
+        }
+        sb.append("    }\n\n");
+        sb.append("""
+                    private static String readPayload(String arg) throws IOException {
+                        if (arg.equals("-")) {
+                            return new String(System.in.readAllBytes(), StandardCharsets.UTF_8);
+                        }
+                        String t = arg.strip();
+                        return t.startsWith("{") || t.equals("null") ? t : Files.readString(Path.of(arg), StandardCharsets.UTF_8);
+                    }
+
+                    /** The payload bound to its model class and validated (multiplicities), then serialized back. */
+                    private static String checked(String payload, Class<?> type) {
+                        String json = payload == null || payload.isBlank() || payload.strip().equals("null") ? null : payload.strip();
+                        if (type != null && json != null) {
+                            Object bound = ModelJson.read(json, type);
+                            if (bound instanceof ModelObject mo && !mo.validationErrors().isEmpty()) {
+                                throw new IllegalArgumentException("invalid " + type.getSimpleName() + " payload: "
+                                        + String.join("; ", mo.validationErrors()));
+                            }
+                            json = ModelJson.write(bound);
+                        }
+                        return json;
+                    }
+
+                    private static JsonNode tree(String json) {
+                        try {
+                            return json == null ? null : Json.MAPPER.readTree(json);
+                        } catch (com.fasterxml.jackson.core.JsonProcessingException x) {
+                            throw new IllegalArgumentException("payload is not JSON: " + x.getOriginalMessage(), x);
+                        }
+                    }
+
+                """);
+        if (sm) {
+            sb.append("    /**\n"
+                    + "     * An entity-style event, validated: the smType and event type exist, the payload binds to the event's payload class\n"
+                    + "     * and satisfies its multiplicities, and every lock key renders.\n"
+                    + "     */\n"
+                    + "    public static EventEnvelope envelope(String smType, String eventType, String instanceKey, String payload) {\n"
+                    + "        MachineCatalog.Machine machine = " + m + ".get(smType);\n"
+                    + "        StateMachineSpec.Edge edge = machine.spec().edges().stream().filter(x -> x.eventType().equals(eventType)).findFirst()\n"
+                    + "                .orElseThrow(() -> new IllegalArgumentException(smType + \" has no event \" + eventType + \"; events: \"\n"
+                    + "                        + machine.spec().edges().stream().map(StateMachineSpec.Edge::eventType).distinct().toList()));\n"
+                    + "        String json = checked(payload, edge.payloadType());\n"
+                    + "        List<String> locks = LockTemplates.render(" + m + ".LOCKS.get(smType).get(eventType), instanceKey, tree(json));\n"
+                    + "        return new EventEnvelope(smType + \"-\" + eventType + \"-\" + UUID.randomUUID(), smType, instanceKey, eventType, locks, json,\n"
+                    + "                System.currentTimeMillis(), 0);\n"
+                    + "    }\n\n");
+        }
+        if (ev) {
+            sb.append("""
+                        private static void sendEvent(String[] args) throws IOException {
+                            String type = args[1];
+                            String payload = null;
+                            long at = 0;
+                            String id = null;
+                            for (int i = 2; i < args.length; i++) {
+                                switch (args[i]) {
+                                    case "--at" -> at = parseAt(value(args, ++i, "--at"));
+                                    case "--id" -> id = value(args, ++i, "--id");
+                                    default -> payload = readPayload(args[i]);
+                                }
+                            }
+                            if (payload == null) {
+                                payload = samplePayload(type);
+                            }
+                            EventEnvelope e = eventEnvelope(type, payload, at, id);
+                            try (KinesisClient kinesis = KinesisClients.fromEnv()) {
+                                publish(kinesis, e);
+                            }
+                        }
+
+                        private static String value(String[] args, int i, String option) {
+                            if (i >= args.length) {
+                                throw new IllegalArgumentException(option + " needs a value");
+                            }
+                            return args[i];
+                        }
+
+                        /** {@code $ECOSYSTEM_SAMPLES/events/<type>.json} (set by the send script), else {@code null}. */
+                        private static String samplePayload(String type) throws IOException {
+                            String dir = Env.get("ECOSYSTEM_SAMPLES", "");
+                            Path p = dir.isBlank() ? null : Path.of(dir, "events", type + ".json");
+                            return p != null && Files.isRegularFile(p) ? Files.readString(p, StandardCharsets.UTF_8) : null;
+                        }
+
+                        /** {@code +30s}, {@code +5m}, {@code +2h}, {@code +1d} from now, or an ISO-8601 instant / offset date-time. */
+                        public static long parseAt(String at) {
+                            String s = at.strip();
+                            if (s.startsWith("+") && s.length() > 2) {
+                                long n = Long.parseLong(s.substring(1, s.length() - 1));
+                                Duration d = switch (s.charAt(s.length() - 1)) {
+                                    case 's' -> Duration.ofSeconds(n);
+                                    case 'm' -> Duration.ofMinutes(n);
+                                    case 'h' -> Duration.ofHours(n);
+                                    case 'd' -> Duration.ofDays(n);
+                                    default -> throw new IllegalArgumentException("bad --at " + at + ": use +30s, +5m, +2h, +1d or an ISO instant");
+                                };
+                                return System.currentTimeMillis() + d.toMillis();
+                            }
+                            try {
+                                return Instant.parse(s).toEpochMilli();
+                            } catch (DateTimeParseException notInstant) {
+                                try {
+                                    return OffsetDateTime.parse(s).toInstant().toEpochMilli();
+                                } catch (DateTimeParseException e) {
+                                    throw new IllegalArgumentException("bad --at " + at + ": use +30s, +5m, +2h, +1d or an ISO instant", e);
+                                }
+                            }
+                        }
+
+                        /**
+                         * An event-style event, validated: the type exists, the payload binds to its class and satisfies its
+                         * multiplicities, and every lock key renders from it.
+                         *
+                         * @param atMillis apply no earlier than this (SCHEDULED until then); 0 = now
+                         * @param eventId {@code null}: {@code <EventType>-<random>}
+                         */
+                        public static EventEnvelope eventEnvelope(String eventType, String payload, long atMillis, String eventId) {
+                    """);
+            sb.append("            EventCatalog.EventType type = ").append(t).append(".type(eventType);\n");
+            sb.append("""
+                            String json = checked(payload, type.payloadType());
+                            String id = eventId != null ? eventId : eventType + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
+                            List<String> locks = type.lockTemplates().isEmpty() ? List.of() : LockTemplates.render(type.lockTemplates(), id, tree(json));
+                            EventEnvelope e = EventEnvelope.event(id, type.domain(), type.name(), locks, json, System.currentTimeMillis());
+                            return atMillis > 0 ? e.withScheduledAt(atMillis) : e;
+                        }
+
+                    """);
+        }
+        sb.append("""
+                    private static void publish(KinesisClient kinesis, EventEnvelope e) {
+                        String stream = Env.get("INGEST_STREAM", "concert-events");
+                        String partitionKey = e.effectiveLockKeys().getFirst();
+                        kinesis.putRecord(b -> b.streamName(stream).partitionKey(partitionKey).data(SdkBytes.fromUtf8String(Json.write(e))));
+                        if (e.isEventStyle()) {
+                            System.out.printf("sent %s event %s (domain %s)  locks %s  (partition key %s)%s%n", e.eventId(), e.eventType(), e.domain(),
+                                    e.effectiveLockKeys(), partitionKey, e.scheduledAtMillis() > 0 ? "  scheduled at "
+                                            + java.time.Instant.ofEpochMilli(e.scheduledAtMillis()) : "");
+                        } else {
+                            System.out.printf("sent %s %s:%s %s  locks %s  (partition key %s)%n", e.eventId(), e.smType(), e.instanceKey(),
+                                    e.eventType(), e.effectiveLockKeys(), partitionKey);
+                        }
+                    }
+
+                    private static void flow(Path file, long delayMs) throws IOException, InterruptedException {
+                        JsonNode flow = Json.MAPPER.readTree(Files.readString(file, StandardCharsets.UTF_8));
+                        List<EventEnvelope> events = new ArrayList<>();
+                        for (JsonNode e : flow.path("events")) {
+                            JsonNode p = e.get("payload");
+                            String payload = p == null || p.isNull() ? null : Json.write(p);
+                """);
+        if (ev) {
+            sb.append("""
+                                if (e.path("style").asText("").equals("event")) {
+                                    long at = e.hasNonNull("at") ? parseAt(e.get("at").asText()) : 0;
+                                    events.add(eventEnvelope(e.path("eventType").asText(), payload, at,
+                                            e.hasNonNull("id") ? e.get("id").asText() : null));
+                                    continue;
+                                }
+                    """);
+        }
+        if (sm) {
+            sb.append("            events.add(envelope(e.path(\"smType\").asText(), e.path(\"eventType\").asText(), e.path(\"instanceKey\").asText(), payload));\n");
+        } else {
+            sb.append("            throw new IllegalArgumentException(file + \": flow event without \\\"style\\\": \\\"event\\\": \" + e);\n");
+        }
+        sb.append("""
+                        }
+                        System.out.printf("flow %s: %d events%n", flow.path("name").asText(file.getFileName().toString()), events.size());
+                        try (KinesisClient kinesis = KinesisClients.fromEnv()) {
+                            for (int i = 0; i < events.size(); i++) {
+                                if (i > 0 && delayMs > 0) {
+                                    Thread.sleep(delayMs); // events of one entity in order, even across shards
+                                }
+                                publish(kinesis, events.get(i));
+                            }
+                        }
+                    }
+                """);
+        if (sm) {
+            sb.append("\n    /** smType to machine, for tests and tools. */\n"
+                    + "    public static Map<String, MachineCatalog.Machine> machines() {\n"
+                    + "        return " + m + ".ALL;\n    }\n");
+        }
+        sb.append("}\n");
+        return sb.toString();
     }
 
     // ---- generated test ----

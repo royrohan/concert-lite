@@ -79,6 +79,46 @@ final class SampleGenerator {
         return flow;
     }
 
+    /** Sample payload of an event type. */
+    ObjectNode eventSample(EventDecl e) {
+        return object(e.cls(), 0);
+    }
+
+    /** Event types no other type emits (where flows start); every type if they all are emitted (a cycle). */
+    List<EventDecl> rootEvents() {
+        java.util.Set<String> emitted = new java.util.HashSet<>();
+        eco.events().forEach(e -> emitted.addAll(e.emits()));
+        List<EventDecl> roots = eco.events().stream().filter(e -> !emitted.contains(e.name())).toList();
+        return roots.isEmpty() ? eco.events() : roots;
+    }
+
+    /**
+     * The flow starting at {@code root}: {@code {name, description, events: [{style, eventType, payload}]}}, the
+     * description being the chain its emits declare, e.g. {@code OrderCreateEvent -> (OrderAcceptedEvent ->
+     * ReserveInventoryEvent | OrderRejectedEvent)}.
+     */
+    ObjectNode eventFlow(EventDecl root) {
+        ObjectNode flow = F.objectNode();
+        flow.put("name", root.name() + "-flow");
+        flow.put("description", chain(root.name(), new java.util.HashSet<>()));
+        ArrayNode events = flow.putArray("events");
+        ObjectNode e = events.addObject();
+        e.put("style", "event");
+        e.put("eventType", root.name());
+        e.set("payload", eventSample(root));
+        return flow;
+    }
+
+    /** {@code A -> (B -> C | D)} from the emits declarations (cycles shown once). */
+    String chain(String name, java.util.Set<String> seen) {
+        EventDecl e = eco.event(name).orElse(null);
+        if (e == null || e.emits().isEmpty() || !seen.add(name)) {
+            return name;
+        }
+        List<String> next = e.emits().stream().map(n -> chain(n, new java.util.HashSet<>(seen))).toList();
+        return name + " -> " + (next.size() == 1 ? next.getFirst() : "(" + String.join(" | ", next) + ")");
+    }
+
     private ObjectNode object(ClassDef c, int depth) {
         ObjectNode o = F.objectNode();
         if (!c.superTypes().isEmpty() || model.classes().stream().anyMatch(x -> x.superTypes().contains(c.qualifiedName()))) {

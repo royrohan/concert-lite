@@ -48,6 +48,13 @@ import java.util.stream.Stream;
  *       the executions). The array is still in {@code model_json}.
  * </ul>
  *
+ * <p><b>Event-style roots.</b> An smType starting with {@value #EVENT_PREFIX} ({@code evt_order_create_event}) holds
+ * event lifecycle rows, whose model JSON is {@code {eventId, eventType, status, attempts, ..., payload: {...}}} and whose
+ * root class is the event (payload) class: the table gets the lifecycle columns ({@link #EVENT_COLUMNS}: event id, type,
+ * domain, status, outcome, error, attempts, parent, causation root, depth, ...) and then the payload class's columns,
+ * read below {@code payload}. Keyed-state documents ({@code st_<type>}) are plain roots: their model JSON is the state
+ * class.
+ *
  * Table names are deterministic: root {@code plural(snake(smType))} ({@code trading_order ->
  * trading_orders}), child {@code snake(smType) + "_" + snake(association)} ({@code order_lines}).
  *
@@ -74,6 +81,43 @@ public final class SchemaMapper {
             ColumnSpec.system("entity_id", ColumnType.STRING, Source.ENTITY_ID),
             ColumnSpec.system("entity_version", ColumnType.BIGINT, Source.ENTITY_VERSION),
             ColumnSpec.system("idx", ColumnType.BIGINT, Source.IDX));
+
+    /** smType prefix of event-style lifecycle rows ({@code EventRows.eventSmType}). */
+    public static final String EVENT_PREFIX = "evt_";
+
+    /** Field of a lifecycle row's data holding the event payload. */
+    static final String EVENT_PAYLOAD = "payload";
+
+    /**
+     * The lifecycle columns of an event root, read from the row data ({@code EventRows.lifecycle}); the payload
+     * class's columns follow (a payload property colliding with one of these gets the {@code model_} prefix).
+     */
+    static final List<ColumnSpec> EVENT_COLUMNS = List.of(
+            eventColumn("event_id", ColumnType.STRING, "eventId"),
+            eventColumn("event_type", ColumnType.STRING, "eventType"),
+            eventColumn("domain", ColumnType.STRING, "domain"),
+            eventColumn("status", ColumnType.ENUM, "status"),
+            eventColumn("outcome", ColumnType.STRING, "outcome"),
+            eventColumn("error", ColumnType.STRING, "error"),
+            eventColumn("attempts", ColumnType.BIGINT, "attempts"),
+            eventColumn("retries", ColumnType.BIGINT, "retries"),
+            eventColumn("parent_event_id", ColumnType.STRING, "parentEventId"),
+            eventColumn("causation_root", ColumnType.STRING, "causationRoot"),
+            eventColumn("depth", ColumnType.BIGINT, "depth"),
+            eventColumn("processor_key", ColumnType.STRING, "processorKey"),
+            eventColumn("request_id", ColumnType.STRING, "requestId"),
+            eventColumn("scheduled_at_ms", ColumnType.BIGINT, "scheduledAt"),
+            eventColumn("lock_keys", ColumnType.JSON, "keys"),
+            eventColumn("children", ColumnType.JSON, "children"));
+
+    private static ColumnSpec eventColumn(String name, ColumnType type, String field) {
+        return new ColumnSpec(name, type, Source.MODEL, List.of(field), null);
+    }
+
+    /** Whether snapshots of {@code smType} are event lifecycle rows (smType {@code evt_<event type>}). */
+    public static boolean isEventRoot(String smType) {
+        return smType.startsWith(EVENT_PREFIX);
+    }
 
     private final ResolvedModel model;
 
@@ -171,7 +215,14 @@ public final class SchemaMapper {
             List<ColumnSpec> columns = new ArrayList<>(ROOT_SYSTEM);
             List<TableSpec> children = new ArrayList<>();
             Columns rootCols = new Columns(columns);
-            addClass(cls, List.of(), "", null, rootCols, 0, Set.of(cls.qualifiedName()), true);
+            // Event-style lifecycle rows: the model JSON is {eventId, status, ..., payload: {...}}; the payload class's
+            // columns are read below "payload".
+            boolean event = isEventRoot(smType);
+            List<String> base = event ? List.of(EVENT_PAYLOAD) : List.of();
+            if (event) {
+                EVENT_COLUMNS.forEach(c -> rootCols.add(c.name(), c.type(), c.path(), null));
+            }
+            addClass(cls, base, "", null, rootCols, 0, Set.of(cls.qualifiedName()), true);
             for (AssociationEnd end : model.associationProperties(cls)) {
                 PropertyDef p = end.navigable();
                 if (end.owned() && p.multiplicity().isToMany() && !isOtherRoot(p, cls, rootClasses)) {
@@ -179,7 +230,7 @@ public final class SchemaMapper {
                     List<ColumnSpec> childCols = new ArrayList<>(CHILD_SYSTEM);
                     addClass(element, List.of(), "", null, new Columns(childCols), 0, Set.of(element.qualifiedName()), false);
                     children.add(new TableSpec(snake(smType) + "_" + snake(p.name()), TableSpec.Kind.CHILD, smType,
-                            element.qualifiedName(), rootTable, List.of(p.name()), childCols));
+                            element.qualifiedName(), rootTable, append(base, p.name()), childCols));
                 }
             }
             tables.add(new TableSpec(rootTable, TableSpec.Kind.ROOT, smType, cls.qualifiedName(), null, List.of(), columns));

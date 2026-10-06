@@ -1,0 +1,30 @@
+{
+  "name" : "order-happy-path",
+  "description" : "restock two SKUs, then an order with two lines: OrderCreateEvent -> OrderAcceptedEvent -> 2 x ReserveInventoryEvent + OrderExpiryCheckEvent (scheduled)",
+  "events" : [ {
+    "style" : "event",
+    "eventType" : "RestockEvent",
+    "payload" : { "sku" : "SKU-RED", "quantity" : 50 }
+  }, {
+    "style" : "event",
+    "eventType" : "RestockEvent",
+    "payload" : { "sku" : "SKU-BLUE", "quantity" : 50 }
+  }, {
+    "style" : "event",
+    "eventType" : "OrderCreateEvent",
+    "payload" : {
+      "orderId" : "ORDER-HAPPY-1",
+      "customerId" : "CUST-7",
+      "currency" : "USD",
+      "lines" : [ { "sku" : "SKU-RED", "quantity" : 2, "unitPrice" : 19.99 }, { "sku" : "SKU-BLUE", "quantity" : 3, "unitPrice" : 5.25 } ],
+      "expirySeconds" : 600
+    }
+  } ],
+  "expect" : {
+    "RestockEvent" : "DONE",
+    "OrderCreateEvent" : "DONE",
+    "OrderAcceptedEvent" : "DONE",
+    "ReserveInventoryEvent" : "DONE",
+    "OrderExpiryCheckEvent" : "SCHEDULED"
+  }
+}

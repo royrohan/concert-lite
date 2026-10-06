@@ -1,0 +1,12 @@
+{
+  "name" : "RestockEvent-flow",
+  "description" : "RestockEvent",
+  "events" : [ {
+    "style" : "event",
+    "eventType" : "RestockEvent",
+    "payload" : {
+      "sku" : "sku-1",
+      "quantity" : 10
+    }
+  } ]
+}

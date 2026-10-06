@@ -160,6 +160,8 @@ services:
     environment:
       <<: *app-env
       SM_TYPE: ${SM_TYPE:-order,payment,shipment,ledger}
+      # event-style demo domain (showcases/sample-workers .../events/DemoEvents): EVENT_DOMAINS=demo to enable
+      EVENT_DOMAINS: ${EVENT_DOMAINS:-}
       STORE_INIT_SCHEMA: "false"
     restart: unless-stopped
 

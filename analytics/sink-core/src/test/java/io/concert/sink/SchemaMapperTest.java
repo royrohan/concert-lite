@@ -160,4 +160,40 @@ class SchemaMapperTest {
         env.remove("SINK_ROOTS");
         assertEquals("dflt,claim:insurance::Claim,z:x::Z", SchemaMapper.envList(env, "SINK_ROOTS", "dflt"));
     }
+
+    @Test
+    void eventRootsGetLifecycleColumnsThenThePayloadAndStateRootsAreThePlainClass() {
+        Path models = Path.of("../../examples/order-events");
+        SchemaSpec s = new SchemaMapper(SchemaMapper.loadModels(models)).map(SchemaMapper.parseRoots(
+                "evt_order_create_event:orders::OrderCreateEvent,evt_payment_capture_event:orders::PaymentCaptureEvent,st_order:orders::Order"));
+        TableSpec created = s.rootFor("evt_order_create_event").orElseThrow();
+        assertEquals("evt_order_create_events", created.name());
+        Map<String, ColumnType> t = types(created);
+        assertEquals(List.of("entity_id", "entity_version", "sm_type", "sm_state", "created_at", "completed_at", "model_json",
+                "event_id", "event_type", "domain", "status", "outcome", "error", "attempts", "retries", "parent_event_id",
+                "causation_root", "depth", "processor_key", "request_id", "scheduled_at_ms", "lock_keys", "children",
+                "order_id", "customer_id", "currency", "lines", "expiry_seconds"), List.copyOf(t.keySet()));
+        assertEquals(List.of("payload", "orderId"), created.column("order_id").orElseThrow().path());
+        assertEquals(List.of("status"), created.column("status").orElseThrow().path());
+        assertEquals(ColumnType.JSON, t.get("lines"));
+        assertEquals(ColumnType.BOOLEAN, types(s.rootFor("evt_payment_capture_event").orElseThrow()).get("poison"));
+
+        TableSpec order = s.rootFor("st_order").orElseThrow();
+        assertEquals("st_orders", order.name());
+        assertEquals(List.of("orderId"), order.column("order_id").orElseThrow().path());
+        assertFalse(types(order).containsKey("event_id"));
+
+        String data = "{\"eventId\":\"e1\",\"eventType\":\"OrderCreateEvent\",\"status\":\"DONE\",\"attempts\":1,\"depth\":0,"
+                + "\"keys\":[\"customer:C1\",\"order:O1\"],\"payload\":{\"orderId\":\"O1\",\"customerId\":\"C1\",\"currency\":\"USD\"}}";
+        Object[] row = SnapshotRows.extract(s, created, new EntitySnapshot("event:e1", "evt_order_create_event", "DONE", 7, null,
+                java.time.Instant.now(), data)).rootRow();
+        Map<String, Object> byName = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < row.length; i++) {
+            byName.put(created.columns().get(i).name(), row[i]);
+        }
+        assertEquals("e1", byName.get("event_id"));
+        assertEquals(1L, byName.get("attempts"));
+        assertEquals("O1", byName.get("order_id"));
+        assertEquals("[\"customer:C1\",\"order:O1\"]", byName.get("lock_keys"));
+    }
 }

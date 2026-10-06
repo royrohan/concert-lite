@@ -21,6 +21,11 @@ public final class WorkflowIds {
         return "evt:" + eventId;
     }
 
+    /** Event-style processor of a domain and key, e.g. {@code evproc:orders:order:7}. */
+    public static String processor(String domain, String key) {
+        return "evproc:" + domain + ":" + key;
+    }
+
     public static String ingest(String stream) {
         return "ingest:" + stream;
     }

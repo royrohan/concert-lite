@@ -89,10 +89,6 @@ final class DeclarationParser {
             }
             machines.add(m);
         }
-        if (machines.isEmpty() && diag.errors.isEmpty()) {
-            diag.error(null, "no class is marked <<" + ConcertProfile.NAME + "." + ConcertProfile.ROOT
-                    + ">>: declare at least one state machine");
-        }
         return machines;
     }
 

@@ -1,0 +1,13 @@
+{
+  "name" : "PaymentCaptureEvent-flow",
+  "description" : "PaymentCaptureEvent",
+  "events" : [ {
+    "style" : "event",
+    "eventType" : "PaymentCaptureEvent",
+    "payload" : {
+      "orderId" : "ORDER-ID-1001",
+      "amount" : 1250.00,
+      "poison" : false
+    }
+  } ]
+}

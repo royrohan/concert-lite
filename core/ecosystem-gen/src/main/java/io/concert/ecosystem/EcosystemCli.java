@@ -74,14 +74,12 @@ public final class EcosystemCli {
                     Ecosystem eco = Ecosystem.load(dir, n, pkg != null ? pkg : Ecosystem.defaultPackage(n));
                     eco.warnings().forEach(System.err::println);
                     if (args[0].equals("check")) {
-                        System.out.println("ok: " + eco.machines().size() + " state machine(s): "
-                                + eco.machines().stream().map(MachineDecl::smType).toList());
+                        System.out.println("ok: " + describe(eco));
                         yield 0;
                     }
                     Generator.Report r = new Generator(repo, eco, force).generate(dir);
                     r.warnings().stream().filter(w -> !eco.warnings().contains(w)).forEach(System.err::println);
-                    System.out.println("ecosystem " + n + " -> showcases/" + n + " (" + eco.machines().size() + " state machine(s): "
-                            + String.join(", ", eco.machines().stream().map(MachineDecl::smType).toList()) + ")");
+                    System.out.println("ecosystem " + n + " -> showcases/" + n + " (" + describe(eco) + ")");
                     System.out.print(r.summary());
                     System.out.println("next: ./deploy-concert-ecosystem " + n + " --store spanner   (or ./gradlew :" + n + ":build)");
                     yield 0;
@@ -104,6 +102,21 @@ public final class EcosystemCli {
             System.err.println(e);
             return 1;
         }
+    }
+
+    /** {@code 2 state machine(s): claim, policy; 5 event type(s) in domains orders, inventory; 2 keyed state(s)}. */
+    static String describe(Ecosystem eco) {
+        List<String> parts = new ArrayList<>();
+        if (eco.hasMachines() || !eco.hasEvents()) {
+            parts.add(eco.machines().size() + " state machine(s): " + String.join(", ", eco.machines().stream().map(MachineDecl::smType).toList()));
+        }
+        if (eco.hasEvents()) {
+            parts.add(eco.events().size() + " event type(s) in domain(s) " + String.join(", ", eco.domains()) + ": "
+                    + String.join(", ", eco.events().stream().map(EventDecl::name).toList()));
+            parts.add(eco.states().size() + " keyed state(s)" + (eco.states().isEmpty() ? "" : ": "
+                    + String.join(", ", eco.states().stream().map(EventDecl.StateDecl::name).toList())));
+        }
+        return String.join("; ", parts);
     }
 
     private static int usage() {
@@ -129,6 +142,10 @@ public final class EcosystemCli {
             sb.append("    entity page     http://localhost:8088/#entity/").append(r.path("smType").asText()).append(':')
                     .append(r.path("sampleKey").asText()).append("   (after its happy path)\n");
         }
+        if (m.has("events")) {
+            sb.append("    events view     http://localhost:8088/#events   (error queue with Retry / Skip, scheduled, processors)\n");
+            sb.append("    event page      http://localhost:8088/#event/<eventId>   (lifecycle, payload, causation tree)\n");
+        }
         if (analytics) {
             sb.append("  ClickHouse Play   http://localhost:8123/play   (user readonly / readonly)\n");
             sb.append("  DuckDB sink       http://localhost:8090/tables\n");
@@ -141,6 +158,16 @@ public final class EcosystemCli {
         }
         sb.append("\nSend events\n");
         sb.append("  ./").append(mod).append("/send list\n");
+        for (JsonNode e : m.path("events")) {
+            sb.append("  ./").append(mod).append("/send ").append(e.path("eventType").asText()).append("   [").append(mod).append('/')
+                    .append(e.path("sample").asText()).append("]   (--at +5m to schedule)\n");
+        }
+        for (JsonNode f : m.path("eventFlows")) {
+            sb.append("  ./").append(mod).append("/send-flow ").append(mod).append('/').append(f.asText()).append('\n');
+        }
+        if (m.has("events")) {
+            sb.append("  scripts/events.sh list all            # lifecycle rows; list errors | retry <id> | skip <id> [reason]\n");
+        }
         for (JsonNode r : m.path("roots")) {
             String type = r.path("smType").asText();
             String first = r.path("events").path(0).asText();
@@ -161,8 +188,14 @@ public final class EcosystemCli {
             for (JsonNode r : m.path("roots")) {
                 sb.append("  SELECT * FROM ").append(r.path("table").asText()).append(" FINAL ORDER BY completed_at DESC LIMIT 10;   -- ClickHouse\n");
             }
-            sb.append("  curl -s localhost:8088/api/analytics/duckdb/query -d \"SELECT count(*) FROM ")
-                    .append(m.path("roots").path(0).path("table").asText()).append("\"\n");
+            for (JsonNode e : m.path("events")) {
+                sb.append("  SELECT status, count(*), avg(attempts) FROM ").append(e.path("table").asText()).append(" GROUP BY status;\n");
+            }
+            for (JsonNode st : m.path("states")) {
+                sb.append("  SELECT * FROM ").append(st.path("table").asText()).append(" ORDER BY completed_at DESC LIMIT 10;\n");
+            }
+            String first = m.path("roots").path(0).path("table").asText(m.path("events").path(0).path("table").asText());
+            sb.append("  curl -s localhost:8088/api/analytics/duckdb/query -d \"SELECT count(*) FROM ").append(first).append("\"\n");
         }
         return sb.toString();
     }
@@ -171,6 +204,9 @@ public final class EcosystemCli {
         List<String> parts = new ArrayList<>();
         for (JsonNode r : m.path("roots")) {
             parts.add("WorkflowId STARTS_WITH \"" + r.path("smType").asText() + ":\"");
+        }
+        for (JsonNode d : m.path("domains")) {
+            parts.add("WorkflowId STARTS_WITH \"evproc:" + d.asText() + ":\"");
         }
         return String.join(" OR ", parts);
     }

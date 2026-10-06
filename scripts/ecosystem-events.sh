@@ -2,12 +2,13 @@
 # Runs a generated ecosystem's event sender (bin/events of showcases/<name>), building it when its sources
 # changed. Used by showcases/<name>/send and send-flow:
 #   scripts/ecosystem-events.sh <name> send <smType> <eventType> <instanceKey> [payload.json | - | '{json}']
+#   scripts/ecosystem-events.sh <name> send <EventType> [payload.json | - | '{json}'] [--at +5m|ISO] [--id ID]
 #   scripts/ecosystem-events.sh <name> flow <flow.json> [--delay-ms N]
 #   scripts/ecosystem-events.sh <name> list
-# Without a payload, send uses samples/<smType>/<eventType>.json. KINESIS_ENDPOINT defaults to LocalStack.
+# Without a payload, send uses samples/<smType>/<eventType>.json (event style: samples/events/<EventType>.json). KINESIS_ENDPOINT defaults to LocalStack.
 set -euo pipefail
 if [ $# -lt 2 ]; then
-  sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 fi
 name=$1
@@ -22,6 +23,7 @@ if [ ! -x "$bin" ] || [ -n "$(find "$mod/src/main" "$mod/build.gradle.kts" -newe
 fi
 export KINESIS_ENDPOINT=${KINESIS_ENDPOINT:-http://localhost:4566}
 export AWS_REGION=${AWS_REGION:-us-east-1}
+export ECOSYSTEM_SAMPLES="$mod/samples"   # event style: default payloads samples/events/<EventType>.json
 if [ "$1" = "send" ] && [ $# -eq 4 ]; then
   sample="$mod/samples/$2/$3.json"
   if [ -f "$sample" ]; then

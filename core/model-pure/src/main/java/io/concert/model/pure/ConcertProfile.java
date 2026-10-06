@@ -6,8 +6,9 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * The built-in {@code concert::sm} profile ({@code concert/concert.pure} on the classpath): the
- * stereotypes and tags that declare state machines in Pure models.
+ * The built-in concert profiles ({@code concert/concert.pure} on the classpath): {@code concert::sm}, the
+ * stereotypes and tags that declare state machines in Pure models, and {@code concert::event}, which declares
+ * event-style events (one handler per event type) and their keyed-state documents.
  */
 public final class ConcertProfile {
     private ConcertProfile() {}
@@ -34,7 +35,24 @@ public final class ConcertProfile {
     public static final String STATUS_PROPERTY = "statusProperty";
     public static final String ID_PROPERTY = "idProperty";
 
-    /** The profile's Pure source. */
+    /** Qualified name of the event-style profile. */
+    public static final String EVENT_PROFILE = "concert::event";
+
+    /** Stereotype of an event-style event (payload) class. */
+    public static final String EVENT = "event";
+
+    /** Stereotype of a keyed-state class. */
+    public static final String STATE = "state";
+
+    public static final String DOMAIN = "domain";
+    public static final String EVENT_LOCKS = "locks";
+    public static final String ON_ERROR = "onError";
+    public static final String RETRIES = "retries";
+    public static final String KEY = "key";
+    public static final String EVENT_NAME = "name";
+    public static final String EMITS = "emits";
+
+    /** The profiles' Pure source. */
     public static String source() {
         try (InputStream in = ConcertProfile.class.getClassLoader().getResourceAsStream(RESOURCE)) {
             if (in == null) {
@@ -46,7 +64,7 @@ public final class ConcertProfile {
         }
     }
 
-    /** The profile parsed, reported as file {@code concert.pure}. */
+    /** The profiles parsed, reported as file {@code concert.pure}. */
     public static PureModel model() {
         return PureParser.parse(source(), FILE_NAME);
     }

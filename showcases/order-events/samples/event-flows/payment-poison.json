@@ -1,0 +1,29 @@
+{
+  "name" : "payment-poison",
+  "description" : "a poisoned payment: PaymentCaptureEvent goes ERROR_BLOCKING and keeps order:ORDER-POISON-1 held until an operator skips or retries it",
+  "events" : [ {
+    "style" : "event",
+    "eventType" : "RestockEvent",
+    "payload" : { "sku" : "SKU-GREEN", "quantity" : 10 }
+  }, {
+    "style" : "event",
+    "eventType" : "OrderCreateEvent",
+    "payload" : {
+      "orderId" : "ORDER-POISON-1",
+      "customerId" : "CUST-9",
+      "currency" : "USD",
+      "lines" : [ { "sku" : "SKU-GREEN", "quantity" : 1, "unitPrice" : 42.00 } ],
+      "expirySeconds" : 600
+    }
+  }, {
+    "style" : "event",
+    "eventType" : "PaymentCaptureEvent",
+    "payload" : { "orderId" : "ORDER-POISON-1", "amount" : 42.00, "poison" : true }
+  } ],
+  "expect" : {
+    "OrderCreateEvent" : "DONE",
+    "OrderAcceptedEvent" : "DONE",
+    "ReserveInventoryEvent" : "DONE",
+    "PaymentCaptureEvent" : "ERROR_BLOCKING"
+  }
+}

@@ -31,7 +31,11 @@ import org.HdrHistogram.Histogram;
  *   <li><b>dedupe state</b>: every event reached DISPATCHED.
  * </ul>
  *
- * Then prints throughput per 5 s bucket with the chaos actions marked, and producer->done latency.
+ * For an event-style run ({@code tools loadgen --style event}) the counts come from the keyed-state documents
+ * {@code state:evc:<runId>-K<i>} (duplicates count as double applies) plus {@code state:chain:...} for the chained
+ * child events, and no lifecycle row of the run may be left in an error state.
+ *
+ * <p>Then prints throughput per 5 s bucket with the chaos actions marked, and producer->done latency.
  */
 final class Verify {
     private Verify() {}
@@ -51,20 +55,28 @@ final class Verify {
             long deadline = System.currentTimeMillis() + waitSeconds * 1000L;
             Map<String, long[]> state;
             long applied;
+            long chainedTotal = java.util.Arrays.stream(m.chainedPerKey()).sum();
+            Map<String, long[]> chains = Map.of();
+            long chainApplied = 0;
             while (true) {
-                state = ledgerState(store, m.runId());
+                state = m.eventStyle() ? counterState(store, "state:evc:" + m.runId() + "-K") : ledgerState(store, m.runId());
                 applied = state.values().stream().mapToLong(v -> v[0]).sum();
-                if (applied >= m.total() || System.currentTimeMillis() > deadline) {
+                if (m.eventStyle()) {
+                    chains = counterState(store, "state:chain:" + m.runId() + "-K");
+                    chainApplied = chains.values().stream().mapToLong(v -> v[0]).sum();
+                }
+                if ((applied >= m.total() && chainApplied >= chainedTotal) || System.currentTimeMillis() > deadline) {
                     break;
                 }
-                System.out.printf("[verify] draining: applied %d/%d%n", applied, m.total());
+                System.out.printf("[verify] draining: applied %d/%d%s%n", applied, m.total(),
+                        m.eventStyle() ? ", chained " + chainApplied + "/" + chainedTotal : "");
                 Thread.sleep(5000);
             }
 
             int lostKeys = 0, overKeys = 0, oooKeys = 0;
             long lost = 0, over = 0, ooo = 0;
             for (int k = 0; k < m.keys(); k++) {
-                long[] s = state.getOrDefault("ledger:" + m.runId() + "-K" + k, new long[] {0, 0});
+                long[] s = state.getOrDefault(m.runId() + "-K" + k, new long[] {0, 0, 0});
                 long expected = m.perKey()[k];
                 if (s[0] < expected) {
                     lostKeys++;
@@ -78,6 +90,21 @@ final class Verify {
                     oooKeys++;
                     ooo += s[1];
                 }
+                if (s.length > 2 && s[2] > 0) {
+                    overKeys++;
+                    over += s[2]; // duplicate applies recorded by the event-style counter
+                }
+            }
+            long chainLost = 0, chainOver = 0;
+            for (int k = 0; k < m.chainedPerKey().length; k++) {
+                long got = chains.getOrDefault(m.runId() + "-K" + k, new long[] {0, 0, 0})[0];
+                chainLost += Math.max(0, m.chainedPerKey()[k] - got);
+                chainOver += Math.max(0, got - m.chainedPerKey()[k]);
+            }
+            long errorRows = 0;
+            if (m.eventStyle()) {
+                errorRows = store.scanStatesWhere("event:" + m.runId() + "-", "status", "ERROR_BLOCKING").size()
+                        + store.scanStatesWhere("event:" + m.runId() + "-", "status", "ERROR_NON_BLOCKING").size();
             }
             Map<String, Long> dedupe = store.processedStatusCounts(m.runId() + "-");
             long dropped = store.scanTraces(m.runId() + "-", TraceRow.Stage.DROPPED).size();
@@ -85,7 +112,7 @@ final class Verify {
 
             System.out.println();
             System.out.println("================ chaos verification: " + m.runId() + " (store: " + store.kind() + ") ================");
-            System.out.printf("sent %d events to %d ledgers (%d single-key, %d multi-key) at %.0f/s%n", m.total(), m.keys(),
+            System.out.printf("sent %d %s events to %d ledgers (%d single-key, %d multi-key) at %.0f/s%n", m.total(), m.style(), m.keys(),
                     (m.keys() + 1) / 2, m.keys() / 2, m.total() * 1000.0 / Math.max(1, m.finishedAt() - m.startedAt()));
             System.out.printf("chaos actions: %d (%s)%n", chaos.stream().filter(c -> !c.action().equals("START")).count(),
                     summarize(chaos));
@@ -94,12 +121,18 @@ final class Verify {
             check("no double-applied events", over == 0, over + " extra across " + overKeys + " ledgers");
             check("per-key order kept", ooo == 0, ooo + " out-of-order applies across " + oooKeys + " ledgers");
             check("dedupe state settled", dedupe.getOrDefault("RECEIVED", 0L) == 0, "status counts " + dedupe);
+            if (m.eventStyle()) {
+                check("chained child events: none lost", chainLost == 0, chainLost + " of " + chainedTotal + " missing");
+                check("chained child events: none applied twice", chainOver == 0, chainOver + " extra");
+                check("no lifecycle row in an error state", errorRows == 0, errorRows + " ERROR_* rows");
+                System.out.printf("  info  event style: %d Ticks + %d chained ChainTicks applied%n", applied, chainApplied);
+            }
             System.out.printf("  info  replays absorbed by dedupe (DROPPED rows): %d, FAILED rows: %d%n", dropped, failed);
             System.out.println();
             Map<String, TraceRow> done = firstDone(store, m.runId());
             latency(done);
             timeline(done, m, chaos);
-            boolean pass = lost == 0 && over == 0 && ooo == 0;
+            boolean pass = lost == 0 && over == 0 && ooo == 0 && chainLost == 0 && chainOver == 0 && errorRows == 0;
             System.out.println(pass ? "RESULT: PASS" : "RESULT: FAIL");
             return pass ? 0 : 1;
         }
@@ -109,12 +142,24 @@ final class Verify {
         System.out.printf("  %s  %s%s%n", ok ? "PASS" : "FAIL", what, ok ? "" : " — " + detail);
     }
 
-    /** workflow_id -> [count, outOfOrder] from the ledger projections. */
+    /** {@code <runId>-K<i>} -> [count, outOfOrder] from the ledger projections. */
     private static Map<String, long[]> ledgerState(StateStore store, String runId) {
         Map<String, long[]> out = new HashMap<>();
         for (SmStateRow r : store.scanStates("ledger:" + runId + "-K")) {
             JsonNode d = Json.read(r.data(), JsonNode.class);
-            out.put(r.workflowId(), new long[] {d.path("count").asLong(), d.path("outOfOrder").asLong()});
+            out.put(r.workflowId().substring("ledger:".length()), new long[] {d.path("count").asLong(), d.path("outOfOrder").asLong()});
+        }
+        return out;
+    }
+
+    /** {@code <runId>-K<i>} -> [count, outOfOrder, duplicates] from DemoEvents' SeqCounter documents under {@code prefix}. */
+    private static Map<String, long[]> counterState(StateStore store, String prefix) {
+        Map<String, long[]> out = new HashMap<>();
+        String strip = prefix.substring(0, prefix.lastIndexOf(':') + 1);
+        for (SmStateRow r : store.scanStates(prefix)) {
+            JsonNode d = Json.read(r.data(), JsonNode.class);
+            out.put(r.workflowId().substring(strip.length()),
+                    new long[] {d.path("count").asLong(), d.path("outOfOrder").asLong(), d.path("duplicates").asLong()});
         }
         return out;
     }

@@ -130,4 +130,50 @@ class EndToEndIT {
             System.out.println("[failover] " + h.stats("fo-").format());
         }
     }
+
+    @Test
+    void eventStyleChainsAndKeyedStateThroughKinesis() {
+        try (Harness h = new Harness(2)) {
+            h.startCoordinator();
+            h.startEventWorker();
+            h.startIngest();
+
+            int chains = 20, keys = 10, counts = 300;
+            List<EventEnvelope> events = new ArrayList<>();
+            for (int c = 0; c < chains; c++) {
+                events.add(EventEnvelope.event("ev-s" + c, "demo", "Step", List.of("chain:c" + c),
+                        "{\"chain\":\"c" + c + "\",\"n\":1,\"max\":3}", System.currentTimeMillis()));
+            }
+            for (int i = 0; i < counts; i++) {
+                events.add(EventEnvelope.event("ev-n" + i, "demo", "Count", List.of("counter:k" + (i % keys)),
+                        "{\"key\":\"k" + (i % keys) + "\",\"by\":1}", System.currentTimeMillis()));
+            }
+            List<EventEnvelope> withDupes = new ArrayList<>(events);
+            withDupes.addAll(events.subList(0, 50)); // producer retries
+            h.publish(withDupes);
+
+            int total = chains * 3 + counts;
+            Harness.await(Duration.ofSeconds(120), () -> h.countTrace("ev-", "DONE") >= total);
+            for (int c = 0; c < chains; c++) {
+                JsonNode chain = Json.read(h.stateData("state:chain:c" + c), JsonNode.class);
+                assertEquals(3, chain.get("value").asLong(), "chain c" + c);
+                List<String> seen = new ArrayList<>();
+                chain.get("seen").forEach(n -> seen.add(n.asText()));
+                assertEquals(List.of("ev-s" + c, "ev-s" + c + ".1", "ev-s" + c + ".1.1"), seen);
+                assertEquals("DONE", h.store.loadState("event:ev-s" + c + ".1.1").orElseThrow().state());
+            }
+            long sum = 0;
+            for (int k = 0; k < keys; k++) {
+                JsonNode counter = Json.read(h.stateData("state:counter:k" + k), JsonNode.class);
+                assertEquals(counts / keys, counter.get("value").asLong(), "no loss / no double apply on k" + k);
+                assertEquals(counts / keys, counter.get("seen").size());
+                sum += counter.get("value").asLong();
+            }
+            assertEquals(counts, sum);
+            Harness.await(Duration.ofSeconds(10), () -> h.countTrace("ev-", "DROPPED") == 50);
+            Harness.sleepQuietly(1000);
+            assertEquals(total, h.countTrace("ev-", "DONE"), "every event DONE exactly once");
+            System.out.println("[event-style] " + h.stats("ev-").format());
+        }
+    }
 }

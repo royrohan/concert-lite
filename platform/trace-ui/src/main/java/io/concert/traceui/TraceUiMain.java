@@ -42,6 +42,11 @@ import org.slf4j.LoggerFactory;
  * GET /api/events/{eventId}       timeline of one event
  * GET /api/entities/{smType:key}  live state, history, Mermaid state diagram and model class diagram
  * GET /api/locks/{lockKey}        live holder and queue of a lock
+ * GET /api/event-types            event-style catalogs (EventCatalog SPI): types, states, flow and model diagrams
+ * GET  /api/ops/events?status=errors|ERROR_BLOCKING|ERROR_NON_BLOCKING|SCHEDULED|DONE|all&limit=   lifecycle rows
+ * POST /api/ops/events/{eventId}/retry          operator retry of a blocked / parked event
+ * POST /api/ops/events/{eventId}/skip?reason=   operator skip (goes DONE without running)
+ * GET  /api/ops/events/{eventId}/processor      live status of the event's processor (scheduled, blocked, parked)
  * /api/analytics/duckdb/{query,tables,samples,health}       proxied to the DuckDB sink (SINK_DUCKDB_URL)
  * /api/analytics/clickhouse/{query,tables,samples,health}   ClickHouse HTTP as the read-only user (CLICKHOUSE_URL,
  *                                                           CLICKHOUSE_USER / CLICKHOUSE_PASSWORD), same shapes
@@ -73,6 +78,7 @@ public final class TraceUiMain {
     private final String consoleInternal = Env.get("REDPANDA_CONSOLE_URL", "http://redpanda-console:8080");
     private final String consolePublic = Env.get("REDPANDA_CONSOLE_PUBLIC_URL", "http://localhost:8081");
     private final ReconcileRunner reconcile;
+    private final EventsApi events;
 
     static final List<String> DEEPHAVEN_WIDGETS = List.of("quotes_latest", "vwap_by_symbol", "completions_per_minute",
             "state_distribution", "completion_latency", "revenue_by_currency", "quotes_with_sector", "orders_latest",
@@ -109,6 +115,7 @@ public final class TraceUiMain {
         this.store = store;
         this.client = client;
         this.reconcile = new ReconcileRunner(client, MACHINES);
+        this.events = new EventsApi(client, store);
     }
 
     public static void main(String[] args) throws IOException {
@@ -128,6 +135,8 @@ public final class TraceUiMain {
         server.createContext("/api/events/", ex -> json(ex, event(tail(ex, "/api/events/"))));
         server.createContext("/api/entities/", ex -> json(ex, entity(tail(ex, "/api/entities/"))));
         server.createContext("/api/locks/", ex -> json(ex, lock(tail(ex, "/api/locks/"))));
+        server.createContext("/api/event-types", ex -> json(ex, events.types()));
+        server.createContext("/api/ops/events", this::ops);
         server.createContext("/api/analytics/duckdb/", ex -> proxy(ex, sinkDuckDb, tail(ex, "/api/analytics/duckdb/")));
         server.createContext("/api/analytics/clickhouse/", ex -> clickHouse(ex, tail(ex, "/api/analytics/clickhouse/")));
         server.createContext("/api/analytics/deephaven/config", ex -> json(ex, deephavenConfig()));
@@ -143,6 +152,7 @@ public final class TraceUiMain {
         out.put("eventId", eventId);
         out.put("dedupeStatus", store.processedStatus(eventId).orElse(null));
         out.put("trace", store.traceForEvent(eventId));
+        out.putAll(events.event(eventId));
         out.put("temporalUi", temporalUi + "/namespaces/default/workflows?query="
                 + URLEncoder.encode("EventId=\"" + eventId + "\"", StandardCharsets.UTF_8));
         return out;
@@ -272,6 +282,48 @@ public final class TraceUiMain {
             out.put("clickhouse", Map.of("error", "not reachable"));
         }
         return out;
+    }
+
+    /** The operator API of event-style events (see the class doc). */
+    private void ops(HttpExchange ex) throws IOException {
+        Map<String, String> q = query(ex);
+        String rest = tail(ex, "/api/ops/events");
+        rest = rest.startsWith("/") ? rest.substring(1) : rest;
+        try {
+            if (rest.isEmpty()) {
+                json(ex, events.list(q.get("status"), Integer.parseInt(q.getOrDefault("limit", "200"))));
+                return;
+            }
+            int slash = rest.lastIndexOf('/');
+            String id = slash < 0 ? rest : rest.substring(0, slash);
+            String action = slash < 0 ? "" : rest.substring(slash + 1);
+            boolean post = ex.getRequestMethod().equals("POST");
+            switch (action) {
+                case "retry" -> json(ex, post ? events.retry(id) : Map.of("error", "POST to retry"));
+                case "skip" -> json(ex, post ? events.skip(id, q.get("reason")) : Map.of("error", "POST to skip"));
+                case "processor" -> json(ex, events.processor(id));
+                default -> json(ex, 404, Map.of("error", "unknown operation " + action));
+            }
+        } catch (RuntimeException e) {
+            Throwable c = e;
+            while (c.getCause() != null && c.getCause() != c) {
+                c = c.getCause();
+            }
+            json(ex, 409, Map.of("error", String.valueOf(c.getMessage())));
+        }
+    }
+
+    private static Map<String, String> query(HttpExchange ex) {
+        Map<String, String> q = new LinkedHashMap<>();
+        String raw = ex.getRequestURI().getRawQuery();
+        if (raw != null) {
+            for (String kv : raw.split("&")) {
+                int i = kv.indexOf('=');
+                q.put(URLDecoder.decode(i < 0 ? kv : kv.substring(0, i), StandardCharsets.UTF_8),
+                        i < 0 ? "true" : URLDecoder.decode(kv.substring(i + 1), StandardCharsets.UTF_8));
+            }
+        }
+        return q;
     }
 
     private void reconcile(HttpExchange ex) throws IOException {

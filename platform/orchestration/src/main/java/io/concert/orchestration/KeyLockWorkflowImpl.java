@@ -2,10 +2,12 @@ package io.concert.orchestration;
 
 import io.concert.common.TraceRow;
 import io.concert.common.api.DispatchActivities;
+import io.concert.common.api.EventOutcome;
 import io.concert.common.api.KeyLockWorkflow;
 import io.concert.common.api.LockRequest;
 import io.concert.common.api.LockSnapshot;
 import io.concert.common.api.LockState;
+import io.concert.common.api.ProcessRequest;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.activity.LocalActivityOptions;
 import io.temporal.common.RetryOptions;
@@ -27,7 +29,9 @@ import org.slf4j.Logger;
  *
  * <ul>
  *   <li>last key of its chain: dispatched to the entity right here (local activity), earlier locks
- *       of the chain are released, and it is popped;
+ *       of the chain are released, and it is popped. An event-style event is dispatched to its processor
+ *       instead; if the processor answers ERROR_BLOCKING the head stays (and the chain's lower keys stay
+ *       held) until the processor sends {@code unblock} after an operator retry or skip;
  *   <li>otherwise: forwarded to the next key's lock, and held until that chain releases it.
  * </ul>
  *
@@ -42,6 +46,8 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
     /** {@code Workflow.getVersion} change id: a head released while being forwarded is not marked forwarded. */
     static final String FORWARD_RACE_CHANGE_ID = "forward-release-race";
     static final int RECENT_IDS = 4000;
+    /** {@code Workflow.getVersion} change id of the event-style dispatch (processor + blocked head). */
+    static final String EVENT_STYLE_CHANGE_ID = "event-style";
 
     private static final Logger log = Workflow.getLogger(KeyLockWorkflowImpl.class);
 
@@ -78,6 +84,10 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
     private final LinkedHashSet<String> recentIds = new LinkedHashSet<>();
     private final List<Promise<Void>> pendingReleases = new ArrayList<>();
     private long headForwardedAt;
+    /** The head is an event-style event in ERROR_BLOCKING: not popped until {@link #unblock}. */
+    private boolean headBlocked;
+    /** Requests the processor unblocked (normally just the blocked head). */
+    private final LinkedHashSet<String> unblocked = new LinkedHashSet<>();
     private long ops;
     private int idleSeconds;
     private boolean initialized;
@@ -86,6 +96,7 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
     public void run(LockState state) {
         lockKey = state.lockKey();
         headForwardedAt = state.headForwardedAtMillis();
+        headBlocked = state.headBlocked();
         idleSeconds = state.idleSeconds() > 0 ? state.idleSeconds() : 600;
         // Updates accepted before run() may already be queued; carried requests go in front.
         List<LockRequest> carried = state.queue() == null ? List.of() : state.queue();
@@ -116,7 +127,8 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
             if (ops >= OPS_BEFORE_CONTINUE || Workflow.getInfo().isContinueAsNewSuggested()) {
                 drainReleases();
                 Workflow.await(Workflow::isEveryHandlerFinished);
-                Workflow.continueAsNew(new LockState(lockKey, List.copyOf(queue), headForwardedAt, List.copyOf(recentIds), idleSeconds));
+                Workflow.continueAsNew(new LockState(
+                        lockKey, List.copyOf(queue), headForwardedAt, List.copyOf(recentIds), idleSeconds, headBlocked));
             }
         }
     }
@@ -130,8 +142,6 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
             throw new IllegalStateException(DUPLICATE);
         }
     }
-
-    static final String DUPLICATE = "duplicate request";
 
     @Override
     public void acquire(LockRequest request) {
@@ -150,11 +160,19 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
     }
 
     @Override
+    public void unblock(String requestId) {
+        if (contains(requestId)) {
+            unblocked.add(requestId);
+        }
+    }
+
+    @Override
     public LockSnapshot snapshot() {
         LockRequest head = queue.peekFirst();
         List<String> waiting = new ArrayList<>();
         queue.stream().skip(1).forEach(r -> waiting.add(r.requestId()));
         String state = head == null ? null
+                : headBlocked ? "blocked (ERROR_BLOCKING, waiting for retry or skip)"
                 : headForwardedAt > 0 ? "forwarded to " + head.keys().get(head.keyIndex() + 1) : "dispatching";
         return new LockSnapshot(lockKey, head == null ? null : head.requestId(), state, waiting, ops);
     }
@@ -162,14 +180,21 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
     private void serveHead(LockRequest head) {
         String id = head.requestId();
         if (head.isLastKey()) {
-            long now = Workflow.currentTimeMillis();
-            try {
-                dispatch.dispatchToEntity(head.event(), head.waitsIncludingCurrent(now));
-            } catch (ActivityFailure e) {
-                // Rejected by the entity or retries exhausted: record it and keep the key moving.
-                log.warn("dispatch of {} on {} failed: {}", id, lockKey, e.getMessage());
-                dispatch.recordTrace(List.of(new TraceRow(id, Workflow.currentTimeMillis(), TraceRow.Stage.FAILED,
-                        head.event().entityKey(), lockKey, String.valueOf(e.getCause()))));
+            if (head.event().isEventStyle()
+                    && Workflow.getVersion(EVENT_STYLE_CHANGE_ID, Workflow.DEFAULT_VERSION, 1) != Workflow.DEFAULT_VERSION) {
+                if (!serveEventHead(head)) {
+                    return; // still blocked and continue-as-new is due: the next run carries the blocked head
+                }
+            } else {
+                long now = Workflow.currentTimeMillis();
+                try {
+                    dispatch.dispatchToEntity(head.event(), head.waitsIncludingCurrent(now));
+                } catch (ActivityFailure e) {
+                    // Rejected by the entity or retries exhausted: record it and keep the key moving.
+                    log.warn("dispatch of {} on {} failed: {}", id, lockKey, e.getMessage());
+                    dispatch.recordTrace(List.of(new TraceRow(id, Workflow.currentTimeMillis(), TraceRow.Stage.FAILED,
+                            head.event().entityKey(), lockKey, String.valueOf(e.getCause()))));
+                }
             }
             pop(id);
             if (head.keyIndex() > 0) {
@@ -193,9 +218,43 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
         if (!Workflow.await(FORWARD_LEASE, () -> !isHead(id))) {
             log.warn("forward lease expired for {} on {}, force releasing", id, lockKey);
             dispatch.recordTrace(List.of(new TraceRow(id, Workflow.currentTimeMillis(), TraceRow.Stage.FAILED,
-                    head.event().entityKey(), lockKey, "forward lease expired")));
+                    head.event().traceWorkflowId(), lockKey, "forward lease expired")));
             pop(id);
         }
+    }
+
+    /**
+     * Last key of an event-style chain: the processor applies the event (local activity, like an entity
+     * dispatch). DONE and ERROR_NON_BLOCKING free the chain; ERROR_BLOCKING keeps the head (and so every key
+     * of its chain) until the processor sends {@link #unblock} for it. The unblock comes from a regular
+     * activity of the processor, never from a local activity that would hold a workflow task open.
+     *
+     * @return false if the head is still blocked and the run should continue-as-new
+     */
+    private boolean serveEventHead(LockRequest head) {
+        String id = head.requestId();
+        if (!headBlocked) {
+            long now = Workflow.currentTimeMillis();
+            try {
+                EventOutcome outcome = dispatch.dispatchToProcessor(
+                        new ProcessRequest(id, head.event(), lockKey, head.waitsIncludingCurrent(now)));
+                if (!outcome.blocked()) {
+                    return true;
+                }
+            } catch (ActivityFailure e) {
+                log.warn("dispatch of {} on {} to its processor failed: {}", id, lockKey, e.getMessage());
+                dispatch.recordTrace(List.of(new TraceRow(id, Workflow.currentTimeMillis(), TraceRow.Stage.FAILED,
+                        head.event().traceWorkflowId(), lockKey, String.valueOf(e.getCause()))));
+                return true;
+            }
+            headBlocked = true;
+        }
+        Workflow.await(() -> unblocked.contains(id) || !isHead(id) || Workflow.getInfo().isContinueAsNewSuggested());
+        if (isHead(id) && !unblocked.contains(id)) {
+            return false;
+        }
+        unblocked.remove(id);
+        return true;
     }
 
     private void drainReleases() {
@@ -227,6 +286,8 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
         if (isHead(requestId)) {
             queue.removeFirst();
             headForwardedAt = 0;
+            headBlocked = false;
+            unblocked.remove(requestId);
             ops++;
             remember(requestId);
         }

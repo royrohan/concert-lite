@@ -5,6 +5,8 @@
 #   scripts/chaos.sh                         # defaults below
 #   DURATION=300 RATE=200 CHAOS_TEMPORAL=1 scripts/chaos.sh
 #   STORE_KIND=spanner scripts/chaos.sh      # same experiment on another backend
+#   EVENT_STYLE=1 scripts/chaos.sh           # event-style: DemoEvents Ticks (handlers, keyed state, chained
+#                                            # child events) instead of ledger state machines
 #
 # What it exercises (all Temporal out of the box, no custom failover code):
 #   kill -9 coordinator  -> shard-consumer activity heartbeat times out, retried on the other coordinator
@@ -27,6 +29,8 @@ COORDINATORS=${COORDINATORS:-2}
 WORKERS=${WORKERS:-2}
 CHAOS_TEMPORAL=${CHAOS_TEMPORAL:-0}
 KEEP=${KEEP:-0}                    # 1 = leave processes running afterwards
+EVENT_STYLE=${EVENT_STYLE:-0}      # 1 = event-style load (workers run the demo event domain, ev-demo)
+CHAIN_EVERY=${CHAIN_EVERY:-5}      # event style: every n-th Tick of a key emits a ChainTick
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RUN_ID=${RUN_ID:-chaos$(date +%H%M%S)}
@@ -64,7 +68,12 @@ start_proc() {
   local name=$1
   case $name in
     coord-*)  nohup "$ORCH" >> "$RUN_DIR/$name.log" 2>&1 & ;;
-    worker-*) SM_TYPE=ledger nohup "$WORKER" >> "$RUN_DIR/$name.log" 2>&1 & ;;
+    worker-*)
+      if [ "$EVENT_STYLE" = "1" ]; then
+        SM_TYPE=none EVENT_DOMAINS=demo nohup "$WORKER" >> "$RUN_DIR/$name.log" 2>&1 &
+      else
+        SM_TYPE=ledger EVENT_DOMAINS= nohup "$WORKER" >> "$RUN_DIR/$name.log" 2>&1 &
+      fi ;;
   esac
   echo $! > "$RUN_DIR/$name.pid"
   mark START "$name"
@@ -91,7 +100,8 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- setup
 mkdir -p "$RUN_DIR"; : > "$CHAOS_LOG"
-log "run $RUN_ID (store: $STORE_KIND): ${DURATION}s @ ${RATE}/s over $KEYS keys, chaos every ${KILL_EVERY}s, $COORDINATORS coordinators, $WORKERS workers"
+STYLE=entity; [ "$EVENT_STYLE" = "1" ] && STYLE=event
+log "run $RUN_ID (store: $STORE_KIND, style: $STYLE): ${DURATION}s @ ${RATE}/s over $KEYS keys, chaos every ${KILL_EVERY}s, $COORDINATORS coordinators, $WORKERS workers"
 log "logs: $RUN_DIR"
 
 (cd "$ROOT" && docker compose up -d >/dev/null 2>&1) || { log "docker compose up failed"; exit 1; }
@@ -117,7 +127,7 @@ log "waiting for processes to come up"; sleep 8
 
 # ---------------------------------------------------------------- load + chaos
 "$TOOLS" loadgen --run-id "$RUN_ID" --rate "$RATE" --seconds "$DURATION" --keys "$KEYS" \
-  --out "$RUN_DIR/manifest.json" > "$RUN_DIR/loadgen.log" 2>&1 &
+  --style "$STYLE" --chain-every "$CHAIN_EVERY" --out "$RUN_DIR/manifest.json" > "$RUN_DIR/loadgen.log" 2>&1 &
 LOADGEN_PID=$!
 
 random_victim() {  # random_victim <prefix or empty>

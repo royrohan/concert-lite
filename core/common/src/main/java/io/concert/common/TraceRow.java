@@ -17,6 +17,15 @@ public record TraceRow(String eventId, long tsMillis, Stage stage, String workfl
         REJECTED,
         RELEASED,
         DONE,
-        FAILED
+        FAILED,
+        // event style (appended: stored by name, so older rows and readers are unaffected)
+        /** Waiting for its {@code scheduledAt} in the processor; holds no locks. */
+        SCHEDULED,
+        /** The handler failed with a blocking error: the event keeps its lock keys until retried or skipped. */
+        BLOCKED,
+        /** The handler failed with a non-blocking error: the event is parked and its keys are released. */
+        PARKED,
+        /** A handler (or entity transition) emitted this event; detail names the parent. */
+        EMITTED
     }
 }

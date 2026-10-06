@@ -17,19 +17,23 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
- * A validated ecosystem: the Pure models of a directory with their {@code concert::sm} state machines,
- * plus the names everything is generated under.
+ * A validated ecosystem: the Pure models of a directory with their {@code concert::sm} state machines and / or
+ * {@code concert::event} event types and keyed states, plus the names everything is generated under.
  *
  * @param name module name, e.g. {@code insurance} (project {@code :insurance}, dir {@code showcases/insurance})
  * @param javaPackage package of the generated machine classes, e.g. {@code io.concert.eco.insurance}
  * @param files the model files (names in the models directory), sorted
  * @param sources file name to Pure source
+ * @param events event-style event types ({@code <<concert::event.event>>}), in declaration order
+ * @param states keyed-state types ({@code <<concert::event.state>>}), in declaration order
  * @param warnings validation warnings, {@code file:line:col: warning: ...}
  */
 record Ecosystem(
@@ -39,6 +43,8 @@ record Ecosystem(
         Map<String, String> sources,
         ResolvedModel model,
         List<MachineDecl> machines,
+        List<EventDecl> events,
+        List<EventDecl.StateDecl> states,
         List<String> warnings) {
 
     /** Module names: lower case, digits and dashes, starting with a letter. */
@@ -105,14 +111,54 @@ record Ecosystem(
             throw new EcosystemException(e.errors(), diag.warnings);
         }
         resolved.warnings().forEach(w -> diag.warnings.add(w.replaceFirst(": ", ": warning: ")));
-        List<MachineDecl> machines = new DeclarationParser(resolved, new TagText(sources), diag).parse();
+        TagText text = new TagText(sources);
+        List<MachineDecl> machines = new DeclarationParser(resolved, text, diag).parse();
+        Set<String> smTypes = new LinkedHashSet<>();
+        machines.forEach(m -> smTypes.add(m.smType()));
+        EventDeclarationParser.Result ev = new EventDeclarationParser(resolved, text, diag).parse(smTypes);
+        if (machines.isEmpty() && ev.events().isEmpty() && diag.errors.isEmpty()) {
+            diag.error(null, "no class is marked <<" + ConcertProfile.NAME + "." + ConcertProfile.ROOT + ">> or <<"
+                    + ConcertProfile.EVENT_PROFILE + "." + ConcertProfile.EVENT + ">>: declare at least one state machine or event");
+        }
+        if (ev.events().isEmpty() && !ev.states().isEmpty() && diag.errors.isEmpty()) {
+            diag.warn(ev.states().getFirst().cls().location(), "keyed states are declared but no <<concert::event.event>>: no "
+                    + "handler can use them");
+        }
         if (!diag.errors.isEmpty()) {
             throw new EcosystemException(diag.errors, diag.warnings);
         }
-        return new Ecosystem(name, javaPackage, List.copyOf(sources.keySet()), sources, resolved, machines, diag.warnings);
+        return new Ecosystem(name, javaPackage, List.copyOf(sources.keySet()), sources, resolved, machines, ev.events(),
+                ev.states(), diag.warnings);
     }
 
     // ---- names ----
+
+    /** Event domains in declaration order. */
+    List<String> domains() {
+        return events.stream().map(EventDecl::domain).distinct().toList();
+    }
+
+    List<EventDecl> eventsOf(String domain) {
+        return events.stream().filter(e -> e.domain().equals(domain)).toList();
+    }
+
+    boolean hasMachines() {
+        return !machines.isEmpty();
+    }
+
+    boolean hasEvents() {
+        return !events.isEmpty();
+    }
+
+    /** The event type named {@code name}, if any. */
+    java.util.Optional<EventDecl> event(String name) {
+        return events.stream().filter(e -> e.name().equals(name)).findFirst();
+    }
+
+    /** Qualified Pure name of the class the generated {@code @LegendModel} names as its root. */
+    String legendRoot() {
+        return hasMachines() ? machines.getFirst().root().qualifiedName() : events.getFirst().cls().qualifiedName();
+    }
 
     /** {@code insurance} -> {@code Insurance}, {@code trading-gen} -> {@code TradingGen}. */
     String pascalName() {

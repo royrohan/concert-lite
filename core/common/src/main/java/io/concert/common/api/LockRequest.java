@@ -9,7 +9,7 @@ import java.util.Map;
 /**
  * An event travelling through its lock chain.
  *
- * @param requestId the event id
+ * @param requestId the event id (an operator retry of a parked event-style event uses {@code <eventId>~r<n>})
  * @param keyIndex position of the lock this request is queued on, in {@code event.effectiveLockKeys()}
  * @param enqueuedAtMillis when it was enqueued on the current lock
  * @param waitedMs time spent waiting on each lock already held
@@ -23,6 +23,11 @@ public record LockRequest(
 
     public static LockRequest first(EventEnvelope e, long now) {
         return new LockRequest(e.eventId(), e, 0, now, Map.of());
+    }
+
+    /** A second pass of an already-seen event through its chain (operator retry), under a new request id. */
+    public static LockRequest retry(EventEnvelope e, String requestId, long now) {
+        return new LockRequest(requestId, e, 0, now, Map.of());
     }
 
     @JsonIgnore

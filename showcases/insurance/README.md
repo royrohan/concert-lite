@@ -91,8 +91,9 @@ Data: `insurance::Policy`, `policyId` = instance key, `status` = state. Happy pa
 | `src/main/pure/*.pure` | copies of the models dir (regenerated); `src/main/pure/concert/concert.pure` is the built-in profile |
 | `src/main/java/.../<Root>Spec.java` | regenerated: states, transitions, payload types, terminal states, lock templates |
 | `src/main/java/.../<Root>Machine.java` | **yours**: generated once, never overwritten (`--force` backs it up first) |
-| `src/main/java/.../InsuranceMachines.java`, `InsuranceModels.java`, `InsuranceWorkerMain.java`, `InsuranceEvents.java` | regenerated |
+| `src/main/java/.../InsuranceMachines.java`, `InsuranceWorkerMain.java` | regenerated |
 | `src/test/java/.../InsuranceGeneratedTest.java` | regenerated: samples bind to their classes; happy paths reach terminal states through your machines |
+| `src/main/java/.../InsuranceModels.java`, `InsuranceEvents.java` | regenerated: POJOs; the Kinesis sender |
 | `samples/<smType>/<event>.json`, `samples/flows/*.json` | regenerated unless you edited them (hashes in `ecosystem.json`) |
 | `compose.yml`, `send`, `send-flow`, `build.gradle.kts`, `README.md`, `ecosystem.json` | regenerated (`extra.gradle.kts` is yours) |
 | `infra/deephaven/app.d/ecosystems/insurance.py` | regenerated: Deephaven tables of this ecosystem |
@@ -106,7 +107,7 @@ Data: `insurance::Policy`, `policyId` = instance key, `status` = state. Happy pa
 
 `deploy` builds, starts the stack with this module's `compose.yml` override (service `insurance-worker`, profile
 `insurance`), re-provisions ClickHouse, restarts the DuckDB sink and Deephaven so the new roots appear, and prints
-the links. The trace UI finds the machines through the `MachineCatalog` SPI (no edits needed).
+the links. The trace UI finds the machines and event catalogs through their SPIs (no edits needed).
 
 ## Send events
 

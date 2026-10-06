@@ -14,6 +14,10 @@ import io.temporal.workflow.WorkflowMethod;
  * dispatches the event to its entity and then releases K0..Kn-2. Keys are always taken in the same
  * global order, so the chain can never deadlock. A single-key event is simply "last" on K0.
  *
+ * <p>Event-style events ({@code style = "event"}) are dispatched by the last lock to their processor instead of
+ * an entity. If the processor answers ERROR_BLOCKING the head is <em>blocked</em>: it is not popped and its
+ * lower keys stay held until the processor sends {@link #unblock} (operator retry succeeded, or skip).
+ *
  * <p>All lock interactions are Temporal <em>updates</em>, not signals: updates reach the worker
  * directly while signals take an extra trip through the server's transfer queue (~3x slower here).
  */
@@ -34,6 +38,16 @@ public interface KeyLockWorkflow {
     /** Sent by the last lock of a chain once the event has been applied. Idempotent. */
     @UpdateMethod
     void release(String requestId);
+
+    /**
+     * Sent by an event processor once a blocked head was retried successfully or skipped: the lock pops it and
+     * releases the chain's lower keys. Idempotent; ignored for requests that are not queued.
+     */
+    @UpdateMethod
+    void unblock(String requestId);
+
+    /** Validator message of a duplicate {@code acquire}; callers treat it as success. */
+    String DUPLICATE = "duplicate request";
 
     @QueryMethod
     LockSnapshot snapshot();

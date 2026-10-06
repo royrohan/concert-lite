@@ -6,6 +6,10 @@ import io.concert.common.api.TransitionResult;
 import io.concert.model.runtime.ModelJson;
 import io.concert.model.runtime.ModelObject;
 import io.concert.model.runtime.ModelValidationException;
+import io.concert.sdk.events.EnqueueRequest;
+import io.concert.sdk.events.EventCatalog;
+import io.concert.sdk.events.EventEmissions;
+import io.concert.sdk.events.EventEnqueueActivities;
 import io.concert.sink.EntitySnapshot;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
@@ -16,7 +20,9 @@ import java.io.UncheckedIOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A state machine whose entity data is a model object generated from a Pure model (see
@@ -51,6 +57,12 @@ import java.util.List;
  * outbox. It is started asynchronously (the update completes without waiting for Kafka) and the run
  * waits for it before continuing as new.
  *
+ * <p><b>Emitting event-style events (interop).</b> {@code onTransition} may call {@link #emit},
+ * {@link #emitAt} or {@link #emitEntity}. The events are buffered and, only if the transition is accepted,
+ * handed to the {@link EventEnqueueActivities} activity after the state row is persisted (regular activity,
+ * so the hand-off is recorded in history; the run waits for it before continuing as new). Their ids are
+ * {@code <eventId>.<n>}, so replays and retries cannot duplicate them.
+ *
  * @param <D> the generated class of the aggregate root
  */
 public abstract class ModelStateMachine<D extends ModelObject> extends AbstractStateMachine {
@@ -73,8 +85,25 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
                             .build())
                     .build());
 
-    /** Snapshot publishes started by this run; it may not continue-as-new before they complete. */
+    /** Hands emitted events to their lock chains / processors; unlimited retries (never lost). */
+    private final EventEnqueueActivities emitter = Workflow.newActivityStub(EventEnqueueActivities.class,
+            ActivityOptions.newBuilder()
+                    .setStartToCloseTimeout(Duration.ofSeconds(30))
+                    .setRetryOptions(RetryOptions.newBuilder()
+                            .setInitialInterval(Duration.ofMillis(100))
+                            .setMaximumInterval(Duration.ofSeconds(10))
+                            .setMaximumAttempts(0)
+                            .build())
+                    .build());
+
+    /** Snapshot publishes and emits started by this run; it may not continue-as-new before they complete. */
     private final List<Promise<Void>> pendingSnapshots = new ArrayList<>();
+
+    /** The event being decided (emits are only allowed then) and what it emitted so far. */
+    private EventEnvelope emitParent;
+    private List<EventEnvelope> emitBuffer;
+    /** Emits of accepted events, waiting for their state row to be persisted. */
+    private final Map<String, List<EventEnvelope>> acceptedEmits = new HashMap<>();
 
     /** Thrown by {@link #reject} to reject the current event from {@code onTransition}. */
     public static final class TransitionRejectedException extends RuntimeException {
@@ -138,8 +167,60 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
         return json == null ? initialData(instanceKey()) : ModelJson.read(json, dataType());
     }
 
+    /**
+     * Emits an event-style event, due now; type, domain and lock keys come from its class's
+     * {@link EventCatalog} entry. Call from {@code onTransition}; applied only if the transition is accepted.
+     *
+     * @return the child event id, {@code <eventId>.<n>}
+     */
+    protected final String emit(Object event) {
+        return emitAt(null, event);
+    }
+
+    /** Like {@link #emit}, applied no earlier than {@code at} ({@code null}: now). */
+    protected final String emitAt(Instant at, Object event) {
+        EventEnvelope parent = requireEmitParent();
+        return addEmit(EventEmissions.event(parent, emitBuffer.size() + 1, event, null,
+                at == null ? 0 : at.toEpochMilli(), Workflow.currentTimeMillis()));
+    }
+
+    /** Emits an entity-style event to {@code smType:instanceKey} (another state machine). */
+    protected final String emitEntity(String smType, String instanceKey, String eventType, Object payload,
+            List<String> extraLockKeys) {
+        EventEnvelope parent = requireEmitParent();
+        return addEmit(EventEmissions.entity(parent, emitBuffer.size() + 1, smType, instanceKey, eventType, payload,
+                extraLockKeys, Workflow.currentTimeMillis()));
+    }
+
+    private EventEnvelope requireEmitParent() {
+        if (emitParent == null) {
+            throw new IllegalStateException("emit is only allowed from onTransition");
+        }
+        return emitParent;
+    }
+
+    private String addEmit(EventEnvelope child) {
+        emitBuffer.add(child);
+        return child.eventId();
+    }
+
     @Override
     protected final Decision decide(String fromState, String toState, String currentData, EventEnvelope event) {
+        emitParent = event;
+        emitBuffer = new ArrayList<>();
+        try {
+            Decision d = decideTyped(fromState, toState, event);
+            if (d.accepted() && !emitBuffer.isEmpty()) {
+                acceptedEmits.put(event.eventId(), List.copyOf(emitBuffer));
+            }
+            return d;
+        } finally {
+            emitParent = null;
+            emitBuffer = null;
+        }
+    }
+
+    private Decision decideTyped(String fromState, String toState, EventEnvelope event) {
         D data = readData();
         Class<?> payloadType = spec().payloadType(fromState, event.eventType()).orElse(null);
         Object payload = null;
@@ -174,6 +255,11 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
 
     @Override
     protected void onPersisted(TransitionResult result, EventEnvelope event) {
+        List<EventEnvelope> emits = acceptedEmits.remove(event.eventId());
+        if (emits != null && result.accepted()) {
+            pendingSnapshots.add(Async.procedure(emitter::enqueue,
+                    EnqueueRequest.children(event.eventId(), emits, Workflow.currentTimeMillis())));
+        }
         if (result.accepted() && spec().isTerminal(result.toState())) {
             publishSnapshot(result);
             onTerminal(result.toState(), readData(), event);

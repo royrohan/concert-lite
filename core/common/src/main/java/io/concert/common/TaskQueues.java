@@ -10,4 +10,9 @@ public final class TaskQueues {
     public static String stateMachine(String smType) {
         return "sm-" + smType;
     }
+
+    /** One task queue per event-style handler application ("domain"): its processors, handlers and emits. */
+    public static String events(String domain) {
+        return "ev-" + domain;
+    }
 }

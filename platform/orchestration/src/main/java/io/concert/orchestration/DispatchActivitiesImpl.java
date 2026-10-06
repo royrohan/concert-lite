@@ -1,6 +1,7 @@
 package io.concert.orchestration;
 
 import io.concert.common.EventEnvelope;
+import io.concert.common.EventRouting;
 import io.concert.common.Failover;
 import io.concert.common.SearchAttrs;
 import io.concert.common.TaskQueues;
@@ -9,9 +10,10 @@ import io.concert.common.WorkflowIds;
 import io.concert.common.api.DispatchActivities;
 import io.concert.common.api.EntityInit;
 import io.concert.common.api.EntityWorkflow;
+import io.concert.common.api.EventOutcome;
 import io.concert.common.api.KeyLockWorkflow;
 import io.concert.common.api.LockRequest;
-import io.concert.common.api.LockState;
+import io.concert.common.api.ProcessRequest;
 import io.concert.common.api.TransitionResult;
 import io.concert.store.TraceWriter;
 import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
@@ -19,7 +21,6 @@ import io.temporal.client.UpdateOptions;
 import io.temporal.client.WithStartWorkflowOperation;
 import io.temporal.client.WorkflowClient;
 import io.temporal.client.WorkflowOptions;
-import io.temporal.client.WorkflowException;
 import io.temporal.client.WorkflowUpdateException;
 import io.temporal.client.WorkflowUpdateHandle;
 import io.temporal.client.WorkflowUpdateStage;
@@ -34,7 +35,6 @@ import org.slf4j.LoggerFactory;
 /** Client-side calls into Temporal on behalf of workflows (local activities) and the ingest path. */
 public final class DispatchActivitiesImpl implements DispatchActivities {
     private static final Logger log = LoggerFactory.getLogger(DispatchActivitiesImpl.class);
-    private static final int LOCK_IDLE_SECONDS = io.concert.common.Env.getInt("LOCK_IDLE_SECONDS", 600);
 
     private final WorkflowClient client;
     private final TraceWriter traces;
@@ -103,48 +103,36 @@ public final class DispatchActivitiesImpl implements DispatchActivities {
 
     @Override
     public void enqueueLock(String lockKey, LockRequest request) {
-        for (int attempt = 1; ; attempt++) {
-            KeyLockWorkflow lock = client.newWorkflowStub(KeyLockWorkflow.class, WorkflowOptions.newBuilder()
-                    .setWorkflowId(WorkflowIds.lock(lockKey))
-                    .setTaskQueue(TaskQueues.ORCHESTRATION)
-                    .setWorkflowTaskTimeout(Failover.workflowTaskTimeout())
-                    .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
-                    .setTypedSearchAttributes(SearchAttrs.forLock(lockKey))
-                    .build());
-            try {
-                WorkflowClient.startUpdateWithStart(
-                        lock::acquire,
-                        request,
-                        UpdateOptions.<Void>newBuilder()
-                                .setUpdateId(request.requestId() + "@" + lockKey)
-                                .setWaitForStage(WorkflowUpdateStage.ACCEPTED)
-                                .build(),
-                        new WithStartWorkflowOperation<>(lock::run, LockState.fresh(lockKey, LOCK_IDLE_SECONDS)));
-                break;
-            } catch (WorkflowUpdateException e) {
-                if (String.valueOf(e.getCause() == null ? null : e.getCause().getMessage()).contains(KeyLockWorkflowImpl.DUPLICATE)) {
-                    return; // already queued or already done
-                }
-                retryOrThrow(attempt, e);
-            } catch (WorkflowException e) {
-                // e.g. the lock run completed (idle) while the update was in flight: a retry starts a new run.
-                retryOrThrow(attempt, e);
-            }
+        if (!EventRouting.enqueueLock(client, lockKey, request)) {
+            return; // already queued or already done
         }
         traces.add(new TraceRow(request.requestId(), System.currentTimeMillis(), TraceRow.Stage.LOCK_WAIT,
-                request.event().entityKey(), lockKey, "position " + (request.keyIndex() + 1) + "/" + request.keys().size()));
+                request.event().traceWorkflowId(), lockKey, "position " + (request.keyIndex() + 1) + "/" + request.keys().size()));
     }
 
-    private static void retryOrThrow(int attempt, RuntimeException e) {
-        if (attempt >= 5) {
-            throw e;
-        }
+    @Override
+    public EventOutcome dispatchToProcessor(ProcessRequest request) {
+        EventEnvelope event = request.event();
+        long now = System.currentTimeMillis();
+        request.lockWaitMs().forEach((key, waited) -> traces.add(new TraceRow(
+                event.eventId(), now, TraceRow.Stage.LOCK_GRANTED, event.traceWorkflowId(), key, "waitedMs=" + waited)));
+        List<String> keys = event.effectiveLockKeys();
+        OverlapProbe.enter(keys);
         try {
-            Thread.sleep(20L * attempt);
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            throw e;
+            return EventRouting.process(client, request);
+        } catch (WorkflowUpdateException e) {
+            // Validator rejection (wrong domain / key): deterministic, retrying cannot help.
+            throw ApplicationFailure.newNonRetryableFailure(
+                    String.valueOf(e.getCause() != null ? e.getCause().getMessage() : e.getMessage()),
+                    EntityRejectedException.TYPE);
+        } finally {
+            OverlapProbe.exit(keys);
         }
+    }
+
+    @Override
+    public void scheduleEvent(EventEnvelope event) {
+        EventRouting.schedule(client, event);
     }
 
     @Override

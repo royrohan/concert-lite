@@ -19,6 +19,15 @@ public interface DispatchActivities {
     TransitionResult dispatchToEntity(EventEnvelope event, Map<String, Long> lockWaitMs);
 
     /**
+     * Event style: UpdateWithStart {@code process} on the event's processor ({@code evproc:<domain>:<firstKey>}),
+     * waiting for the outcome. Records LOCK_GRANTED trace rows like {@link #dispatchToEntity}.
+     */
+    EventOutcome dispatchToProcessor(ProcessRequest request);
+
+    /** Event style, future-dated: UpdateWithStart {@code schedule} on the event's processor (no locks taken). */
+    void scheduleEvent(EventEnvelope event);
+
+    /**
      * UpdateWithStart {@code acquire} on {@code lock:<key>}, returning once the request is accepted
      * into the queue (that fixes its order). Duplicates are treated as success.
      */

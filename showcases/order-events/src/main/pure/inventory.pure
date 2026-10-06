@@ -1,0 +1,40 @@
+###Pure
+// Inventory domain (concert::event profile): stock per SKU as keyed state, reserved by the orders domain's
+// OrderAcceptedEvent handler (one ReserveInventoryEvent per order line) and replenished by RestockEvent.
+
+// Keyed state: one document per SKU, state:sku:<sku>.
+Class <<concert::event.state>> { concert::event.key = 'sku:{sku}' } inventory::Stock
+{
+  sku: String[1];
+  available: Integer[1] = 0;
+  reserved: Integer[1] = 0;
+  restocked: Integer[1] = 0;
+  updatedAt: DateTime[0..1];
+}
+
+// Out of stock is a NonBlockingError: the event is parked (ERROR_NON_BLOCKING) and sku:<sku> is released, so other
+// orders keep flowing; an operator retries it after a restock (or skips it).
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'inventory',
+  concert::event.locks = 'sku:{sku}',
+  concert::event.onError = 'NON_BLOCKING',
+  concert::event.retries = '2'
+}
+inventory::ReserveInventoryEvent
+{
+  orderId: String[1];
+  sku: String[1];
+  quantity: Integer[1];
+}
+
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'inventory',
+  concert::event.locks = 'sku:{sku}'
+}
+inventory::RestockEvent
+{
+  sku: String[1];
+  quantity: Integer[1];
+}

@@ -1,0 +1,19 @@
+{
+  "name" : "OrderCreateEvent-flow",
+  "description" : "OrderCreateEvent -> (OrderAcceptedEvent -> (ReserveInventoryEvent | OrderExpiryCheckEvent) | OrderRejectedEvent)",
+  "events" : [ {
+    "style" : "event",
+    "eventType" : "OrderCreateEvent",
+    "payload" : {
+      "orderId" : "ORDER-ID-1001",
+      "customerId" : "CUSTOMER-ID-1001",
+      "currency" : "USD",
+      "lines" : [ {
+        "sku" : "sku-1",
+        "quantity" : 10,
+        "unitPrice" : 101.25
+      } ],
+      "expirySeconds" : 120
+    }
+  } ]
+}

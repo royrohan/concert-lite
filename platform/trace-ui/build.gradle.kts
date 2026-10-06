@@ -11,6 +11,8 @@ dependencies {
         .filter { it.projectDir.resolve("ecosystem.json").isFile }
         .forEach { runtimeOnly(project(it.path)) }
     implementation(project(":worker-sdk"))
+    // EventOps: operator retry / skip and lifecycle listings of event-style events
+    implementation(project(":orchestration"))
     // STORE_KIND=dynamo|spanner backends, discovered via ServiceLoader
     runtimeOnly(project(":store-dynamo"))
     runtimeOnly(project(":store-spanner"))

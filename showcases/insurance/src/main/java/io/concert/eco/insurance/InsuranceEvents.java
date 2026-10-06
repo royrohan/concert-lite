@@ -25,12 +25,12 @@ import software.amazon.awssdk.services.kinesis.KinesisClient;
 /**
  * Sends events of ecosystem {@code insurance} to Kinesis ({@code INGEST_STREAM}, default
  * {@code concert-events}; {@code KINESIS_ENDPOINT}, e.g. {@code http://localhost:4566}), addressed and locked as
- * the Pure annotations declare: lock keys are rendered from the payload ({@code <Root>Spec.LOCKS}), the partition
- * key is the first sorted lock key. Payloads are checked against their model class before sending.
+ * the Pure annotations declare: lock keys are rendered from the payload, the partition key is the first sorted
+ * lock key. Payloads are checked against their model class before sending.
  *
  * <pre>
- * send &lt;smType&gt; &lt;eventType&gt; &lt;instanceKey&gt; [payload.json | - | '{...json...}']
- * flow &lt;flow.json&gt; [--delay-ms 500]     {"events": [{smType, instanceKey, eventType, payload}, ...]}
+ * send &lt;smType&gt; &lt;eventType&gt; &lt;instanceKey&gt; [payload.json | - | '{...json...}']        entity style
+ * flow &lt;flow.json&gt; [--delay-ms 500]     {"events": [...]}: {smType, instanceKey, eventType, payload}
  * list
  * </pre>
  */
@@ -80,8 +80,10 @@ public final class InsuranceEvents {
     }
 
     private static void usage() {
-        System.err.println("usage: send <smType> <eventType> <instanceKey> [payload.json | - | '{json}']\n"
-                + "       flow <flow.json> [--delay-ms N]\n       list\nsmTypes: " + InsuranceMachines.ALL.keySet());
+        System.err.println("usage: "
+                + "send <smType> <eventType> <instanceKey> [payload.json | - | '{json}']\n       "
+                + "flow <flow.json> [--delay-ms N]\n       list"
+                + "\nsmTypes: " + InsuranceMachines.ALL.keySet());
     }
 
     private static void list() {
@@ -102,31 +104,39 @@ public final class InsuranceEvents {
         return t.startsWith("{") || t.equals("null") ? t : Files.readString(Path.of(arg), StandardCharsets.UTF_8);
     }
 
+    /** The payload bound to its model class and validated (multiplicities), then serialized back. */
+    private static String checked(String payload, Class<?> type) {
+        String json = payload == null || payload.isBlank() || payload.strip().equals("null") ? null : payload.strip();
+        if (type != null && json != null) {
+            Object bound = ModelJson.read(json, type);
+            if (bound instanceof ModelObject mo && !mo.validationErrors().isEmpty()) {
+                throw new IllegalArgumentException("invalid " + type.getSimpleName() + " payload: "
+                        + String.join("; ", mo.validationErrors()));
+            }
+            json = ModelJson.write(bound);
+        }
+        return json;
+    }
+
+    private static JsonNode tree(String json) {
+        try {
+            return json == null ? null : Json.MAPPER.readTree(json);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException x) {
+            throw new IllegalArgumentException("payload is not JSON: " + x.getOriginalMessage(), x);
+        }
+    }
+
     /**
-     * The event, validated: the smType and event type exist, the payload binds to the event's payload class and
-     * satisfies its multiplicities, and every lock key renders.
+     * An entity-style event, validated: the smType and event type exist, the payload binds to the event's payload class
+     * and satisfies its multiplicities, and every lock key renders.
      */
     public static EventEnvelope envelope(String smType, String eventType, String instanceKey, String payload) {
         MachineCatalog.Machine machine = InsuranceMachines.get(smType);
         StateMachineSpec.Edge edge = machine.spec().edges().stream().filter(x -> x.eventType().equals(eventType)).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(smType + " has no event " + eventType + "; events: "
                         + machine.spec().edges().stream().map(StateMachineSpec.Edge::eventType).distinct().toList()));
-        String json = payload == null || payload.isBlank() || payload.strip().equals("null") ? null : payload.strip();
-        if (edge.payloadType() != null && json != null) {
-            Object bound = ModelJson.read(json, edge.payloadType());
-            if (bound instanceof ModelObject mo && !mo.validationErrors().isEmpty()) {
-                throw new IllegalArgumentException("invalid " + edge.payloadType().getSimpleName() + " payload: "
-                        + String.join("; ", mo.validationErrors()));
-            }
-            json = ModelJson.write(bound);
-        }
-        JsonNode tree;
-        try {
-            tree = json == null ? null : Json.MAPPER.readTree(json);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException x) {
-            throw new IllegalArgumentException("payload is not JSON: " + x.getOriginalMessage(), x);
-        }
-        List<String> locks = LockTemplates.render(InsuranceMachines.LOCKS.get(smType).get(eventType), instanceKey, tree);
+        String json = checked(payload, edge.payloadType());
+        List<String> locks = LockTemplates.render(InsuranceMachines.LOCKS.get(smType).get(eventType), instanceKey, tree(json));
         return new EventEnvelope(smType + "-" + eventType + "-" + UUID.randomUUID(), smType, instanceKey, eventType, locks, json,
                 System.currentTimeMillis(), 0);
     }
@@ -135,8 +145,14 @@ public final class InsuranceEvents {
         String stream = Env.get("INGEST_STREAM", "concert-events");
         String partitionKey = e.effectiveLockKeys().getFirst();
         kinesis.putRecord(b -> b.streamName(stream).partitionKey(partitionKey).data(SdkBytes.fromUtf8String(Json.write(e))));
-        System.out.printf("sent %s %s:%s %s  locks %s  (partition key %s)%n", e.eventId(), e.smType(), e.instanceKey(), e.eventType(),
-                e.effectiveLockKeys(), partitionKey);
+        if (e.isEventStyle()) {
+            System.out.printf("sent %s event %s (domain %s)  locks %s  (partition key %s)%s%n", e.eventId(), e.eventType(), e.domain(),
+                    e.effectiveLockKeys(), partitionKey, e.scheduledAtMillis() > 0 ? "  scheduled at "
+                            + java.time.Instant.ofEpochMilli(e.scheduledAtMillis()) : "");
+        } else {
+            System.out.printf("sent %s %s:%s %s  locks %s  (partition key %s)%n", e.eventId(), e.smType(), e.instanceKey(),
+                    e.eventType(), e.effectiveLockKeys(), partitionKey);
+        }
     }
 
     private static void flow(Path file, long delayMs) throws IOException, InterruptedException {
@@ -144,8 +160,8 @@ public final class InsuranceEvents {
         List<EventEnvelope> events = new ArrayList<>();
         for (JsonNode e : flow.path("events")) {
             JsonNode p = e.get("payload");
-            events.add(envelope(e.path("smType").asText(), e.path("eventType").asText(), e.path("instanceKey").asText(),
-                    p == null || p.isNull() ? null : Json.write(p)));
+            String payload = p == null || p.isNull() ? null : Json.write(p);
+            events.add(envelope(e.path("smType").asText(), e.path("eventType").asText(), e.path("instanceKey").asText(), payload));
         }
         System.out.printf("flow %s: %d events%n", flow.path("name").asText(file.getFileName().toString()), events.size());
         try (KinesisClient kinesis = KinesisClients.fromEnv()) {

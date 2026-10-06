@@ -41,6 +41,44 @@ final class TestModels {
             }
             """;
 
+    /** A small valid event-style model ({@code concert::event}): a keyed state and two events of domain shop. */
+    static final String EVT = """
+            ###Pure
+            Enum s::Status
+            {
+              NEW, DONE
+            }
+            Class <<concert::event.state>> { concert::event.key = 'order:{orderId}' } s::Order
+            {
+              orderId: String[1];
+              status: Status[1] = Status.NEW;
+            }
+            Class <<concert::event.event>>
+            {
+              concert::event.domain = 'shop',
+              concert::event.locks = 'order:{orderId}, customer:{customerId}',
+              concert::event.emits = 'Placed'
+            }
+            s::Create
+            {
+              orderId: String[1];
+              customerId: String[1];
+              tags: String[*];
+            }
+            Class <<concert::event.event>>
+            {
+              concert::event.domain = 'shop',
+              concert::event.locks = 'order:{orderId}',
+              concert::event.onError = 'NON_BLOCKING',
+              concert::event.retries = '0',
+              concert::event.name = 'Placed'
+            }
+            s::OrderPlaced
+            {
+              orderId: String[1];
+            }
+            """;
+
     /** {@code m.pure:<line>:<col>} of the first {@code needle} on 1-based line {@code line} of {@code src}. */
     static String pos(String src, int line, String needle) {
         String text = src.lines().skip(line - 1).findFirst().orElseThrow();

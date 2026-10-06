@@ -2,8 +2,9 @@
 
 Low-latency state machine orchestration on [Temporal](https://temporal.io). Events arrive on Kinesis and are
 deduplicated. Events that share a key are serialized, and an event can carry **several keys**. Each event is
-then applied to a per-entity state machine, whose data is a typed model generated from
-[Legend Pure](https://github.com/finos/legend-pure). When an entity reaches a terminal state, its final snapshot
+then applied either to a per-entity state machine, whose data is a typed model generated from
+[Legend Pure](https://github.com/finos/legend-pure), or (event style) by the handler of its event type, which can
+save keyed state and emit follow-up events ([two processing styles](#two-processing-styles-entity-state-machines-and-event-handlers)). When an entity reaches a terminal state, its final snapshot
 goes through Kafka into three analytics stores (DuckDB, ClickHouse, Deephaven), where it can be joined with
 market data.
 
@@ -151,6 +152,142 @@ The generated module contains:
 Generated ecosystems: [`showcases/insurance`](showcases/insurance/README.md) and
 [`showcases/trading-gen`](showcases/trading-gen/README.md).
 
+### Two processing styles: entity state machines and event handlers
+
+Every event picks one of two styles with the envelope's `style` field. Both share ingest, dedupe, multi-key
+locks, the stores, snapshots, sinks, the trace UI and the generator, and one deployment can mix them.
+
+| | **entity style** (`style` absent or `entity`, the default) | **event style** (`style: "event"`) |
+|---|---|---|
+| model | a state machine per entity (`smType:instanceKey`): states, transitions, terminal states | no machine: one handler per event type; every event has the same lifecycle |
+| code | `ModelStateMachine.onTransition` (deterministic workflow code) | `EventHandler<T>.apply(event, ctx)` in a local activity (side effects allowed, retried) |
+| state | the entity's data, one document per entity | optional keyed-state documents `state:<key>`, keyed by one of the event's lock keys |
+| a → b | a declared transition | the handler **emits** the next event(s) |
+| failure | `reject(...)`: the event is refused, the entity unchanged | `ERROR_BLOCKING` (keys stay held) / `ERROR_NON_BLOCKING` (parked), operator retry / skip |
+| use when | the entity has a life cycle worth declaring and checking (orders, claims, trades) | pipelines and reactions: validate → enrich → fan out, scheduled follow-ups, cross-domain chains |
+
+**Lifecycle.** Every event-style event starts `NEW` and ends `DONE`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> NEW
+    [*] --> SCHEDULED : scheduledAt > now (send --at / ctx.emitAt)
+    SCHEDULED --> NEW : durable timer fires (no locks held while waiting)
+    NEW --> DONE : locks acquired, handler returned
+    NEW --> ERROR_NON_BLOCKING : NonBlockingError, or retries exhausted with onError NON_BLOCKING
+    NEW --> ERROR_BLOCKING : BlockingError, or retries exhausted (default)
+    ERROR_NON_BLOCKING --> DONE : retry ok (re-enters its lock chain) / skip
+    ERROR_BLOCKING --> DONE : retry ok (runs again, keys still held) / skip
+    DONE --> [*]
+```
+
+* `ERROR_BLOCKING` keeps the event's lock keys held, so later events on any of them wait (order is kept) until an
+  operator retries or skips it. `ERROR_NON_BLOCKING` parks the event and releases its keys.
+* An event is applied by the processor workflow of its first sorted lock key, `evproc:<domain>:<key>` on task
+  queue `ev-<domain>`, which stays warm like an entity workflow.
+
+**Handler API** (`core/worker-sdk/.../events`):
+
+```java
+@Handles(OrderAcceptedEvent.class)
+public class OrderAcceptedHandler implements EventHandler<OrderAcceptedEvent> {
+    public void apply(OrderAcceptedEvent event, EventContext ctx) {
+        Order order = ctx.state(Order.class, "order:" + event.getOrderId())     // key must be one of the event's lock keys
+                .orElseThrow(() -> new NonBlockingError("no order " + event.getOrderId()));
+        ctx.save(order.setStatus(OrderStatus.ACCEPTED));                       // written once the handler returns
+        for (OrderLine line : event.getLines()) {
+            ctx.emit(new ReserveInventoryEvent().setOrderId(event.getOrderId()).setSku(line.getSku())
+                    .setQuantity(line.getQuantity()));                         // other domain, locks sku:{sku}
+        }
+        ctx.emitAt(Instant.now().plusSeconds(120), new OrderExpiryCheckEvent().setOrderId(event.getOrderId()));
+    }
+}
+```
+
+* Writes and emits are applied once, after the handler returns: state documents version-guarded with
+  `lastEventId = eventId` (a retry or replay never writes twice), children with deterministic ids
+  `<eventId>.<n>` (never enqueued twice), carrying `parentEventId` and `causationRoot` for the causation tree.
+* `throw new NonBlockingError(..)` / `new BlockingError(..)` decide right away; any other exception is retried
+  (`retries`, default 2) and then handled per `onError` (default `BLOCKING`, the safe choice for ordering).
+* **Interop:** `ctx.emitEntity(smType, key, eventType, payload, extraKeys)` drives an entity machine;
+  `ModelStateMachine.emit(..)` lets an entity transition emit event-style events.
+
+**Rows and analytics.** Each event has a lifecycle row `event:<id>` (smType `evt_<snake type>`) and each state
+document a row `state:<key>` (smType `st_<snake type>`). Every status change and every save is published to
+`entity-snapshots`, so the sinks get tables `evt_<type>s` (lifecycle columns: event id, type, domain, status,
+error, attempts, parent, causation root, depth, … then the payload class's columns) and `st_<type>s` (the state
+class), configured with the usual `SINK_ROOTS` entries (`evt_order_create_event:orders::OrderCreateEvent`).
+
+**Operators.** `scripts/events.sh list errors|SCHEDULED|all`, `retry <id>`, `skip <id> [reason]`,
+`status <id>` (the processor's blocked / parked / scheduled lists), or the trace UI's **Events** tab
+(http://localhost:8088/#events: error queue with Retry / Skip, scheduled events, processor status, event types and
+their flow diagrams) and the event page (lifecycle, payload, keys, attempts, causation tree).
+
+### Declaring events in Pure (`concert::event`)
+
+The built-in `concert::event` profile declares event types and keyed states; the generator validates them
+(`file:line:col`) and writes catalogs, handler stubs (yours), the event worker, the sender, samples and flows.
+A model may use `concert::sm`, `concert::event` or both.
+
+```
+Class <<concert::event.event>>
+{
+  concert::event.domain = 'orders',                                // handler application: task queue ev-orders
+  concert::event.locks = 'order:{orderId}, customer:{customerId}', // {field} = payload field, {id} = event id
+  concert::event.onError = 'BLOCKING',                             // BLOCKING (default) | NON_BLOCKING
+  concert::event.retries = '2',                                    // retries after the first attempt (default 2)
+  concert::event.emits = 'OrderAcceptedEvent, OrderRejectedEvent'  // for flow diagrams, samples and docs
+}
+orders::OrderCreateEvent { orderId: String[1]; customerId: String[1]; lines: OrderLine[1..*]; ... }
+
+Class <<concert::event.state>> { concert::event.key = 'order:{orderId}' } orders::Order { ... }
+```
+
+```bash
+./generate-concert-ecosystem examples/order-events --name order-events
+./deploy-concert-ecosystem order-events --store spanner
+./showcases/order-events/send RestockEvent '{"sku":"SKU-RED","quantity":50}'
+./showcases/order-events/send OrderCreateEvent                       # samples/events/OrderCreateEvent.json
+./showcases/order-events/send PaymentCaptureEvent '{"orderId":"O-1","amount":10}' --at +5m   # SCHEDULED for 5 min
+./showcases/order-events/send-flow showcases/order-events/samples/event-flows/order-happy-path.json
+scripts/events.sh list all
+```
+
+#### Walkthrough: `examples/order-events`
+
+[`showcases/order-events`](showcases/order-events/README.md) is generated from `examples/order-events` (domains
+`orders` and `inventory`); its handlers are implemented by hand, and `samples/event-flows/` holds flows with
+expected statuses that its generated test runs through the real lock chain.
+
+```mermaid
+flowchart LR
+  OrderCreateEvent -->|valid| OrderAcceptedEvent
+  OrderCreateEvent -->|invalid| OrderRejectedEvent
+  OrderAcceptedEvent -->|per line, domain inventory, sku:{sku}| ReserveInventoryEvent
+  OrderAcceptedEvent -.->|emitAt +expirySeconds| OrderExpiryCheckEvent
+  RestockEvent --> Stock[(state:sku:...)]
+  ReserveInventoryEvent --> Stock
+  PaymentCaptureEvent --> Order[(state:order:...)]
+```
+
+1. **Chain.** `./showcases/order-events/send-flow showcases/order-events/samples/event-flows/order-happy-path.json`
+   restocks two SKUs and creates an order with two lines. `scripts/events.sh list all` then shows `OrderCreateEvent`
+   DONE → `.1 OrderAcceptedEvent` DONE → `.1.1`, `.1.2 ReserveInventoryEvent` DONE and `.1.3 OrderExpiryCheckEvent`
+   SCHEDULED; the event page (`#event/<id>`) draws the causation tree.
+2. **Non-blocking error.** An order for a SKU without stock: its `ReserveInventoryEvent` goes `ERROR_NON_BLOCKING`
+   (`out of stock: SKU-NONE needs 5, has 0`) while other SKUs keep flowing. Send a `RestockEvent` for the SKU and
+   press **Retry** (Events tab, or `POST /api/ops/events/<id>/retry`, or `scripts/events.sh retry <id>`): it re-enters
+   its lock chain and goes DONE.
+3. **Blocking error.** `send PaymentCaptureEvent '{"orderId":"…","amount":42,"poison":true}'` goes `ERROR_BLOCKING`
+   and keeps `order:<id>` held: a second payment for the order waits in the lock queue (`#lock/order:<id>`: holder
+   blocked, one waiting). **Retry** runs it again (still poisoned: attempts 2, still blocked); **Skip** makes it DONE
+   ("skipped: …"), frees the key and the waiting payment runs (order PAID).
+4. **Scheduling.** Each accepted order schedules an `OrderExpiryCheckEvent` `expirySeconds` (payload, default 120)
+   later; unpaid orders go EXPIRED when it fires. `send RestockEvent … --at +30s` schedules any event from the CLI.
+5. **Analytics.** DuckDB / ClickHouse tables `evt_order_create_events`, `evt_reserve_inventory_events`, …, `st_orders`,
+   `st_stocks`; Deephaven `order_events_events_by_status`, `order_events_event_errors`, `order_events_events_scheduled`,
+   `order_events_causation_depth`, `order_events_st_orders_latest`.
+
 ### Storage backends
 
 One setting, `STORE_KIND`, picks where dedupe records, shard checkpoints, entity state and traces go. Each
@@ -202,7 +339,7 @@ Three independent consumers read it, each with its own group and pace (see
 
 | what | where | credentials / notes |
 |---|---|---|
-| Trace UI: events, entities (state + model diagrams), locks, **Analytics** tab | http://localhost:8088 | — |
+| Trace UI: events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab | http://localhost:8088 | — |
 | Temporal UI | http://localhost:8080 | workflow ids `lock:<key>`, `<smType>:<key>`, `reconcile-<smType>…`; Schedules page |
 | Temporal gRPC | localhost:7233 | — |
 | DuckDB sink API | http://localhost:8090 (`/query`, `/tables`, `/samples`, `/versions`, `/health`, `/metrics`) | read-only |
@@ -219,12 +356,14 @@ Three independent consumers read it, each with its own group and pace (see
 | command | what |
 |---|---|
 | `scripts/up.sh <postgres\|dynamo\|spanner> [--analytics] [--trading] [compose args]` | whole platform in containers on one backend; `scripts/up.sh down` stops everything (keeps volumes) |
-| `./generate-concert-ecosystem <dir> --name <name>` | Pure models with `concert::sm` → `showcases/<name>` (validates with file:line:col errors) |
+| `./generate-concert-ecosystem <dir> --name <name>` | Pure models with `concert::sm` and / or `concert::event` → `showcases/<name>` (validates with file:line:col errors) |
 | `./deploy-concert-ecosystem <name> [--store …] [--no-analytics]` | build the ecosystem, compose up with its override, re-provision sinks, print links |
 | `./showcases/<name>/send-flow all`, `./showcases/<name>/send <smType> <event> <key>` | events for a generated ecosystem (`scripts/ecosystem-events.sh` underneath) |
+| `./showcases/<name>/send <EventType> [payload] [--at +5m\|ISO] [--id ID]` | an event-style event; `--at` schedules it (SCHEDULED until then) |
+| `scripts/events.sh list [errors\|STATUS\|all] [idPrefix]`, `show\|retry\|status <id>`, `skip <id> [reason]` | event-style operator commands (lifecycle rows, processors) |
 | `scripts/trading-load.sh [orders=100] [rate=50]` | one-shot trading order flow (trading showcase) |
 | `scripts/reconcile.sh [--smType X] [--dry-run]` | reconcile the sinks with the StateStore now (needs the trace UI) |
-| `scripts/chaos.sh` (`DURATION`, `RATE`, `KILL_EVERY`, `CHAOS_TEMPORAL`, `STORE_KIND`) | chaos experiment: kill/restart coordinators and workers under load, verify no loss / double apply / reordering |
+| `scripts/chaos.sh` (`DURATION`, `RATE`, `KILL_EVERY`, `CHAOS_TEMPORAL`, `STORE_KIND`, `EVENT_STYLE=1`) | chaos experiment: kill/restart coordinators and workers under load, verify no loss / double apply / reordering (event style: handlers, keyed state, chained events) |
 | `scripts/db-load.sh` (`TRACE_SAMPLE`, `RATE`, `DURATION`) | database statements per event from `pg_stat_statements` (Postgres only) |
 | `./gradlew build` | everything, including the Docker-based end-to-end tests |
 | `./gradlew :integration-tests:test -Pbench --tests '*LatencyBench' -Dbench.rates=100,500,1000` | latency benchmark (`-Dbench.seconds=N`); also `*ScalingBench` |
@@ -366,10 +505,18 @@ Measured on a 10-core laptop with Docker limited to 6 CPUs, the whole stack loca
 | warm single-key event, Kinesis → entity transition done | 100/s | 13 ms | 39 ms |
 | warm multi-key event (2 keys) | 100/s | 30 ms | 117 ms |
 | Temporal hop: signal → local activity / update round trip | — | 28 ms / 9 ms | — |
+| warm single-key, **entity style** (ledger machine), ingest → done, 2 rounds | 100/s | 12 / 11 ms | 256 / 38 ms |
+| warm single-key, **event style** (Tick handler + keyed state doc), ingest → done, 2 rounds | 100/s | 10 / 13 ms | 75 / 67 ms |
 
 * **Database load.** About 1.3 to 1.7 statements per event at `TRACE_SAMPLE` ≤ 0.01: dedupe claim and mark
   per poll batch, one state upsert per event, and checkpoints. The latest run (`TRACE_SAMPLE=0.01 DURATION=30
   scripts/db-load.sh`, 3000 events at 100/s) measured 1.30.
+* **Styles.** `./gradlew :integration-tests:test -Pbench --tests '*LatencyBench.eventStyleVersusEntityStyle'
+  -Dbench.seconds=30` (2000 warm keys, Postgres): both styles land in the same range, the event processor
+  replacing the entity workflow hop.
+* **Event-style chaos.** `STORE_KIND=spanner EVENT_STYLE=1 DURATION=90 scripts/chaos.sh`: 9000 Ticks over 200 keys
+  (half multi-key) plus 1800 chained child events, 3 × kill -9 and a SIGTERM: PASS (no loss, no double apply from
+  the keyed-state counters, per-key order kept, no lifecycle row left in an error state).
 * **Chaos.** `scripts/chaos.sh` ran 2 coordinators and 2 workers as processes and kill -9'd, SIGTERM'd or
   took down a whole tier every 15 s under ledger load. Every run passed: no lost events, no double applies,
   per-key order kept, dedupe settled.
@@ -438,6 +585,14 @@ redo more (idempotent) work when a process merely pauses.
   Deephaven skips bad records.
 * **Schema changes.** Column type changes in a model are not migrated: new columns are added, existing ones
   are left as they are.
+* **Event style.**
+  * `scheduledAt` (`send --at`, `ctx.emitAt`) is compared with Temporal's clock: a producer clock ahead or behind
+    shifts it. On Docker Desktop the VM clock can stall while the host sleeps; durable timers then fire late (a
+    stuck timer queue after a big clock jump was cleared by `docker compose restart temporal`).
+  * Operator listings (`scripts/events.sh list`, the Events tab) scan the lifecycle rows: fine for operations, not
+    for dashboards (use the `evt_*` tables).
+  * `emits` is documentation: a handler may emit other types; the generated test only checks the flows' settled
+    statuses.
 
 ## Module map
 

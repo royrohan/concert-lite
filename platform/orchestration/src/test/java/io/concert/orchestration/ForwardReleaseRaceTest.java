@@ -8,7 +8,9 @@ import io.concert.common.TraceRow;
 import io.concert.common.WorkflowIds;
 import io.concert.common.api.DispatchActivities;
 import io.concert.common.api.EntityWorkflow;
+import io.concert.common.api.EventOutcome;
 import io.concert.common.api.LockRequest;
+import io.concert.common.api.ProcessRequest;
 import io.concert.common.api.TransitionResult;
 import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.store.InMemoryStateStore;
@@ -55,6 +57,16 @@ class ForwardReleaseRaceTest {
                     Thread.currentThread().interrupt();
                 }
             }
+        }
+
+        @Override
+        public EventOutcome dispatchToProcessor(ProcessRequest request) {
+            return real.dispatchToProcessor(request);
+        }
+
+        @Override
+        public void scheduleEvent(EventEnvelope event) {
+            real.scheduleEvent(event);
         }
 
         @Override

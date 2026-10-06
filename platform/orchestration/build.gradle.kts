@@ -28,3 +28,14 @@ tasks.test {
     // allow them explicitly so the test JVM prints no JDK 25 warnings.
     jvmArgs("--sun-misc-unsafe-memory-access=allow", "--enable-native-access=ALL-UNNAMED")
 }
+
+// bin/events: operator CLI for event-style events (scripts/events.sh)
+val eventsScripts = tasks.register<CreateStartScripts>("eventsScripts") {
+    mainClass.set("io.concert.orchestration.events.EventsCli")
+    applicationName = "events"
+    outputDir = layout.buildDirectory.dir("events-scripts").get().asFile
+    classpath = tasks.named<Jar>("jar").get().outputs.files + configurations.runtimeClasspath.get()
+}
+distributions.named("main") {
+    contents { from(eventsScripts) { into("bin") } }
+}

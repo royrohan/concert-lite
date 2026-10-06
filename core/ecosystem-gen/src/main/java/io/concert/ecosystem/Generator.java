@@ -32,7 +32,7 @@ import java.util.stream.Stream;
  * <ul>
  *   <li><b>generated</b> (specs, registries, worker main, event sender, build, compose, README, ...): always
  *       rewritten; generated files of an earlier run that are no longer produced are deleted;
- *   <li><b>stubs</b> ({@code <Root>Machine.java}): written only if absent; {@code force} backs the existing
+ *   <li><b>stubs</b> ({@code <Root>Machine.java}, {@code <Event>Handler.java}): written only if absent; {@code force} backs the existing
  *       file up as {@code <file>.bak-<timestamp>} and rewrites it;
  *   <li><b>samples</b>: rewritten unless the user edited them since they were generated (their hashes are
  *       kept in {@code ecosystem.json}); {@code force} rewrites them after a backup.
@@ -103,18 +103,35 @@ final class Generator {
         write(pure + "concert/" + ConcertProfile.FILE_NAME, ConcertProfile.source(), Kind.GENERATED);
 
         String src = module + "/src/main/java/" + eco.javaPackage().replace('.', '/') + "/";
+        String testSrc = module + "/src/test/java/" + eco.javaPackage().replace('.', '/') + "/";
         write(src + java.modelsClass() + ".java", java.models(), Kind.GENERATED);
-        for (MachineDecl m : eco.machines()) {
-            write(src + JavaSources.specClass(m) + ".java", java.spec(m), Kind.GENERATED);
-            write(src + JavaSources.machineClass(m) + ".java", java.stub(m), Kind.STUB);
+        if (eco.hasMachines()) {
+            for (MachineDecl m : eco.machines()) {
+                write(src + JavaSources.specClass(m) + ".java", java.spec(m), Kind.GENERATED);
+                write(src + JavaSources.machineClass(m) + ".java", java.stub(m), Kind.STUB);
+            }
+            write(src + java.machinesClass() + ".java", java.machines(), Kind.GENERATED);
+            write(src + java.workerMainClass() + ".java", java.workerMain(), Kind.GENERATED);
+            write(module + "/src/main/resources/META-INF/services/io.concert.sdk.MachineCatalog",
+                    java.pkg() + "." + java.machinesClass() + "\n", Kind.GENERATED);
+            write(testSrc + java.testClass() + ".java", java.test(), Kind.GENERATED);
         }
-        write(src + java.machinesClass() + ".java", java.machines(), Kind.GENERATED);
-        write(src + java.workerMainClass() + ".java", java.workerMain(), Kind.GENERATED);
         write(src + java.eventsClass() + ".java", java.events(), Kind.GENERATED);
-        write(module + "/src/main/resources/META-INF/services/io.concert.sdk.MachineCatalog",
-                java.pkg() + "." + java.machinesClass() + "\n", Kind.GENERATED);
-        write(module + "/src/test/java/" + eco.javaPackage().replace('.', '/') + "/" + java.testClass() + ".java", java.test(),
-                Kind.GENERATED);
+        if (eco.hasEvents()) {
+            EventSources ev = new EventSources(eco);
+            StringBuilder services = new StringBuilder();
+            for (String d : eco.domains()) {
+                write(src + EventSources.catalogClass(d) + ".java", ev.catalog(d), Kind.GENERATED);
+                services.append(java.pkg()).append('.').append(EventSources.catalogClass(d)).append('\n');
+            }
+            write(module + "/src/main/resources/META-INF/services/io.concert.sdk.events.EventCatalog", services.toString(), Kind.GENERATED);
+            write(src + ev.typesClass() + ".java", ev.types(), Kind.GENERATED);
+            write(src + ev.workerMainClass() + ".java", ev.workerMain(), Kind.GENERATED);
+            for (EventDecl e : eco.events()) {
+                write(src + e.handlerClass() + ".java", ev.stub(e), Kind.STUB);
+            }
+            write(testSrc + ev.testClass() + ".java", ev.test(java.eventsClass()), Kind.GENERATED);
+        }
 
         for (MachineDecl m : eco.machines()) {
             samples.samples(m).forEach((event, payload) -> {
@@ -123,6 +140,12 @@ final class Generator {
                 }
             });
             write(module + "/samples/flows/" + m.smType() + "-happy-path.json", SampleGenerator.pretty(samples.happyPath(m)), Kind.SAMPLE);
+        }
+        for (EventDecl e : eco.events()) {
+            write(module + "/samples/events/" + e.name() + ".json", SampleGenerator.pretty(samples.eventSample(e)), Kind.SAMPLE);
+        }
+        for (EventDecl root : samples.rootEvents()) {
+            write(module + "/samples/event-flows/" + root.name() + "-flow.json", SampleGenerator.pretty(samples.eventFlow(root)), Kind.SAMPLE);
         }
 
         write(module + "/build.gradle.kts", files.build(), Kind.GENERATED);

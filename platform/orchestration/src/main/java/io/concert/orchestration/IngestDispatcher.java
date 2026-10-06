@@ -27,7 +27,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *       run sequentially in shard order (that is the per-key ordering guarantee),
  *   <li>for each event, durably enqueue it in Temporal and return (we do not wait for processing):
  *       an {@code acquire} update on the lock of its first sorted key, waiting only for ACCEPTED
- *       (direct types: UpdateWithStart on the entity instead),
+ *       (direct types: UpdateWithStart on the entity instead; future-dated event-style events:
+ *       UpdateWithStart {@code schedule} on their processor, which enqueues them when due),
  *   <li>mark the batch DISPATCHED.
  * </ol>
  */
@@ -76,11 +77,11 @@ public final class IngestDispatcher implements AutoCloseable {
         for (EventEnvelope e : events) {
             if (!claimed.contains(e.eventId()) || !seenInBatch.add(e.eventId())) {
                 dropped.incrementAndGet();
-                traces.add(new TraceRow(e.eventId(), now, TraceRow.Stage.DROPPED, e.entityKey(), null, "duplicate"));
+                traces.add(new TraceRow(e.eventId(), now, TraceRow.Stage.DROPPED, e.traceWorkflowId(), null, "duplicate"));
                 continue;
             }
             long claimedAt = System.currentTimeMillis();
-            traces.add(new TraceRow(e.eventId(), claimedAt, TraceRow.Stage.RECEIVED, e.entityKey(), null,
+            traces.add(new TraceRow(e.eventId(), claimedAt, TraceRow.Stage.RECEIVED, e.traceWorkflowId(), null,
                     "kinesisMs=" + (e.sourceTsMillis() > 0 ? e.ingestTsMillis() - e.sourceTsMillis() : -1)
                             + " dedupeMs=" + (claimedAt - e.ingestTsMillis()) + " keys=" + e.effectiveLockKeys()));
             groups.computeIfAbsent(e.effectiveLockKeys().get(0), k -> new ArrayList<>()).add(e);
@@ -115,11 +116,16 @@ public final class IngestDispatcher implements AutoCloseable {
     }
 
     void dispatchOne(EventEnvelope e) {
-        if (e.isSingleKey() && directSmTypes.contains(e.smType())) {
+        long now = System.currentTimeMillis();
+        if (e.isEventStyle() && e.scheduledAtMillis() > now) {
+            // Future-dated: the processor keeps it on a durable timer, holding no locks until it is due.
+            dispatch.scheduleEvent(e);
+        } else if (!e.isEventStyle() && e.isSingleKey() && directSmTypes.contains(e.smType())) {
             dispatch.dispatchDirect(e); // ordering is fixed once ACCEPTED; completion is traced async
         } else {
             // Single- and multi-key alike: enqueue on the first sorted key; the lock chain does the rest.
-            dispatch.enqueueLock(e.effectiveLockKeys().get(0), LockRequest.first(e, System.currentTimeMillis()));
+            // Event style too: the last lock of the chain dispatches to the event's processor instead of an entity.
+            dispatch.enqueueLock(e.effectiveLockKeys().get(0), LockRequest.first(e, now));
         }
         dispatched.incrementAndGet();
     }

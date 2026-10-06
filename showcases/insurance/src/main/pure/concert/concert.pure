@@ -23,3 +23,27 @@ Profile concert::sm
   stereotypes: [root, command];
   tags: [type, initial, transitions, terminal, locks, statusProperty, idProperty];
 }
+
+// The concert event profile: event-style processing (one handler per event type, every event NEW -> DONE).
+// A class marked <<concert::event.event>> is an event (its payload); <<concert::event.state>> marks a keyed-state
+// document handlers load and save. Syntax (see core/ecosystem-gen/README.md):
+//
+//   Class <<concert::event.event>>
+//   {
+//     concert::event.domain = 'orders',                               // handler application (task queue ev-orders)
+//     concert::event.locks = 'order:{orderId}, customer:{customerId}', // lock key templates; {field} = payload field,
+//                                                                      // {id} = event id; none: <domain>:<eventId>
+//     concert::event.onError = 'NON_BLOCKING',                         // BLOCKING (default) | NON_BLOCKING when retries
+//                                                                      // are exhausted
+//     concert::event.retries = '2',                                    // retries after the first attempt (default 2)
+//     concert::event.emits = 'OrderAcceptedEvent, OrderRejectedEvent', // events its handler may emit (docs, flows)
+//     concert::event.name = 'OrderCreated'                             // eventType on the wire (default: class name)
+//   }
+//   orders::OrderCreateEvent { ... }
+//
+//   Class <<concert::event.state>> { concert::event.key = 'order:{orderId}' } orders::Order { ... }
+Profile concert::event
+{
+  stereotypes: [event, state];
+  tags: [domain, locks, onError, retries, key, name, emits];
+}
