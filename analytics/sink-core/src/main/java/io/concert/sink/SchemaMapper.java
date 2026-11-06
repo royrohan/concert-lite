@@ -13,6 +13,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -147,23 +148,110 @@ public final class SchemaMapper {
         return loadModels(paths);
     }
 
-    /** Parses and resolves every {@code *.pure} file of every directory in {@code dirs} as one model. */
+    /** Parses and resolves every {@code *.pure} file of every directory in {@code dirs} as one model (see {@link #load}). */
     public static ResolvedModel loadModels(List<Path> dirs) {
+        return load(dirs).model();
+    }
+
+    /**
+     * A model loaded from directories: the resolved model, the files it was built from, and the files left out because
+     * an earlier directory already declares every element in them identically.
+     */
+    public record LoadedModels(ResolvedModel model, List<Path> files, List<Path> skipped) {
+        public LoadedModels {
+            files = List.copyOf(files);
+            skipped = List.copyOf(skipped);
+        }
+    }
+
+    /**
+     * Parses and resolves every {@code *.pure} file of every directory in {@code dirs} (non-recursive) as one model.
+     *
+     * <p>A file is skipped when every element it declares is already declared by an earlier directory <b>with the same
+     * shape</b> (properties with their types and multiplicities, association ends, supertypes, enum values; stereotypes,
+     * tagged values, defaults and constraints aside). That is the case of a generated ecosystem whose models are a copy
+     * of a core model plus concert annotations (trading-gen's {@code trading::} packages): its roots then map onto the
+     * core classes instead of failing as duplicates. Any other duplicate still fails resolution, as before.
+     */
+    public static LoadedModels load(List<Path> dirs) {
+        Map<String, String> shapes = new HashMap<>();
         List<PureModel> models = new ArrayList<>();
+        List<Path> used = new ArrayList<>();
+        List<Path> skipped = new ArrayList<>();
         for (Path dir : dirs) {
+            Map<Path, PureModel> parsed = new LinkedHashMap<>();
             try (Stream<Path> files = Files.list(dir)) {
                 List<Path> pure = files.filter(p -> p.toString().endsWith(".pure")).sorted().toList();
                 if (pure.isEmpty()) {
                     throw new IllegalArgumentException("no .pure files in " + dir.toAbsolutePath());
                 }
                 for (Path p : pure) {
-                    models.add(PureParser.parse(p));
+                    parsed.put(p, PureParser.parse(p));
                 }
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
+            Map<String, String> dirShapes = shapesOf(parsed.values());
+            for (var f : parsed.entrySet()) {
+                List<String> declared = declared(f.getValue());
+                boolean redundant = dirShapes != null && !shapes.isEmpty() && !declared.isEmpty()
+                        && declared.stream().allMatch(n -> shapes.containsKey(n) && shapes.get(n).equals(dirShapes.get(n)));
+                if (redundant) {
+                    skipped.add(f.getKey());
+                } else {
+                    used.add(f.getKey());
+                    models.add(f.getValue());
+                }
+            }
+            if (dirShapes != null) {
+                dirShapes.forEach(shapes::putIfAbsent);
+            }
         }
-        return new ModelResolver().resolve(models.toArray(PureModel[]::new));
+        return new LoadedModels(new ModelResolver().resolve(models.toArray(PureModel[]::new)), used, skipped);
+    }
+
+    /** Element names a parsed file declares. */
+    private static List<String> declared(PureModel m) {
+        List<String> out = new ArrayList<>();
+        m.classes().forEach(c -> out.add(c.qualifiedName()));
+        m.enums().forEach(e -> out.add(e.qualifiedName()));
+        m.associations().forEach(a -> out.add(a.qualifiedName()));
+        m.profiles().forEach(pr -> out.add(pr.name()));
+        return out;
+    }
+
+    /** Each element's shape (see {@link #load}), resolving one directory's files alone; null if they don't resolve alone. */
+    private static Map<String, String> shapesOf(java.util.Collection<PureModel> models) {
+        ResolvedModel m;
+        try {
+            m = new ModelResolver().resolve(models.toArray(PureModel[]::new));
+        } catch (RuntimeException e) {
+            return null;
+        }
+        Map<String, String> out = new HashMap<>();
+        for (ClassDef c : m.classes()) {
+            StringBuilder sb = new StringBuilder("class");
+            m.linearization(c).forEach(x -> sb.append(' ').append(x.qualifiedName()));
+            for (PropertyDef p : m.allProperties(c)) {
+                sb.append(';').append(p.name()).append(':').append(p.type().name()).append(p.multiplicity());
+            }
+            for (AssociationEnd e : m.associationProperties(c)) {
+                sb.append(';').append(e.navigable().name()).append(':').append(e.navigable().type().name())
+                        .append(e.navigable().multiplicity()).append(e.owned() ? "/owned" : "");
+            }
+            out.put(c.qualifiedName(), sb.toString());
+        }
+        for (var e : m.enums()) {
+            out.put(e.qualifiedName(), "enum " + e.values().stream().map(v -> v.name()).toList());
+        }
+        for (var a : m.associations()) {
+            out.put(a.qualifiedName(), "assoc " + a.end1().name() + ':' + a.end1().type().name() + a.end1().multiplicity()
+                    + ' ' + a.end2().name() + ':' + a.end2().type().name() + a.end2().multiplicity());
+        }
+        for (var pr : m.profiles()) {
+            out.put(pr.name(), "profile " + pr.stereotypes() + ' ' + pr.tags());
+        }
+        return out;
     }
 
     /**

@@ -242,6 +242,16 @@ public final class SpannerStateStore implements StateStore {
                 .bind("s").toStringArray(TERMINAL).bind("l").to(limit).build());
     }
 
+    /** Every stage through the (stage, ts DESC) index rather than a scan on ts. */
+    @Override
+    public List<TraceRow> tracesSince(long sinceMillis, int limit) {
+        List<String> stages = java.util.Arrays.stream(TraceRow.Stage.values()).map(Enum::name).toList();
+        return traces(Statement.newBuilder("SELECT " + TRACE_COLS + " FROM event_trace@{FORCE_INDEX=event_trace_by_stage}"
+                        + " WHERE stage IN UNNEST(@s) AND ts >= @t ORDER BY ts DESC LIMIT @l")
+                .bind("s").toStringArray(stages).bind("t").to(Timestamp.ofTimeMicroseconds(sinceMillis * 1000))
+                .bind("l").to(limit).build());
+    }
+
     @Override
     public List<TraceRow> scanTraces(String eventIdPrefix, TraceRow.Stage stage) {
         return traces(Statement.newBuilder("SELECT " + TRACE_COLS + " FROM event_trace WHERE stage = @s AND STARTS_WITH(event_id, @p)")

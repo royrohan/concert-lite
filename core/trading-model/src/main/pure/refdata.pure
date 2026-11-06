@@ -27,7 +27,7 @@ Class trading::refdata::Instrument
   sector: Sector[1];
   currency: Currency[1] = Currency.USD;
   lotSize: Integer[1] = 100;
-  tickSize: Decimal[1] = 0.01;
+  tickSize: Decimal[1] = 0.01D;
   // Level the simulated price reverts to.
   refPrice: Decimal[1];
   primaryMic: String[1];

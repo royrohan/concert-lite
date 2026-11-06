@@ -119,12 +119,63 @@ public final class MarketDataSim {
 
     /** Emits ticks in real time until {@code keepRunning} turns false, then flushes. */
     public void runRealtime(LongSupplier clockMillis, BooleanSupplier keepRunning) throws InterruptedException {
+        runRealtime(clockMillis, keepRunning, new Control(true, config.tickRate()));
+    }
+
+    /**
+     * Start / stop and tick rate of a realtime run, changed from another thread (the control endpoint).
+     * A pause emits nothing; resuming or changing the rate re-anchors the schedule, so there is no burst.
+     */
+    public static final class Control {
+        private volatile boolean running;
+        private volatile double tickRate;
+        private volatile long generation;
+
+        public Control(boolean running, double tickRate) {
+            this.running = running;
+            this.tickRate = tickRate;
+        }
+
+        public boolean running() {
+            return running;
+        }
+
+        public double tickRate() {
+            return tickRate;
+        }
+
+        public synchronized void start(Double rate) {
+            if (rate != null && rate > 0) {
+                tickRate = Math.min(rate, 20_000);
+            }
+            running = true;
+            generation++;
+        }
+
+        public synchronized void stop() {
+            running = false;
+            generation++;
+        }
+    }
+
+    /** Emits ticks in real time while {@code control} is running, until {@code keepRunning} turns false. */
+    public void runRealtime(LongSupplier clockMillis, BooleanSupplier keepRunning, Control control) throws InterruptedException {
         long start = clockMillis.getAsLong();
         long i = 0;
+        long seen = control.generation;
         while (keepRunning.getAsBoolean()) {
-            long elapsed = clockMillis.getAsLong() - start;
-            while (scheduledOffset(i) <= elapsed) {
-                emitTick(start + scheduledOffset(i++));
+            if (control.generation != seen) {
+                seen = control.generation;
+                start = clockMillis.getAsLong();
+                i = 0;
+                sink.flush();
+            }
+            if (control.running()) {
+                double rate = control.tickRate();
+                long elapsed = clockMillis.getAsLong() - start;
+                while (scheduledOffset(i, rate) <= elapsed) {
+                    emitTick(start + scheduledOffset(i++, rate));
+                }
             }
             Thread.sleep(5);
         }
@@ -132,7 +183,11 @@ public final class MarketDataSim {
     }
 
     private long scheduledOffset(long i) {
-        return (long) (i * 1000.0 / config.tickRate());
+        return scheduledOffset(i, config.tickRate());
+    }
+
+    private static long scheduledOffset(long i, double rate) {
+        return (long) (i * 1000.0 / rate);
     }
 
     private void sendBar(Bar b) {

@@ -31,9 +31,13 @@ public final class DuckDbSinkMain {
 
     public static void main(String[] args) throws Exception {
         String models = SchemaMapper.envList(System.getenv(), "MODELS_DIR", env("MODELS_DIR", "/models"));
-        SchemaSpec schema = new SchemaMapper(SchemaMapper.loadModels(models))
-                .map(SchemaMapper.parseRoots(SchemaMapper.envList(System.getenv(), "SINK_ROOTS",
-                        env("SINK_ROOTS", SchemaMapper.DEFAULT_ROOTS))));
+        String roots = SchemaMapper.envList(System.getenv(), "SINK_ROOTS", env("SINK_ROOTS", SchemaMapper.DEFAULT_ROOTS));
+        SchemaMapper.LoadedModels loaded = SchemaMapper.load(java.util.Arrays.stream(models.split(","))
+                .filter(d -> !d.isBlank()).map(d -> Path.of(d.trim())).toList());
+        if (!loaded.skipped().isEmpty()) {
+            log.info("models already declared identically by an earlier directory, skipped: {}", loaded.skipped());
+        }
+        SchemaSpec schema = new SchemaMapper(loaded.model()).map(SchemaMapper.parseRoots(roots));
         Path dbFile = Path.of(env("DUCKDB_PATH", "/data/concert.duckdb"));
         if (dbFile.getParent() != null) {
             Files.createDirectories(dbFile.getParent());
@@ -48,7 +52,7 @@ public final class DuckDbSinkMain {
                 Integer.parseInt(env("SINK_MAX_ATTEMPTS", "3"))), db);
         ReadOnlyQueries queries = new ReadOnlyQueries(db, Duration.ofSeconds(Long.parseLong(env("QUERY_TIMEOUT_SECONDS", "10"))));
         int port = Integer.parseInt(env("SINK_HTTP_PORT", "8090"));
-        SinkHttpServer http = new SinkHttpServer(db, queries, loop).start(port);
+        SinkHttpServer http = new SinkHttpServer(db, queries, loop).withModels(loaded.files(), roots).start(port);
         loop.start();
         log.info("DuckDB sink: {} <- {} (models {}), HTTP on :{}", dbFile, env("KAFKA_BOOTSTRAP", "localhost:29092"), models, port);
 

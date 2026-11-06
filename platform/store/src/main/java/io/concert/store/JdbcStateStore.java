@@ -297,6 +297,27 @@ public final class JdbcStateStore implements StateStore {
     }
 
     @Override
+    public List<TraceRow> tracesSince(long sinceMillis, int limit) {
+        return OccRetry.run(() -> {
+            try (Connection c = ds.getConnection();
+                    PreparedStatement ps = c.prepareStatement(
+                            "SELECT event_id, ts, stage, workflow_id, lock_key, detail FROM event_trace "
+                                    + "WHERE ts >= ? ORDER BY ts DESC LIMIT ?")) {
+                ps.setTimestamp(1, new java.sql.Timestamp(sinceMillis));
+                ps.setInt(2, limit);
+                List<TraceRow> out = new ArrayList<>();
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        out.add(new TraceRow(rs.getString(1), rs.getTimestamp(2).getTime(),
+                                TraceRow.Stage.valueOf(rs.getString(3)), rs.getString(4), rs.getString(5), rs.getString(6)));
+                    }
+                }
+                return out;
+            }
+        });
+    }
+
+    @Override
     public int sweepProcessed(long olderThanMillis, int batchSize) {
         int total = 0;
         while (true) {

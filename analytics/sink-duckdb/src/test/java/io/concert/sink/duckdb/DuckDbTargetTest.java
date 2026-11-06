@@ -208,8 +208,14 @@ class DuckDbTargetTest {
             ReadOnlyQueries q = new ReadOnlyQueries(t, Duration.ofSeconds(10));
             try (q) {
                 List<Object> names = q.run("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'trading%'"
-                        + " ORDER BY table_name").rows().stream().map(r -> r.get(0)).toList();
+                        + " AND table_type = 'BASE TABLE' ORDER BY table_name").rows().stream().map(r -> r.get(0)).toList();
                 assertEquals(List.of("trading_allocations", "trading_executions", "trading_fills", "trading_orders"), names);
+                // Each root also gets <root>_latest (the name ClickHouse's deduplicated view has; one Legend store layer).
+                List<Object> views = q.run("SELECT table_name FROM information_schema.tables WHERE table_name LIKE 'trading%'"
+                        + " AND table_type = 'VIEW' ORDER BY table_name").rows().stream().map(r -> r.get(0)).toList();
+                assertEquals(List.of("trading_allocations_latest", "trading_executions_latest", "trading_fills_latest",
+                        "trading_orders_latest"), views);
+                assertEquals(List.of(List.of("O1", 9L)), q.run("SELECT order_id, entity_version FROM trading_orders_latest").rows());
                 assertEquals(List.of(List.of("O1", 1L)), q.run("SELECT o.order_id, count(*) FROM trading_orders o"
                         + " JOIN trading_fills f ON f.order_id = o.order_id GROUP BY ALL").rows());
                 List<SampleQueries.Sample> samples = SampleQueries.generate(t.schema());

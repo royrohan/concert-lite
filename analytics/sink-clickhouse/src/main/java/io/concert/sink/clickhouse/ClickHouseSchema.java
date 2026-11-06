@@ -23,6 +23,7 @@ import java.util.stream.Collectors;
  *                                 │                            └─ ...
  *                                 └─ mv_entity_snapshots_queue_errors ─▶ kafka_errors (_error, _raw_message)
  * order_lines = VIEW: orders FINAL ARRAY JOIN lines
+ * orders_latest = VIEW: orders FINAL   (one row per entity; what legend-lite's ClickHouse mapping reads)
  * </pre>
  *
  * <ul>
@@ -91,6 +92,7 @@ public final class ClickHouseSchema {
             out.add(rootTable(schema, root));
         }
         for (TableSpec root : schema.roots()) {
+            out.add(latestView(root));
             for (TableSpec child : schema.childrenOf(root)) {
                 out.add(childView(schema, root, child));
             }
@@ -262,6 +264,18 @@ public final class ClickHouseSchema {
     private static String insert(Ddl.Table target, String select) {
         return "INSERT INTO " + Sql.id(target.name()) + " ("
                 + target.columns().stream().map(c -> Sql.id(c.name())).collect(Collectors.joining(", ")) + ")\n" + select;
+    }
+
+    /** Suffix of a root's deduplicated view. */
+    public static final String LATEST = "_latest";
+
+    /**
+     * {@code <root>_latest}: the root table {@code FINAL}, exactly one row per entity (its highest version), so readers
+     * that can't add {@code FINAL} themselves (generated SQL, e.g. legend-lite's) never double-count.
+     */
+    static Ddl.View latestView(TableSpec root) {
+        return new Ddl.View(root.name() + LATEST, "SELECT *\nFROM " + Sql.id(root.name()) + " FINAL",
+                "concert latest " + root.smType() + " " + root.name());
     }
 
     static Ddl.View childView(SchemaSpec schema, TableSpec root, TableSpec child) {

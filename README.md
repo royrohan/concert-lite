@@ -339,10 +339,12 @@ Three independent consumers read it, each with its own group and pace (see
 
 | what | where | credentials / notes |
 |---|---|---|
-| Trace UI: events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab | http://localhost:8088 | — |
+| Trace UI: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)) | http://localhost:8088 | — |
+| legend-lite (profile `analytics`) | http://localhost:8095 (`/health`, legend-engine's `pure/v1` API) | plans only; pinned commit, built from source |
+| Legend Studio Lite (profile `analytics`) | http://localhost:8200 (from a flow page or the Model tab: **Legend Studio ↗**) | level 0: runs in the browser, projects kept in that browser |
 | Temporal UI | http://localhost:8080 | workflow ids `lock:<key>`, `<smType>:<key>`, `reconcile-<smType>…`; Schedules page |
 | Temporal gRPC | localhost:7233 | — |
-| DuckDB sink API | http://localhost:8090 (`/query`, `/tables`, `/samples`, `/versions`, `/health`, `/metrics`) | read-only |
+| DuckDB sink API | http://localhost:8090 (`/query`, `/tables`, `/samples`, `/versions`, `/health`, `/metrics`, `/models`) | read-only |
 | ClickHouse HTTP + Play UI | http://localhost:8123/play (native :9000) | `readonly`/`readonly` (queries), `concert`/`concert` (DDL) |
 | Deephaven IDE | http://localhost:10000/ide/?psk=concert | PSK `DEEPHAVEN_PSK` (default `concert`) |
 | Redpanda Console (profile `kafka-ui`) | http://localhost:8081 | `COMPOSE_PROFILES=kafka-ui docker compose up -d redpanda-console` |
@@ -365,6 +367,8 @@ Three independent consumers read it, each with its own group and pace (see
 | `scripts/reconcile.sh [--smType X] [--dry-run]` | reconcile the sinks with the StateStore now (needs the trace UI) |
 | `scripts/chaos.sh` (`DURATION`, `RATE`, `KILL_EVERY`, `CHAOS_TEMPORAL`, `STORE_KIND`, `EVENT_STYLE=1`) | chaos experiment: kill/restart coordinators and workers under load, verify no loss / double apply / reordering (event style: handlers, keyed state, chained events) |
 | `scripts/db-load.sh` (`TRACE_SAMPLE`, `RATE`, `DURATION`) | database statements per event from `pg_stat_statements` (Postgres only) |
+| `scripts/legend-lite.sh check` | every `.pure` model set compiles in legend-lite (real Pure semantics), and the generated store layer of each deployable set of sink roots compiles and plans on DuckDB and ClickHouse |
+| `scripts/legend-lite.sh store [--models d,d] [--roots …]` | print the generated Legend store layer (Database / Mapping / Connection / Runtime) |
 | `./gradlew build` | everything, including the Docker-based end-to-end tests |
 | `./gradlew :integration-tests:test -Pbench --tests '*LatencyBench' -Dbench.rates=100,500,1000` | latency benchmark (`-Dbench.seconds=N`); also `*ScalingBench` |
 
@@ -406,6 +410,46 @@ the root table is always `plural(snake(smType))`. Generated ecosystems append th
 
 Memory caps: ClickHouse 2 GiB (1.5 GiB server limit), Deephaven `-Xmx1g` (2 GiB limit), and 256 MiB each
 for sink-clickhouse and marketdata-sim.
+
+## Model queries (legend-lite)
+
+The trace UI's **Model** tab runs Legend Pure queries over the concert models against the analytics stores, e.g.
+
+```
+demo::order::Order.all()->filter(o|$o.status == demo::order::OrderStatus.DELIVERED)
+  ->project([o|$o.orderId, o|$o.total.amount, o|$o.lines.sku], ['orderId', 'total', 'sku'])
+  ->sort([desc('total')])->take(10)
+```
+
+* **The store layer is generated**, from the same `SchemaSpec` the sinks build their tables from
+  (`analytics/legend-model`, `LegendStoreGenerator`), so it can't drift from the tables: per store a
+  **one** `###Relational` Database `concert::store::Sink` (every table and column, including system columns) and
+  **one** `###Mapping` (root and child classes onto their tables, value classes as embedded mappings over the
+  flattened columns, enums by name, child tables as association mappings), plus a Connection and a Runtime per
+  store (`concert::runtime::DuckDb`, `concert::runtime::ClickHouse`): the runtime alone picks the store, so every
+  query runs unchanged on both. System columns (`entity_version`, `sm_state`, `created_at`, …) and event
+  lifecycle columns are not model properties; reach them with table access
+  `#>{concert::store::Sink.orders_latest}#->groupBy(~sm_state, ~n: x|$x.entity_id : y|$y->count())`.
+* **legend-lite only plans**: the trace UI sends it the profile, the `.pure` files the DuckDB sink loaded
+  (`GET :8090/models`, so deployed ecosystems are included) and the generated layer; it returns one SQL
+  statement per store. **concert runs it** read-only: DuckDB through the sink's `/query`, ClickHouse as `readonly`.
+* **`<root>_latest` views, in both stores**: sink-clickhouse creates `SELECT * FROM <root> FINAL` (one row per
+  entity, so generated SQL never double-counts versions; child tables are already views over `<root> FINAL`),
+  and sink-duckdb creates the same name over its table (already one row per entity). The store layer reads
+  roots through them, which is what lets one Database serve both stores.
+* The example queries (latest rows, by state, completion time by state, completions per minute, latest versions,
+  by an enum, through an association) are all Legend, generated per root, and each runs on both stores.
+* Results are tabular (TDS / Relation API: `project`, `groupBy`, `filter`, `sort`, joins through associations);
+  graph fetch isn't supported. Deephaven isn't a query target: its tables come from the same snapshots topic.
+* **Legend Studio Lite** (`legend-studio`, http://localhost:8200, level 0: its compiler and SDLC run in the browser
+  as WebAssembly, projects live in that browser). **Legend Studio ↗** (on each flow page, and on the Model tab) opens concert's project
+  read-only: the current models plus the generated store layer, one element per file and fully qualified (Studio
+  keeps one element per file and refuses imports; `StudioProject`), served by the trace UI as Studio's demo
+  `projects/`. The first time in a browser the link publishes it (the "Load demo projects" button, driven by a
+  small add-on, `infra/legend-lite/concert-open.js`); a changed model is a new project (`Concert models (<hash>)`).
+* legend-lite is [neema2/legend-lite](https://github.com/neema2/legend-lite), pinned (`LEGEND_LITE_REF` in
+  `docker-compose.yml`) and built with Bazel in `infra/legend-lite/Dockerfile`. Moving the pin: rebuild, then
+  `scripts/legend-lite.sh check`.
 
 ## Reconciliation, dead letters and metrics
 
@@ -553,6 +597,7 @@ redo more (idempotent) work when a process merely pauses.
 | `LOCK_IDLE_SECONDS` | `600` | how long an idle lock workflow stays warm |
 | `DIRECT_SM_TYPES` | — | types allowed to bypass locks (only if they never share keys) |
 | `DEDUPE_TTL_HOURS` | `24` | |
+| `MD_AUTOSTART` | `true` | marketdata-sim: `false` starts it paused (start it from a flow's Deephaven page or `POST :8091/start?rate=N`) |
 | `KAFKA_BOOTSTRAP` | — | workers: publish snapshots (unset: logged, not delivered, no reconcile schedule); sinks/trace UI: Kafka |
 | `SINK_DUCKDB_URL` | `http://localhost:8090` (`http://sink-duckdb:8090` in compose) | workers (reconciliation) and trace UI → DuckDB sink |
 | `RECONCILE_SCHEDULE` / `RECONCILE_INTERVAL_MINUTES` | `true` / `60` | typed workers create Schedule `reconcile-<smType>` (only with Kafka) |
@@ -613,11 +658,12 @@ Modules are grouped in directories. Gradle project names stay flat (`./gradlew :
 | | `store` | `StateStore` + provider SPI, JDBC backend (Postgres / Aurora DSQL), async `TraceWriter`, contract tests |
 | | `store-dynamo` | DynamoDB backend |
 | | `store-spanner` | Cloud Spanner backend |
-| | `trace-ui` | trace UI: entity traces, state/model diagrams, Analytics proxy, pipeline strip, reconcile trigger |
+| | `trace-ui` | trace UI: flow pipeline view (`FlowMetrics`, `KinesisTail`), entity traces, state/model diagrams, Analytics proxy, pipeline strip, reconcile trigger |
 | `analytics/` | `sink-core` | `EntitySnapshot` + Kafka codec/producer, `SinkTarget` SPI, `SnapshotConsumerLoop` (DLQ), `SinkMetrics`, `SchemaMapper` |
 | | `sink-duckdb` | Kafka → DuckDB sink; read-only `/query`, `/tables`, `/samples`, `/versions`, `/health`, `/metrics`; offline `DuckDbAdmin` |
 | | `sink-clickhouse` | one-shot ClickHouse provisioner (Kafka engine, views generated from the models, trading analytics views) |
-| | `marketdata-sim` | reference data, ticks and bars straight to Kafka (no concert) |
+| | `marketdata-sim` | reference data, ticks and bars straight to Kafka (no concert); start / stop / rate control on :8091 |
+| | `legend-model` | the Legend store layer (Database / Mapping / Connection / Runtime as Pure) generated from the sink schema, for legend-lite model queries |
 | `showcases/` | `sample-workers` | `order`, `payment`, `shipment`, `ledger` machines; `SM_TYPE=order ./gradlew :sample-workers:run` |
 | | `trading` | the four `trading_*` machines + order-flow generator ([README](showcases/trading/README.md)) |
 | | `tools` | `tools loadgen` / `tools verify` (chaos and DB-load scripts) |

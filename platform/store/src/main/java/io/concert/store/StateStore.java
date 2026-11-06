@@ -58,6 +58,15 @@ public interface StateStore extends AutoCloseable {
     List<TraceRow> recentEvents(int limit);
 
     /**
+     * Trace rows of every stage at or after {@code sinceMillis}, newest first, at most {@code limit}; the
+     * trace UI's flow metrics aggregate them per flow. The default serves only terminal rows (from
+     * {@link #recentEvents}), for stores that index nothing else by time.
+     */
+    default List<TraceRow> tracesSince(long sinceMillis, int limit) {
+        return recentEvents(limit).stream().filter(t -> t.tsMillis() >= sinceMillis).toList();
+    }
+
+    /**
      * Deletes dedupe rows older than the cutoff and returns how many. Stores with native expiry
      * (DynamoDB TTL) may return 0 and let the database do it.
      */

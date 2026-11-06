@@ -196,4 +196,31 @@ class SchemaMapperTest {
         assertEquals("O1", byName.get("order_id"));
         assertEquals("[\"customer:C1\",\"order:O1\"]", byName.get("lock_keys"));
     }
+
+    /** A generated copy of a core model (same shapes plus concert annotations) maps onto the core classes. */
+    @Test
+    void identicalDuplicatesInALaterDirectoryAreSkipped() {
+        Path core = Path.of(System.getProperty("concert.tradingModelsDir"));
+        Path gen = core.resolveSibling("../../../../showcases/trading-gen/src/main/pure").normalize();
+        SchemaMapper.LoadedModels loaded = SchemaMapper.load(List.of(core, gen));
+        assertEquals(5, loaded.skipped().size(), "every trading-gen file duplicates the core trading model: " + loaded.skipped());
+        assertTrue(loaded.files().stream().allMatch(f -> f.startsWith(core)));
+        SchemaSpec spec = new SchemaMapper(loaded.model()).map(SchemaMapper.parseRoots(
+                "trading_order:trading::order::Order,gen_trading_order:trading::order::Order"));
+        assertTrue(spec.rootFor("gen_trading_order").isPresent());
+        assertEquals("gen_trading_orders", spec.rootFor("gen_trading_order").orElseThrow().name());
+    }
+
+    /** A duplicate with a different shape is still an error. */
+    @Test
+    void conflictingDuplicatesStillFail(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
+        Path a = java.nio.file.Files.createDirectories(tmp.resolve("a"));
+        Path b = java.nio.file.Files.createDirectories(tmp.resolve("b"));
+        java.nio.file.Files.writeString(a.resolve("m.pure"), "Class x::A { id: String[1]; }");
+        java.nio.file.Files.writeString(b.resolve("m.pure"), "Class x::A { id: Integer[1]; }");
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> SchemaMapper.load(List.of(a, b)));
+        java.nio.file.Files.writeString(b.resolve("m.pure"), "Class <<x::P.t>> x::A { id: String[1]; }\nProfile x::P { stereotypes: [t]; }");
+        org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> SchemaMapper.load(List.of(a, b)),
+                "a file that also declares something new isn't redundant");
+    }
 }

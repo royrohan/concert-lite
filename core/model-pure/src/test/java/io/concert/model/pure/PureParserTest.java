@@ -121,6 +121,17 @@ class PureParserTest {
         assertTrue(many.isToMany() && many.isRequired() && !many.isToOne());
     }
 
+    /** Pure's decimal literal suffix (as real Pure requires on a Decimal default): {@code 0.0D}, {@code 1D}. */
+    @Test
+    void decimalLiteralSuffix() {
+        PureModel m = PureParser.parse("Class a::A { x: Decimal[1] = 0.25D; y: Decimal[1] = 1D; z: Decimal[1] = -0.5d; n: Integer[0..1]; }", "d.pure");
+        ClassDef a = m.findClass("a::A").orElseThrow();
+        assertEquals(new FloatLit(0.25), a.properties().stream().filter(x -> x.name().equals("x")).findFirst().orElseThrow().defaultValue());
+        assertEquals(new FloatLit(1.0), a.properties().stream().filter(x -> x.name().equals("y")).findFirst().orElseThrow().defaultValue());
+        assertEquals(new FloatLit(-0.5), a.properties().stream().filter(x -> x.name().equals("z")).findFirst().orElseThrow().defaultValue());
+        assertEquals(new Multiplicity(0, 1), a.properties().stream().filter(x -> x.name().equals("n")).findFirst().orElseThrow().multiplicity());
+    }
+
     @Test
     void defaultsOfEveryLiteralKind() {
         ClassDef o = cls("shop::domain::Order");

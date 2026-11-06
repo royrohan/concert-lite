@@ -230,6 +230,20 @@ public abstract class StateStoreContract {
         assertFalse(recent.stream().anyMatch(r -> r.stage() == Stage.RECEIVED));
     }
 
+    @Test
+    void tracesSinceIsAWindowNewestFirst() {
+        long t = now() + 120_000; // newer than rows other tests wrote
+        store().appendTrace(List.of(
+                new TraceRow(p + "w0", t - 10_000, Stage.DONE, "x:1", null, null),
+                new TraceRow(p + "w1", t, Stage.DONE, "x:1", null, null),
+                new TraceRow(p + "w2", t + 1, Stage.RECEIVED, "x:1", null, null),
+                new TraceRow(p + "w3", t + 2, Stage.FAILED, "x:1", null, "boom")));
+        List<String> ids = store().tracesSince(t, 100).stream().map(TraceRow::eventId)
+                .filter(id -> id.startsWith(p)).filter(id -> !id.equals(p + "w2")).toList();
+        // RECEIVED (w2) is served by stores that index every stage by time; terminal rows by all.
+        assertEquals(List.of(p + "w3", p + "w1"), ids);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static long now() {

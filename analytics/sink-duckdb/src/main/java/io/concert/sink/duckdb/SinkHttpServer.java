@@ -33,6 +33,8 @@ import java.util.function.Supplier;
  *                (read-only; for reconciliation; table null when the smType is not a sink root; max 5000 ids)
  * GET  /health   consumer and apply counters (incl. dead-lettered records), stored offsets
  * GET  /metrics  the same counters, batch latency p50 / p99 and lag in Prometheus text format
+ * GET  /models   the .pure files the model was built from (MODELS_DIR, top level, identical duplicates skipped) and SINK_ROOTS:
+ *                {roots, files: [{name, text}]}; the trace UI generates its Legend store layer from them
  * </pre>
  *
  * There is no endpoint that writes: the consumer loop is the only writer of the database.
@@ -48,6 +50,15 @@ public final class SinkHttpServer implements AutoCloseable {
     private final Supplier<SnapshotConsumerLoop.Stats> consumerStats;
     private final SinkMetrics metrics;
     private HttpServer server;
+    private List<java.nio.file.Path> modelFiles;
+    private String roots;
+
+    /** What {@code GET /models} serves: the .pure files the model was built from and the SINK_ROOTS form. */
+    public SinkHttpServer withModels(List<java.nio.file.Path> modelFiles, String roots) {
+        this.modelFiles = List.copyOf(modelFiles);
+        this.roots = roots;
+        return this;
+    }
 
     /** @param consumerStats the consumer loop's counters, or {@code null} if none runs */
     public SinkHttpServer(DuckDbTarget db, ReadOnlyQueries queries, Supplier<SnapshotConsumerLoop.Stats> consumerStats) {
@@ -76,6 +87,13 @@ public final class SinkHttpServer implements AutoCloseable {
         server.createContext("/health", ex -> respond(ex, 200, health()));
         server.createContext("/versions", this::versions);
         server.createContext("/metrics", this::metrics);
+        server.createContext("/models", ex -> {
+            try {
+                respond(ex, 200, models());
+            } catch (IOException | RuntimeException e) {
+                respond(ex, 500, Map.of("error", String.valueOf(e.getMessage())));
+            }
+        });
         server.start();
         return this;
     }
@@ -189,9 +207,12 @@ public final class SinkHttpServer implements AutoCloseable {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("name", name);
                     TableSpec spec = db.schema() == null ? null : db.schema().table(name).orElse(null);
-                    m.put("kind", spec == null ? "system" : spec.kind().name().toLowerCase(Locale.ROOT));
-                    m.put("smType", spec == null ? null : spec.smType());
-                    m.put("parent", spec == null ? null : spec.parent());
+                    TableSpec latestOf = spec != null || db.schema() == null || !name.endsWith(DuckDbTarget.LATEST) ? null
+                            : db.schema().table(name.substring(0, name.length() - DuckDbTarget.LATEST.length()))
+                                    .filter(r -> r.kind() == TableSpec.Kind.ROOT).orElse(null);
+                    m.put("kind", latestOf != null ? "latest" : spec == null ? "system" : spec.kind().name().toLowerCase(Locale.ROOT));
+                    m.put("smType", latestOf != null ? latestOf.smType() : spec == null ? null : spec.smType());
+                    m.put("parent", latestOf != null ? latestOf.name() : spec == null ? null : spec.parent());
                     m.put("columns", new ArrayList<Map<String, String>>());
                     return m;
                 });
@@ -221,6 +242,17 @@ public final class SinkHttpServer implements AutoCloseable {
                 .forEach(e -> offsets.put(e.getKey().toString(), e.getValue()));
         out.put("storedOffsets", offsets);
         return out;
+    }
+
+    Map<String, Object> models() throws IOException {
+        if (modelFiles == null) {
+            return Map.of("error", "models not configured");
+        }
+        List<Map<String, String>> files = new ArrayList<>();
+        for (java.nio.file.Path f : modelFiles) {
+            files.add(Map.of("name", f.getParent().getFileName() + "/" + f.getFileName(), "text", java.nio.file.Files.readString(f)));
+        }
+        return Map.of("roots", roots == null ? "" : roots, "files", files);
     }
 
     private static void respond(HttpExchange ex, int status, Object body) throws IOException {

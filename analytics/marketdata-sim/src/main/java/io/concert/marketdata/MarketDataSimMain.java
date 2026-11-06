@@ -13,7 +13,8 @@ import java.util.Map;
  * </pre>
  *
  * Each option falls back to an env var (TICK_RATE, SEED, SYMBOLS, ACCOUNTS, VOL_MULT, DURATION_SEC,
- * BARS=false); KAFKA_BOOTSTRAP (default {@code localhost:9092}) and TOPIC_REPLICATION (default 1) are
+ * BARS=false). A control endpoint on CONTROL_PORT (default 8091; 0 turns it off) starts and stops the ticks:
+ * {@code GET /status}, {@code POST /start?rate=N}, {@code POST /stop}; AUTOSTART=false starts paused; KAFKA_BOOTSTRAP (default {@code localhost:9092}) and TOPIC_REPLICATION (default 1) are
  * env only. {@code --dry-run} prints a sample of each topic to stdout on a virtual clock instead of
  * connecting to Kafka. Use the same seed and vol-mult as the trading generator so fills line up with
  * ticks.
@@ -22,6 +23,18 @@ public final class MarketDataSimMain {
     private MarketDataSimMain() {}
 
     public static void main(String[] args) throws Exception {
+        try {
+            run(args);
+        } catch (Throwable t) {
+            // The control endpoint's threads would keep the JVM alive with the ticks dead; exit so the container's
+            // restart policy brings the simulator back (e.g. after Kafka was unavailable for too long).
+            t.printStackTrace();
+            System.exit(1);
+        }
+        System.exit(0); // done (DURATION_SEC elapsed): don't linger on the control endpoint
+    }
+
+    private static void run(String[] args) throws Exception {
         Map<String, String> o = parse(args);
         MarketDataSim.Config config = new MarketDataSim.Config(
                 Long.parseLong(opt(o, "seed", "SEED", String.valueOf(PriceModel.DEFAULT_SEED))),
@@ -45,6 +58,11 @@ public final class MarketDataSimMain {
                     bootstrap, sim.instruments().size(), sim.universe().accounts().size(), sim.universe().venues().size(),
                     config.tickRate(), config.seed());
             long deadline = durationSec > 0 ? System.currentTimeMillis() + durationSec * 1000 : Long.MAX_VALUE;
+            MarketDataSim.Control control = new MarketDataSim.Control(Boolean.parseBoolean(env("AUTOSTART", "true")), config.tickRate());
+            int port = Integer.parseInt(env("CONTROL_PORT", "8091"));
+            if (port > 0) {
+                ControlServer.start(port, sim, control);
+            }
             long[] nextLog = {System.currentTimeMillis() + 10_000};
             sim.runRealtime(System::currentTimeMillis, () -> {
                 long now = System.currentTimeMillis();
@@ -53,7 +71,7 @@ public final class MarketDataSimMain {
                     System.out.printf("[marketdata-sim] %d ticks, %d bars%n", sim.ticksSent(), sim.barsSent());
                 }
                 return now < deadline && !Thread.currentThread().isInterrupted();
-            });
+            }, control);
             System.out.printf("[marketdata-sim] done: %d ticks, %d bars%n", sim.ticksSent(), sim.barsSent());
         }
     }

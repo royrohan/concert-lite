@@ -105,6 +105,11 @@ public final class DuckDbTarget implements SinkTarget {
                     st.execute("ALTER TABLE " + q(t.name()) + " ADD COLUMN IF NOT EXISTS " + q(c.name()) + " " + sqlType(c.type()));
                 }
             }
+            // <root>_latest: the same name ClickHouse gives its deduplicated view (<root> FINAL), so one Legend store
+            // layer (analytics/legend-model) serves both stores. Here the table already holds one row per entity.
+            for (TableSpec t : spec.roots()) {
+                st.execute(latestView(t));
+            }
             st.execute("CREATE TABLE IF NOT EXISTS " + OFFSETS_TABLE + " (topic VARCHAR NOT NULL, \"partition\" INTEGER NOT NULL,"
                     + " next_offset BIGINT NOT NULL, updated_at TIMESTAMPTZ, PRIMARY KEY (topic, \"partition\"))");
         } catch (SQLException e) {
@@ -112,6 +117,13 @@ public final class DuckDbTarget implements SinkTarget {
         }
         schema = spec;
         log.info("DuckDB tables: {}", spec.tables().stream().map(TableSpec::name).toList());
+    }
+
+    /** Suffix of a root's one-row-per-entity view (as in ClickHouse). */
+    public static final String LATEST = "_latest";
+
+    static String latestView(TableSpec root) {
+        return "CREATE OR REPLACE VIEW " + q(root.name() + LATEST) + " AS SELECT * FROM " + q(root.name());
     }
 
     static String createTable(TableSpec t) {

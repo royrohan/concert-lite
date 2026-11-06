@@ -26,6 +26,8 @@ val modules = linkedMapOf(
     "sink-duckdb" to "analytics",
     "sink-clickhouse" to "analytics",
     "marketdata-sim" to "analytics",
+    // the Legend store layer (Database / Mapping / Runtime as Pure) of the sinks, for legend-lite model queries
+    "legend-model" to "analytics",
     // showcases: sample and trading state machines, load generators and verification tools
     "sample-workers" to "showcases",
     "trading" to "showcases",

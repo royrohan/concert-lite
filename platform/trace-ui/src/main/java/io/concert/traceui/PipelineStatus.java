@@ -134,6 +134,26 @@ final class PipelineStatus implements AutoCloseable {
         return out;
     }
 
+    /** Sum of the latest offsets of {@code topic}'s partitions (records ever written), or -1 if Kafka is unreachable. */
+    long endOffsets(String topic) {
+        if (bootstrap == null || bootstrap.isBlank()) {
+            return -1;
+        }
+        try {
+            Admin a = admin();
+            var desc = a.describeTopics(List.of(topic)).allTopicNames().get(5, TimeUnit.SECONDS).get(topic);
+            Map<TopicPartition, OffsetSpec> req = new HashMap<>();
+            desc.partitions().forEach(p -> req.put(new TopicPartition(topic, p.partition()), OffsetSpec.latest()));
+            return a.listOffsets(req).all().get(5, TimeUnit.SECONDS).values().stream()
+                    .mapToLong(ListOffsetsResult.ListOffsetsResultInfo::offset).sum();
+        } catch (ExecutionException | TimeoutException e) {
+            return -1;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return -1;
+        }
+    }
+
     static String target(String group) {
         if (group.startsWith("sink-clickhouse")) {
             return "clickhouse";

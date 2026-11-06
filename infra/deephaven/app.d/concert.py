@@ -19,9 +19,10 @@ import json
 import os
 from typing import Optional
 
-from deephaven import agg
+from deephaven import agg, time_table
 from deephaven import dtypes as dht
 from deephaven.appmode import ApplicationState, get_app_state
+from deephaven.plot.figure import Figure
 from deephaven.stream.kafka import consumer as kc
 
 KAFKA = {"bootstrap.servers": os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")}
@@ -207,6 +208,47 @@ quotes_with_sector = quotes_latest.natural_join(instruments, on=["Symbol"], join
 sector_moves = quotes_with_sector.agg_by([agg.count_("Symbols"), agg.avg(["AvgMoveVsRefPct = MoveVsRefPct"])], by=["Sector"]) \
     .sort_descending(["AvgMoveVsRefPct"])
 
+# ------------------------------------------------------------------ order basket x market data
+# A randomized basket of orders over the instrument universe, marked to the live mid: what the basket is worth right
+# now, ticking with every quote. Membership, side and size (whole lots) are a pure function of BASKET_SEED and the
+# symbol, so the basket is the same after a restart and fills in as the instruments stream in (no snapshot timing).
+# BASKET_SEED / BASKET_PCT (env, on the deephaven service) pick another basket; notebook 06_order_basket.py builds
+# your own in the IDE.
+BASKET_SEED = int(os.environ.get("BASKET_SEED", "7"))
+BASKET_PCT = int(os.environ.get("BASKET_PCT", "40"))  # share of the universe in the basket, percent
+
+basket_orders = instruments \
+    .update(["BasketHash = Math.abs(Symbol.hashCode() * 2654435761L + BASKET_SEED * 40503L)"]) \
+    .where("BasketHash % 100 < BASKET_PCT") \
+    .view(["OrderId = `BSK-` + Symbol", "Symbol", "Name", "Sector", "Currency",
+           # floorDiv: '/' on integers is a double in Deephaven formulas
+           "Side = Math.floorDiv(BasketHash, 100L) % 3 == 0 ? `SELL` : `BUY`",
+           "Quantity = (Math.floorDiv(BasketHash, 300L) % 20 + 1) * LotSize", "RefPrice"]) \
+    .sort(["Symbol"])
+
+# natural_join to the latest quote: every tick of a basket symbol re-marks its order (and the totals below).
+basket_positions = basket_orders \
+    .natural_join(quotes_latest, on=["Symbol"], joins=["Bid", "Ask", "Mid", "QuoteTs = Ts"]) \
+    .update(["SignedQty = Side == `BUY` ? Quantity : -Quantity",
+             "MarketValue = SignedQty * Mid",      # net: buys add, sells subtract
+             "GrossValue = Quantity * Mid",
+             "PnlVsRef = SignedQty * (Mid - RefPrice)",
+             "MoveVsRefPct = (Mid - RefPrice) / RefPrice * 100"])
+
+# Totals per currency (values aren't converted; today's universe is all USD).
+_basket_sums = [agg.count_("Orders"), agg.sum_(["NetMarketValue = MarketValue", "GrossMarketValue = GrossValue", "PnlVsRef"])]
+basket_value = basket_positions.agg_by(_basket_sums + [agg.max_(["AsOf = QuoteTs"])], by=["Currency"])
+basket_by_sector = basket_positions.agg_by(_basket_sums, by=["Currency", "Sector"]).sort_descending(["GrossMarketValue"])
+basket_by_side = basket_positions.agg_by(_basket_sums, by=["Currency", "Side"])
+
+# The total every second (history), and a ticking chart of its last 30 minutes.
+basket_value_history = basket_value.snapshot_when(time_table("PT1s"), history=True)  # adds the trigger's Timestamp
+basket_value_chart = Figure() \
+    .plot_xy(series_name="net market value", t=basket_value_history.tail(1800), x="Timestamp", y="NetMarketValue") \
+    .plot_xy(series_name="P&L vs ref", t=basket_value_history.tail(1800), x="Timestamp", y="PnlVsRef") \
+    .chart_title(title="Order basket marked to market (live mid)") \
+    .show()
+
 # ------------------------------------------------------------------ trading (concert path) x market data
 # The trading aggregates as completed snapshots: one consume of entity-snapshots reading each root's
 # fields out of the model with JSON pointers (/model/<field>), latest version per entity, one table per
@@ -330,6 +372,9 @@ APP_FIELDS = {
     "instruments": instruments, "accounts": accounts, "venues": venues,
     "ticks": ticks, "quotes_latest": quotes_latest, "bars_1m": bars_1m,
     "vwap_by_symbol": vwap_by_symbol, "quotes_with_sector": quotes_with_sector, "sector_moves": sector_moves,
+    "basket_orders": basket_orders, "basket_positions": basket_positions, "basket_value": basket_value,
+    "basket_by_sector": basket_by_sector, "basket_by_side": basket_by_side, "basket_value_history": basket_value_history,
+    "basket_value_chart": basket_value_chart,
     "trading_orders": trading_orders, "trading_executions": trading_executions, "trading_fills": trading_fills,
     "trading_allocations": trading_allocations, "fill_slippage": fill_slippage, "slippage_by_venue": slippage_by_venue,
     "vwap_vs_arrival": vwap_vs_arrival, "fill_vwap_by_symbol": fill_vwap_by_symbol,

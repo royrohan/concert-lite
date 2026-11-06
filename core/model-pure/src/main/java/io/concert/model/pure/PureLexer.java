@@ -176,7 +176,14 @@ public final class PureLexer {
                 col = saveCol;
             }
         }
-        add(type, src.substring(start, pos), start, startLine, startCol);
+        String text = src.substring(start, pos);
+        // Pure's decimal literal: 1.5D / 1D. The value is the same number; the suffix only says "Decimal".
+        if (pos < src.length() && (src.charAt(pos) == 'D' || src.charAt(pos) == 'd')
+                && !(pos + 1 < src.length() && Character.isJavaIdentifierPart(src.charAt(pos + 1)))) {
+            advance();
+            type = TokenType.FLOAT;
+        }
+        add(type, text, start, startLine, startCol);
     }
 
     private void digits() {

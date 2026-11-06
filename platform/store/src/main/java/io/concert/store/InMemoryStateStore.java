@@ -36,6 +36,12 @@ public final class InMemoryStateStore implements StateStore {
     }
 
     @Override
+    public List<TraceRow> tracesSince(long sinceMillis, int limit) {
+        return traces.stream().filter(t -> t.tsMillis() >= sinceMillis)
+                .sorted(Comparator.comparingLong(TraceRow::tsMillis).reversed()).limit(limit).toList();
+    }
+
+    @Override
     public List<SmStateRow> scanStates(String workflowIdPrefix) {
         return states.values().stream().filter(r -> r.workflowId().startsWith(workflowIdPrefix)).toList();
     }

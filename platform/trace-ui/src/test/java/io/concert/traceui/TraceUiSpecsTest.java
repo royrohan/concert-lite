@@ -20,6 +20,8 @@ class TraceUiSpecsTest {
         assertTrue(TraceUiMain.MODEL_DIAGRAMS.get("trading_fill").startsWith("classDiagram"));
         assertTrue(TraceUiMain.DEEPHAVEN_WIDGETS.contains("account_pnl"));
         assertTrue(TraceUiMain.DEEPHAVEN_NOTEBOOKS.contains("05_trading_pnl.py"));
+        assertTrue(TraceUiMain.DEEPHAVEN_WIDGETS.contains("basket_value_chart"));
+        assertTrue(TraceUiMain.DEEPHAVEN_NOTEBOOKS.contains("06_order_basket.py"));
     }
 
     /** Generated ecosystems are found through the MachineCatalog SPI: no trace UI edit per ecosystem. */

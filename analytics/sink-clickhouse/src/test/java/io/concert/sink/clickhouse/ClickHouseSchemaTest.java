@@ -78,6 +78,17 @@ class ClickHouseSchemaTest {
         assertTrue(byName.containsKey("payment_entries") && byName.containsKey("shipment_parcels"));
     }
 
+    /** One deduplicated view per root, for readers that can't add FINAL (legend-lite's generated SQL). */
+    @Test
+    void latestViewsReadEachRootFinal() {
+        Ddl.View v = (Ddl.View) byName.get("orders_latest");
+        assertEquals("SELECT *\nFROM orders FINAL", v.select());
+        assertEquals("concert latest order orders", v.comment());
+        assertTrue(byName.containsKey("payments_latest") && byName.containsKey("shipments_latest"));
+        // created after the root table it reads
+        assertTrue(ddl.indexOf(byName.get("orders")) < ddl.indexOf(v));
+    }
+
     @Test
     void queueReadsTheModelAsRawJsonAndStreamsErrors() {
         String q = ((Ddl.Queue) byName.get("entity_snapshots_queue")).create();

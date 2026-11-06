@@ -53,6 +53,7 @@ x-app-deps: &app-deps
 services:
   localstack:
     image: localstack/localstack:4.12
+    restart: unless-stopped   # core infra: a crash (e.g. an OOM kill) must not leave the platform down
     ports: ["4566:4566"]
     environment:
       SERVICES: kinesis,dynamodb
@@ -68,6 +69,7 @@ services:
   dsql:
     profiles: [postgres]
     image: postgres:16
+    restart: unless-stopped   # core infra: a crash (e.g. an OOM kill) must not leave the platform down
     ports: ["5433:5432"]
     environment:
       POSTGRES_USER: concert
@@ -85,6 +87,7 @@ services:
 
   temporal-db:
     image: postgres:16
+    restart: unless-stopped   # core infra: a crash (e.g. an OOM kill) must not leave the platform down
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal
@@ -96,6 +99,7 @@ services:
 
   temporal:
     image: temporalio/auto-setup:1.29.7
+    restart: unless-stopped   # core infra: a crash (e.g. an OOM kill) must not leave the platform down
     depends_on:
       temporal-db: { condition: service_healthy }
     ports: ["7233:7233"]
@@ -127,6 +131,7 @@ services:
 
   temporal-ui:
     image: temporalio/ui:2.55.0
+    restart: unless-stopped   # core infra: a crash (e.g. an OOM kill) must not leave the platform down
     depends_on: [temporal]
     ports: ["8080:8080"]
     environment:
@@ -222,6 +227,9 @@ services:
       DEEPHAVEN_PSK: ${DEEPHAVEN_PSK:-concert}
       REDPANDA_CONSOLE_URL: http://redpanda-console:8080
       REDPANDA_CONSOLE_PUBLIC_URL: http://localhost:8081
+      MARKETDATA_URL: http://marketdata-sim:8091   # "simulate market data" (marketdata-sim's control endpoint)
+      LEGEND_LITE_URL: http://legend-lite:8095     # Model query tab: plans Pure queries as SQL (profile analytics)
+      LEGEND_STUDIO_PUBLIC_URL: http://localhost:8200   # "Open in Legend Studio" link (legend-studio, level 0)
     restart: unless-stopped
 
   # ---------------------------------------------------------------- analytics (profile "analytics")
@@ -248,6 +256,8 @@ services:
       KAFKA_HEAP_OPTS: -Xmx384m -Xms384m
     volumes:
       - kafka-data:/var/lib/kafka/data
+    # deephaven / marketdata-sim / sinks come back on daemon restart; Kafka must too or they crash-loop.
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 5s
@@ -333,6 +343,9 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
       TICK_RATE: ${MD_TICK_RATE:-200}
+      # Control endpoint (trace UI › flow › Deephaven: start / stop / rate). MD_AUTOSTART=false starts paused.
+      CONTROL_PORT: 8091
+      AUTOSTART: ${MD_AUTOSTART:-true}
       SEED: ${TRADING_SEED:-42}
       VOL_MULT: ${TRADING_VOL_MULT:-4}
       JAVA_OPTS: -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=50
@@ -355,6 +368,40 @@ services:
     depends_on:
       kafka-init: { condition: service_completed_successfully }
     deploy: { resources: { limits: { memory: 2g } } }
+    restart: unless-stopped
+
+  # Model query planner: legend-lite (github.com/neema2/legend-lite) pinned to one commit and built from source
+  # (infra/legend-lite/Dockerfile; the first build takes a while). The trace UI sends it the concert models plus the
+  # Legend store layer generated from the sinks' schema and gets SQL back; concert runs that SQL on DuckDB /
+  # ClickHouse itself. Host port 8095 (8080 is the Temporal UI).
+  legend-lite:
+    profiles: [analytics]
+    build:
+      context: infra/legend-lite
+      target: server
+      args: { LEGEND_LITE_REF: "${LEGEND_LITE_REF:-42b43f3cc82d478fc2f70d18682407b27e978efa}" }
+    image: concert-temporal/legend-lite
+    # Loopback-only on the host: legend-lite runs a model's connection setup, so it must not face the network. Inside
+    # compose it listens on all interfaces (LEGEND_LITE_BIND) for the trace UI; browsers never call it (no Origin).
+    ports: ["127.0.0.1:8095:8095"]
+    environment:
+      LEGEND_LITE_BIND: 0.0.0.0
+      JAVA_OPTS: -XX:+UseZGC -XX:MaxRAMPercentage=60
+    deploy: { resources: { limits: { memory: 1g } } }
+    restart: unless-stopped
+
+  # Legend Studio Lite (level 0) from the same pinned build: a static site whose compiler and SDLC run in the browser
+  # (projects live in that browser's storage). "Load demo projects" publishes concert's current models plus the
+  # generated store layer (its projects/ are proxied to the trace UI). http://localhost:8200; loopback only.
+  legend-studio:
+    profiles: [analytics]
+    build:
+      context: infra/legend-lite
+      target: studio
+      args: { LEGEND_LITE_REF: "${LEGEND_LITE_REF:-42b43f3cc82d478fc2f70d18682407b27e978efa}" }
+    image: concert-temporal/legend-studio
+    ports: ["127.0.0.1:8200:8200"]
+    deploy: { resources: { limits: { memory: 128m } } }
     restart: unless-stopped
 
   redpanda-console:

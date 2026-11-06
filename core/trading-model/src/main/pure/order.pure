@@ -55,8 +55,8 @@ Class trading::order::Order
   avgPx: Decimal[0..1];
   // Mid at order arrival: the benchmark for implementation shortfall.
   arrivalPx: Decimal[0..1];
-  notional: Decimal[1] = 0.0;
-  totalFees: Decimal[1] = 0.0;
+  notional: Decimal[1] = 0.0D;
+  totalFees: Decimal[1] = 0.0D;
   status: OrderStatus[1] = OrderStatus.PENDING_NEW;
   rejectReason: String[0..1];
   cancelReason: String[0..1];
@@ -80,7 +80,7 @@ Class trading::order::Execution
   filledQty: Integer[1] = 0;
   limitPrice: Decimal[0..1];
   avgPx: Decimal[0..1];
-  totalFees: Decimal[1] = 0.0;
+  totalFees: Decimal[1] = 0.0D;
   status: ExecutionStatus[1] = ExecutionStatus.PENDING_NEW;
   routedAt: DateTime[0..1];
   completedAt: DateTime[0..1];

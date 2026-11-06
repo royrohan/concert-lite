@@ -38,6 +38,18 @@ import org.slf4j.LoggerFactory;
  * {@code processed_event} / {@code sm_state} and queries live workflows in Temporal.
  *
  * <pre>
+ * GET /api/flows?window=60       flows by catalog (entity smTypes, event domains) with headline counts
+ * GET /api/flows/{flow}?window=60  per-hop metrics of one flow: publisher, Kinesis, coordinator, worker, Kafka, stores
+ * GET  /api/flows/{flow}/generate                          test-data generator status of the flow
+ * POST /api/flows/{flow}/generate?rate=&duration=&errors=   start it (instances/s, seconds, inject failures)
+ * POST /api/flows/{flow}/generate/stop                     stop it
+ * GET /api/flows/{flow}/temporal?window=300  serial key queues, workflows by status, task queues, ingest consumers
+ * GET /api/flows/{flow}/failures?window=     failures grouped by stage and message (+ event lifecycle errors)
+ * GET  /api/model/info     Model query: legend-lite status, mapped classes (per table) and sample queries
+ * POST /api/model/query    {"query": "<Pure lambda>", "stores": "duckdb,clickhouse"} -> per store {sql, columns, rows, ...}
+ *                          (legend-lite plans the SQL, LEGEND_LITE_URL; concert runs it read-only)
+ * GET  /api/model/store    the generated Legend store layer (Database / Mapping / Connection / Runtime)
+ * GET /api/marketdata/status · POST /api/marketdata/start?rate= · POST /api/marketdata/stop   marketdata-sim control
  * GET /api/recent                 latest finished / dropped events
  * GET /api/events/{eventId}       timeline of one event
  * GET /api/entities/{smType:key}  live state, history, Mermaid state diagram and model class diagram
@@ -79,12 +91,18 @@ public final class TraceUiMain {
     private final String consolePublic = Env.get("REDPANDA_CONSOLE_PUBLIC_URL", "http://localhost:8081");
     private final ReconcileRunner reconcile;
     private final EventsApi events;
+    private final FlowMetrics flows;
+    private final FlowGenerator generator;
+    private final FlowTemporal temporal;
+    private final String marketData = Env.get("MARKETDATA_URL", "http://marketdata-sim:8091");
+    private final ModelQuery model;
 
-    static final List<String> DEEPHAVEN_WIDGETS = List.of("quotes_latest", "vwap_by_symbol", "completions_per_minute",
+    static final List<String> DEEPHAVEN_WIDGETS = List.of("basket_value_chart", "basket_value", "basket_positions", "basket_by_sector",
+            "quotes_latest", "vwap_by_symbol", "completions_per_minute",
             "state_distribution", "completion_latency", "revenue_by_currency", "quotes_with_sector", "orders_latest",
             "account_pnl", "pnl_by_account", "fill_slippage", "slippage_by_venue", "vwap_vs_arrival", "sector_exposure");
     static final List<String> DEEPHAVEN_NOTEBOOKS = List.of("01_live_quotes_and_spreads.py", "02_vwap_and_bars.py",
-            "03_entity_completions.py", "04_slippage_asof.py", "05_trading_pnl.py");
+            "03_entity_completions.py", "04_slippage_asof.py", "05_trading_pnl.py", "06_order_basket.py");
 
     /**
      * Every state machine on the class path, by smType: each module that provides machines implements
@@ -116,6 +134,12 @@ public final class TraceUiMain {
         this.client = client;
         this.reconcile = new ReconcileRunner(client, MACHINES);
         this.events = new EventsApi(client, store);
+        String stream = Env.get("INGEST_STREAM", "concert-events");
+        this.flows = new FlowMetrics(store, client, pipeline, clickHouse, http, sinkDuckDb, deephavenInternal,
+                new KinesisTail(io.concert.orchestration.KinesisClients.fromEnv(), stream), events.types(), events);
+        this.generator = new FlowGenerator(io.concert.orchestration.KinesisClients.fromEnv(), stream);
+        this.temporal = new FlowTemporal(client, temporalUi, stream);
+        this.model = new ModelQuery(Env.get("LEGEND_LITE_URL", "http://legend-lite:8095"), sinkDuckDb, clickHouse, http);
     }
 
     public static void main(String[] args) throws IOException {
@@ -131,6 +155,9 @@ public final class TraceUiMain {
     HttpServer start(int port) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+        server.createContext("/api/flows", this::flows);
+        server.createContext("/api/marketdata/", this::marketData);
+        server.createContext("/api/model/", this::model);
         server.createContext("/api/recent", ex -> json(ex, Map.of("events", store.recentEvents(50))));
         server.createContext("/api/events/", ex -> json(ex, event(tail(ex, "/api/events/"))));
         server.createContext("/api/entities/", ex -> json(ex, entity(tail(ex, "/api/entities/"))));
@@ -144,6 +171,7 @@ public final class TraceUiMain {
         server.createContext("/api/analytics/reconcile", this::reconcile);
         server.createContext("/", this::staticPage);
         server.start();
+        flows.startBackground();
         return server;
     }
 
@@ -282,6 +310,164 @@ public final class TraceUiMain {
             out.put("clickhouse", Map.of("error", "not reachable"));
         }
         return out;
+    }
+
+    /** {@code /api/flows} (landing page) and {@code /api/flows/{flow}} (one flow's pipeline). */
+    private void flows(HttpExchange ex) throws IOException {
+        int window;
+        try {
+            window = Math.max(10, Math.min(KinesisTail.HISTORY_SEC, Integer.parseInt(query(ex).getOrDefault("window", "60"))));
+        } catch (NumberFormatException e) {
+            window = 60;
+        }
+        String rest = tail(ex, "/api/flows");
+        rest = rest.startsWith("/") ? rest.substring(1) : rest;
+        String[] parts = rest.split("/", 2);
+        String id = parts[0];
+        String action = parts.length > 1 ? parts[1] : "";
+        boolean post = ex.getRequestMethod().equals("POST");
+        Map<String, String> q = query(ex);
+        try {
+            if (id.isEmpty()) {
+                json(ex, flows.list(window));
+                return;
+            }
+            switch (action) {
+                case "" -> {
+                    Map<String, Object> view = flows.flowView(id, window);
+                    view.put("generator", generator.status(id));
+                    view.put("legend", model.status());
+                    view.put("studio", model.studioLink());
+                    json(ex, view);
+                }
+                case "generate" -> {
+                    if (!post) {
+                        json(ex, generator.status(id));
+                        return;
+                    }
+                    // Without a worker, every event waits in a dispatch that holds one of the namespace's long-poll
+                    // slots; enough of them starve every other flow's dispatches ("concurrent poller limit exceeded").
+                    Integer pollers = flows.workerPollers(id);
+                    boolean force = Boolean.parseBoolean(q.getOrDefault("force", "false"));
+                    if (pollers == null && !force) {
+                        // Unknown is not "fine": Temporal is down or unreachable, and nothing would dispatch what we publish.
+                        throw new IllegalStateException("Temporal is not reachable (can't see who polls "
+                                + flows.flow(id).taskQueue() + "): generated events would only pile up in Kinesis. "
+                                + "Bring Temporal back first (docker compose ps temporal), or pass force=true.");
+                    }
+                    if (pollers != null && pollers == 0 && !force) {
+                        throw new IllegalStateException("no worker polls " + flows.flow(id).taskQueue() + ": generated events would "
+                                + "wait in Temporal holding dispatch slots and stall the other flows. Start its worker first"
+                                + workerHint(flows.flow(id).group()) + ", or pass force=true.");
+                    }
+                    json(ex, generator.start(id, Double.parseDouble(q.getOrDefault("rate", "2")),
+                            Integer.parseInt(q.getOrDefault("duration", "60")), Boolean.parseBoolean(q.getOrDefault("errors", "false"))));
+                }
+                case "generate/stop" -> json(ex, generator.stop(id));
+                case "temporal" -> json(ex, temporal.view(flows.flow(id), flows.lockKeys(id, window), io.concert.common.TaskQueues.ORCHESTRATION));
+                case "failures" -> json(ex, flows.failures(id, window));
+                case "meta" -> json(ex, flows.meta(id));
+                default -> json(ex, 404, Map.of("error", "unknown flow action " + action));
+            }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            json(ex, 409, Map.of("error", String.valueOf(e.getMessage())));
+        } catch (RuntimeException e) {
+            log.warn("flow metrics failed", e);
+            json(ex, 500, Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /** How to start the worker of a flow's catalog group. */
+    static String workerHint(String group) {
+        return switch (group) {
+            case "samples", "other" -> "";
+            case "trading" -> " (scripts/up.sh <store> --analytics --trading)";
+            default -> " (./deploy-concert-ecosystem " + group + ")";
+        };
+    }
+
+    /** The Model query tab (see {@link ModelQuery}). */
+    private void model(HttpExchange ex) throws IOException {
+        String op = tail(ex, "/api/model/");
+        try {
+            switch (op) {
+                case "info" -> {
+                    String types = query(ex).get("types");
+                    json(ex, types == null || types.isBlank() ? model.info()
+                            : model.info(new java.util.LinkedHashSet<>(List.of(types.split(",")))));
+                }
+                case "query" -> {
+                    if (!ex.getRequestMethod().equals("POST")) {
+                        json(ex, 405, Map.of("error", "POST {\"query\": ..., \"stores\": \"duckdb,clickhouse\"}"));
+                        return;
+                    }
+                    var body = Json.MAPPER.readTree(ex.getRequestBody().readAllBytes());
+                    String q = body.path("query").asText("");
+                    if (q.isBlank()) {
+                        json(ex, 400, Map.of("error", "empty query"));
+                        return;
+                    }
+                    json(ex, model.run(q, body.path("stores").asText("duckdb,clickhouse"), body.path("variant").asText(null)));
+                }
+                case "store" -> {
+                    byte[] b = model.store().getBytes(StandardCharsets.UTF_8);
+                    ex.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+                    ex.sendResponseHeaders(200, b.length);
+                    ex.getResponseBody().write(b);
+                    ex.close();
+                }
+                case String s when s.startsWith("studio/") -> {
+                    // Legend Studio's "Load demo projects" (legend-studio proxies its projects/ here)
+                    String file = s.substring("studio/".length());
+                    if (file.equals("manifest.json")) {
+                        json(ex, model.studioManifest());
+                        return;
+                    }
+                    String code = model.studioFile(file);
+                    if (code == null) {
+                        json(ex, 404, Map.of("error", "no such project file " + file));
+                        return;
+                    }
+                    byte[] b = code.getBytes(StandardCharsets.UTF_8);
+                    ex.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
+                    ex.sendResponseHeaders(200, b.length);
+                    ex.getResponseBody().write(b);
+                    ex.close();
+                }
+                default -> json(ex, 404, Map.of("error", "unknown model operation " + op));
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            json(ex, 500, Map.of("error", "interrupted"));
+        } catch (IOException | RuntimeException e) {
+            json(ex, 502, Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /** Forwards status / start / stop to marketdata-sim's control endpoint (MARKETDATA_URL). */
+    private void marketData(HttpExchange ex) throws IOException {
+        String op = tail(ex, "/api/marketdata/");
+        if (!List.of("status", "start", "stop").contains(op)) {
+            json(ex, 404, Map.of("error", "unknown market data operation " + op));
+            return;
+        }
+        String raw = ex.getRequestURI().getRawQuery();
+        HttpRequest.Builder req = HttpRequest.newBuilder(URI.create(marketData + "/" + op + (raw == null ? "" : "?" + raw)))
+                .timeout(Duration.ofSeconds(3));
+        req = op.equals("status") ? req.GET() : req.POST(HttpRequest.BodyPublishers.noBody());
+        try {
+            HttpResponse<String> r = http.send(req.build(), HttpResponse.BodyHandlers.ofString());
+            byte[] b = r.body().getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(r.statusCode(), b.length);
+            ex.getResponseBody().write(b);
+            ex.close();
+        } catch (IOException e) {
+            json(ex, 502, Map.of("error", "marketdata-sim not reachable at " + marketData + " (start with --analytics)"));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            json(ex, 502, Map.of("error", "interrupted"));
+        }
     }
 
     /** The operator API of event-style events (see the class doc). */

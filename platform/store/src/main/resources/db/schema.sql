@@ -41,4 +41,7 @@ CREATE INDEX /*ASYNC*/ IF NOT EXISTS event_trace_event_idx ON event_trace (event
 
 CREATE INDEX /*ASYNC*/ IF NOT EXISTS event_trace_workflow_idx ON event_trace (workflow_id);
 
+-- Recent-window reads (trace UI flow metrics, recent events).
+CREATE INDEX /*ASYNC*/ IF NOT EXISTS event_trace_ts_idx ON event_trace (ts);
+
 CREATE INDEX /*ASYNC*/ IF NOT EXISTS processed_event_received_idx ON processed_event (received_at);

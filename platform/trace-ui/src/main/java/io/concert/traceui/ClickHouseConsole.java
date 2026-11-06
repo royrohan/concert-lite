@@ -92,6 +92,10 @@ final class ClickHouseConsole {
         } else if (c.length >= 3 && c[0].equals("concert") && c[1].equals("root")) {
             kind = "root";
             smType = c[2];
+        } else if (c.length >= 4 && c[0].equals("concert") && c[1].equals("latest")) {
+            kind = "latest";
+            smType = c[2];
+            parent = c[3];
         } else if (c.length >= 4 && c[0].equals("concert") && c[1].equals("child")) {
             kind = "child";
             smType = c[2];
