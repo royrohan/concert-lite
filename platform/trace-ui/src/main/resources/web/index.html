@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Concert Trace</title>
+<title>Concert Dashboard</title>
 <style>
   :root {
     --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #6b6b66; --line: #e4e4df;
@@ -194,7 +194,7 @@
 </head>
 <body>
 <header>
-  <h1>Concert Trace</h1>
+  <h1>Concert Dashboard</h1>
   <nav>
     <button data-view="flows" class="on">Flows</button>
     <button data-view="event">Event</button>
@@ -409,7 +409,7 @@ async function showEvents(sub) {
 async function showEventTypes(tabs) {
   const d = await apiJson('/api/event-types');
   const cats = d.catalogs || [];
-  out.innerHTML = `<div class="subtabs">${tabs}</div>` + (cats.length ? '' : '<div class="panel muted">No event catalogs on the trace UI’s class path.</div>')
+  out.innerHTML = `<div class="subtabs">${tabs}</div>` + (cats.length ? '' : '<div class="panel muted">No event catalogs on the dashboard’s class path.</div>')
     + cats.map((c, i) => `<div class="panel"><h3 style="margin-top:0">${esc(c.name)}</h3>
       <table><tr><th>event type</th><th>domain</th><th>lock templates</th><th>on error</th><th>attempts</th><th>emits</th><th>payload class</th></tr>
       ${c.events.map(e => `<tr><td><b>${esc(e.name)}</b></td><td>${esc(e.domain)}</td><td class="mono">${esc(e.lockTemplates.join(', ') || e.domain + ':{id}')}</td>
@@ -1025,7 +1025,7 @@ function drill(d) {
         <span class="muted">transit p50 / p95</span><span>${ms(d.kinesis.transitP50)} / ${ms(d.kinesis.transitP95)} <span class="muted">(producer timestamp → coordinator read)</span></span>
         <span class="muted">shards tailed</span><span>${fmt(d.kinesis.shards)}</span></div>
         ${d.publisher.error ? `<div class="FAILED" style="margin-top:8px">${esc(d.publisher.error)}</div>` : ''}
-        <div class="note">Published counts come from the trace UI tailing the stream from LATEST, independent of the coordinator's checkpoint.</div></div>`;
+        <div class="note">Published counts come from the dashboard tailing the stream from LATEST, independent of the coordinator's checkpoint.</div></div>`;
     default: return `${d.errors.length ? `<div class="panel"><h3>Failed and rejected in ${esc(f.label)}</h3>${traceRows(d.errors)}</div>` : ''}
       <div class="panel"><h3>Recent events in ${esc(f.label)}</h3>${traceRows(d.recent)}</div>`;
   }
@@ -1058,7 +1058,7 @@ function generatorPanel(d) {
       <label>for <select id="gen-duration">${opt(30, genForm.duration, '30 s')}${opt(60, genForm.duration, '1 min')}${opt(300, genForm.duration, '5 min')}${opt(900, genForm.duration, '15 min')}${opt(3600, genForm.duration, '1 h')}</select></label>
       <label title="${esc((g.errorSamples || []).join(', ') || 'invalid transitions')}"><input type="checkbox" id="gen-errors" ${genForm.errors ? 'checked' : ''}> inject failures</label>
       ${r && !r.running ? `<span class="muted">last run: ${fmt(r.instances)} instances, ${fmt(r.sent)} events in ${fmt(r.elapsedSec)} s</span>` : ''}</div>
-    ${noTemporal ? `<div class="note">${status('bad', 'Temporal unreachable')} the trace UI can't reach Temporal, so nothing would dispatch generated events: generating is off until it's back.</div>` : ''}
+    ${noTemporal ? `<div class="note">${status('bad', 'Temporal unreachable')} the dashboard can't reach Temporal, so nothing would dispatch generated events: generating is off until it's back.</div>` : ''}
     ${noWorker ? `<div class="note">${status('bad', 'No worker')} nothing polls <span class="mono">${esc(d.worker.taskQueue)}</span>, so generating is off:
         its events would wait in Temporal, each holding a dispatch slot, until they starve every other flow.
         ${ecoOfMachine(f.id) ? `<a onclick="go('flow','${esc(ecoOfMachine(f.id).id)}')">Start the ${esc(ecoOfMachine(f.id).label)} flow</a> first.` : 'Start its worker first.'}</div>` : ''}

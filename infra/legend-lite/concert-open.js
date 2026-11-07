@@ -1,7 +1,7 @@
 // concert's add-on to Legend Studio Lite (level 0): `?concert=<projectId>` opens concert's project read-only
 // (#/view/<projectId>). Projects live in this browser, so the first time the project isn't here yet: Studio says it
 // can't open it, and this publishes it ("Load demo projects": this site's projects/ are concert's current models plus
-// the sinks' Legend store layer, served by the trace UI) and opens it again. Then it opens `&open=<element path>`
+// the sinks' Legend store layer, served by the Concert Dashboard) and opens it again. Then it opens `&open=<element path>`
 // (default: the generated mapping, concert::mapping::Sink). It only drives Studio's own controls, through their
 // data-testid / data-path hooks.
 (() => {
@@ -53,7 +53,7 @@
 })();
 
 // concert's Diagrams panel (Studio Lite has no diagram renderer): a "Diagrams" button opens a drawer with the emitted
-// models' diagrams from the trace UI (/concert/diagrams, proxied to /api/model/diagrams): per state machine its
+// models' diagrams from the Concert Dashboard (/concert/diagrams, proxied to /api/model/diagrams): per state machine its
 // states (each transition's event and payload class), the classes doing the transitions (the entity root and its
 // payload classes) and its whole Pure model; event catalogs' flow and model. The drawer follows the active tab: a
 // machine's root or payload class (Pure path a::b::C is the generated Java class ...a.b.C) selects that machine.

@@ -181,7 +181,7 @@ public final class TraceUiMain {
         TraceUiMain ui = new TraceUiMain(Stores.fromEnv(), TemporalClients.fromEnv());
         int port = Env.getInt("TRACE_UI_PORT", 8088);
         ui.start(port);
-        log.info("trace UI on http://localhost:{}", port);
+        log.info("Concert Dashboard on http://localhost:{}", port);
     }
 
     HttpServer start(int port) throws IOException {

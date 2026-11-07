@@ -41,13 +41,13 @@ its schedule. There is no bespoke lease, peer or outbox protocol: failover, retr
                                                        └─▶ Deephaven (live tables, last_by per entity)
  marketdata-sim ─▶ Kafka ref.* / md.ticks / md.bars.1m ─┴─▶ ClickHouse, Deephaven   (side path, no concert)
                                                                           ▲
-                                trace UI :8088 (entities, locks, Analytics tab: SQL consoles, pipeline strip)
+                                Concert Dashboard :8088 (entities, locks, Analytics tab: SQL consoles, pipeline strip)
 ```
 
 ## Flows: start, stop, delete
 
 A **flow** is an ecosystem: `samples`, `trading` and every generated ecosystem (`insurance`, `trading-gen`,
-`order-events`, ...). The trace UI (http://localhost:8088) opens on the registered flows. A flow's page has:
+`order-events`, ...). The Concert Dashboard (http://localhost:8088) opens on the registered flows. A flow's page has:
 
 * **Start**: brings up Kinesis (LocalStack) and Kafka if they're down. Then it creates the flow's stream
   `concert-<flow>` and topic `snapshots.<flow>`, and starts its coordinator and workers. Images that don't exist yet
@@ -66,7 +66,7 @@ task queue, worker task queues and lock workflows (`lock:<flow>:<key>`), all set
 Deephaven reads the topics that exist when it starts (Start restarts it for a new topic).
 
 The landing page has one switch for the **shared services**: Kinesis, Kafka, DuckDB, ClickHouse and legend-lite (with
-Legend Studio). To drive compose, the trace UI container gets the host's Docker socket and the repo mounted at its host
+Legend Studio). To drive compose, the Concert Dashboard container gets the host's Docker socket and the repo mounted at its host
 path. That is root on the host, so it's for local development only.
 
 ## Quickstart
@@ -79,7 +79,7 @@ scripts/up.sh spanner --analytics --trading       # platform + Kafka/DuckDB/Clic
 ./deploy-concert-ecosystem insurance --store spanner   # add the generated insurance ecosystem (worker + sink roots)
 ./showcases/insurance/send-flow all                # happy-path claims/policies/payouts through concert
 scripts/trading-load.sh 100 50                     # 100 equity orders (routes, fills, allocations) at 50 events/s
-open http://localhost:8088/#analytics              # trace UI: DuckDB / ClickHouse / Deephaven, pipeline strip
+open http://localhost:8088/#analytics              # Concert Dashboard: DuckDB / ClickHouse / Deephaven, pipeline strip
 scripts/reconcile.sh --dry-run                     # StateStore vs DuckDB, per smType
 ```
 
@@ -143,7 +143,7 @@ public class OrderStateMachine extends ModelStateMachine<Order> {
 A state without outgoing transitions is **terminal**; `Builder.terminal(...)` declares terminal states
 explicitly instead. Entering a terminal state publishes the entity's snapshot. `WorkerBootstrap.start(...)`
 runs a type on task queue `sm-<type>`. Each module lists its machines through the `MachineCatalog` SPI, which
-the trace UI and reconciliation use.
+the Concert Dashboard and reconciliation use.
 
 ### Declaring machines in Pure (`concert::sm`) and the ecosystem generator
 
@@ -180,7 +180,7 @@ Generated ecosystems: [`showcases/insurance`](showcases/insurance/README.md) and
 ### Two processing styles: entity state machines and event handlers
 
 Every event picks one of two styles with the envelope's `style` field. Both share ingest, dedupe, multi-key
-locks, the stores, snapshots, sinks, the trace UI and the generator, and one deployment can mix them.
+locks, the stores, snapshots, sinks, the Concert Dashboard and the generator, and one deployment can mix them.
 
 | | **entity style** (`style` absent or `entity`, the default) | **event style** (`style: "event"`) |
 |---|---|---|
@@ -244,7 +244,7 @@ error, attempts, parent, causation root, depth, … then the payload class's col
 class), configured with the usual `SINK_ROOTS` entries (`evt_order_create_event:orders::OrderCreateEvent`).
 
 **Operators.** `scripts/events.sh list errors|SCHEDULED|all`, `retry <id>`, `skip <id> [reason]`,
-`status <id>` (the processor's blocked / parked / scheduled lists), or the trace UI's **Events** tab
+`status <id>` (the processor's blocked / parked / scheduled lists), or the Concert Dashboard's **Events** tab
 (http://localhost:8088/#events: error queue with Retry / Skip, scheduled events, processor status, event types and
 their flow diagrams) and the event page (lifecycle, payload, keys, attempts, causation tree).
 
@@ -364,7 +364,7 @@ Three independent consumers read it, each with its own group and pace (see
 
 | what | where | credentials / notes |
 |---|---|---|
-| Trace UI: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)) | http://localhost:8088 | — |
+| Concert Dashboard: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)) | http://localhost:8088 | — |
 | legend-lite (profile `analytics`) | http://localhost:8095 (`/health`, legend-engine's `pure/v1` API) | plans only; pinned commit, built from source |
 | Legend Studio Lite (profile `analytics`) | http://localhost:8200 (from a flow page or the Model tab: **Legend Studio ↗**) | level 0: runs in the browser, projects kept in that browser |
 | Temporal UI | http://localhost:8080 | workflow ids `lock:<key>`, `<smType>:<key>`, `reconcile-<smType>…`; Schedules page |
@@ -389,7 +389,7 @@ Three independent consumers read it, each with its own group and pace (see
 | `./showcases/<name>/send <EventType> [payload] [--at +5m\|ISO] [--id ID]` | an event-style event; `--at` schedules it (SCHEDULED until then) |
 | `scripts/events.sh list [errors\|STATUS\|all] [idPrefix]`, `show\|retry\|status <id>`, `skip <id> [reason]` | event-style operator commands (lifecycle rows, processors) |
 | `scripts/trading-load.sh [orders=100] [rate=50]` | one-shot trading order flow (trading showcase) |
-| `scripts/reconcile.sh [--smType X] [--dry-run]` | reconcile the sinks with the StateStore now (needs the trace UI) |
+| `scripts/reconcile.sh [--smType X] [--dry-run]` | reconcile the sinks with the StateStore now (needs the Concert Dashboard) |
 | `scripts/chaos.sh` (`DURATION`, `RATE`, `KILL_EVERY`, `CHAOS_TEMPORAL`, `STORE_KIND`, `EVENT_STYLE=1`) | chaos experiment: kill/restart coordinators and workers under load, verify no loss / double apply / reordering (event style: handlers, keyed state, chained events) |
 | `scripts/db-load.sh` (`TRACE_SAMPLE`, `RATE`, `DURATION`) | database statements per event from `pg_stat_statements` (Postgres only) |
 | `scripts/legend-lite.sh check` | every `.pure` model set compiles in legend-lite (real Pure semantics), and the generated store layer of each deployable set of sink roots compiles and plans on DuckDB and ClickHouse |
@@ -430,7 +430,7 @@ the root table is always `plural(snake(smType))`. Generated ecosystems append th
 * **Deephaven** (Python app mode, `infra/deephaven/app.d`). It consumes the snapshot and market-data topics
   from offset 0 on start (all in memory) and keeps the latest version per entity. Live tables include
   `quotes_latest`, `completion_latency`, `revenue_by_customer`, `fill_slippage` (`aj` to ticks) and
-  `account_pnl`. They are widgets (embedded in the trace UI) and globals in the IDE console. Starter
+  `account_pnl`. They are widgets (embedded in the Concert Dashboard) and globals in the IDE console. Starter
   notebooks live in `infra/deephaven/notebooks`.
 
 Memory caps: ClickHouse 2 GiB (1.5 GiB server limit), Deephaven `-Xmx1g` (2 GiB limit), and 256 MiB each
@@ -438,7 +438,7 @@ for sink-clickhouse and marketdata-sim.
 
 ## Model queries (legend-lite)
 
-The trace UI's **Model** tab runs Legend Pure queries over the concert models against the analytics stores, e.g.
+The Concert Dashboard's **Model** tab runs Legend Pure queries over the concert models against the analytics stores, e.g.
 
 ```
 demo::order::Order.all()->filter(o|$o.status == demo::order::OrderStatus.DELIVERED)
@@ -455,7 +455,7 @@ demo::order::Order.all()->filter(o|$o.status == demo::order::OrderStatus.DELIVER
   query runs unchanged on both. System columns (`entity_version`, `sm_state`, `created_at`, …) and event
   lifecycle columns are not model properties; reach them with table access
   `#>{concert::store::Sink.orders_latest}#->groupBy(~sm_state, ~n: x|$x.entity_id : y|$y->count())`.
-* **legend-lite only plans**: the trace UI sends it the profile, the `.pure` files the DuckDB sink loaded
+* **legend-lite only plans**: the Concert Dashboard sends it the profile, the `.pure` files the DuckDB sink loaded
   (`GET :8090/models`, so deployed ecosystems are included) and the generated layer; it returns one SQL
   statement per store. **concert runs it** read-only: DuckDB through the sink's `/query`, ClickHouse as `readonly`.
 * **`<root>_latest` views, in both stores**: sink-clickhouse creates `SELECT * FROM <root> FINAL` (one row per
@@ -469,7 +469,7 @@ demo::order::Order.all()->filter(o|$o.status == demo::order::OrderStatus.DELIVER
 * **Legend Studio Lite** (`legend-studio`, http://localhost:8200, level 0: its compiler and SDLC run in the browser
   as WebAssembly, projects live in that browser). **Legend Studio ↗** (on each flow page, and on the Model tab) opens concert's project
   read-only: the current models plus the generated store layer, one element per file and fully qualified (Studio
-  keeps one element per file and refuses imports; `StudioProject`), served by the trace UI as Studio's demo
+  keeps one element per file and refuses imports; `StudioProject`), served by the Concert Dashboard as Studio's demo
   `projects/`. The first time in a browser the link publishes it (the "Load demo projects" button, driven by a
   small add-on, `infra/legend-lite/concert-open.js`); a changed model is a new project (`Concert models (<hash>)`).
 * legend-lite is [neema2/legend-lite](https://github.com/neema2/legend-lite), pinned (`LEGEND_LITE_REF` in
@@ -496,7 +496,7 @@ DLQ'd entities.
      it is still terminal, and never with an older version than the store's: compaction keeps the last
      record per key.
 * **Report.** The workflow result is the counts (scanned, terminal, missing, stale, ahead, republished),
-  shown by the script and by the trace UI's Analytics tab (Reconcile / dry run buttons).
+  shown by the script and by the Concert Dashboard's Analytics tab (Reconcile / dry run buttons).
 
 ```bash
 scripts/reconcile.sh --dry-run                 # every typed smType with a running worker
@@ -624,8 +624,8 @@ redo more (idempotent) work when a process merely pauses.
 | `DIRECT_SM_TYPES` | — | types allowed to bypass locks (only if they never share keys) |
 | `DEDUPE_TTL_HOURS` | `24` | |
 | `MD_AUTOSTART` | `true` | marketdata-sim: `false` starts it paused (start it from a flow's Deephaven page or `POST :8091/start?rate=N`) |
-| `KAFKA_BOOTSTRAP` | — | workers: publish snapshots (unset: logged, not delivered, no reconcile schedule); sinks/trace UI: Kafka |
-| `SINK_DUCKDB_URL` | `http://localhost:8090` (`http://sink-duckdb:8090` in compose) | workers (reconciliation) and trace UI → DuckDB sink |
+| `KAFKA_BOOTSTRAP` | — | workers: publish snapshots (unset: logged, not delivered, no reconcile schedule); sinks/dashboard: Kafka |
+| `SINK_DUCKDB_URL` | `http://localhost:8090` (`http://sink-duckdb:8090` in compose) | workers (reconciliation) and dashboard → DuckDB sink |
 | `RECONCILE_SCHEDULE` / `RECONCILE_INTERVAL_MINUTES` | `true` / `60` | typed workers create Schedule `reconcile-<smType>` (only with Kafka) |
 | `MODELS_DIR` / `SINK_ROOTS` (+ `_<NAME>`) | `/models` / sample roots | sinks: `.pure` dirs and smType → root class |
 | `DUCKDB_PATH` / `SINK_HTTP_PORT` | `/data/concert.duckdb` / `8090` | DuckDB sink |
@@ -684,7 +684,7 @@ Modules are grouped in directories. Gradle project names stay flat (`./gradlew :
 | | `store` | `StateStore` + provider SPI, JDBC backend (Postgres / Aurora DSQL), async `TraceWriter`, contract tests |
 | | `store-dynamo` | DynamoDB backend |
 | | `store-spanner` | Cloud Spanner backend |
-| | `trace-ui` | trace UI: flow pipeline view (`FlowMetrics`, `KinesisTail`), entity traces, state/model diagrams, Analytics proxy, pipeline strip, reconcile trigger |
+| | `trace-ui` | Concert Dashboard (UI): flow pipeline view (`FlowMetrics`, `KinesisTail`), entity traces, state/model diagrams, Analytics proxy, pipeline strip, reconcile trigger |
 | `analytics/` | `sink-core` | `EntitySnapshot` + Kafka codec/producer, `SinkTarget` SPI, `SnapshotConsumerLoop` (DLQ), `SinkMetrics`, `SchemaMapper` |
 | | `sink-duckdb` | Kafka → DuckDB sink; read-only `/query`, `/tables`, `/samples`, `/versions`, `/health`, `/metrics`; offline `DuckDbAdmin` |
 | | `sink-clickhouse` | one-shot ClickHouse provisioner (Kafka engine, views generated from the models, trading analytics views) |
