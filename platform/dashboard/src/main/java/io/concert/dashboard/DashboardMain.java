@@ -112,6 +112,8 @@ public final class DashboardMain {
     private final FlowTemporal temporal;
     private final String marketData = Env.get("MARKETDATA_URL", "http://marketdata-sim:8091");
     private final ModelQuery model;
+    private final CloudWatchMetrics cloudWatch;
+    private final CloudWatchLogs cloudWatchLogs;
 
     static final List<String> DEEPHAVEN_WIDGETS = List.of("basket_value_chart", "basket_value", "basket_positions", "basket_by_sector",
             "quotes_latest", "vwap_by_symbol", "completions_per_minute",
@@ -162,8 +164,15 @@ public final class DashboardMain {
         });
         this.generator = new FlowGenerator(io.concert.orchestration.KinesisClients.fromEnv(), registry::streamOf);
         this.temporal = new FlowTemporal(client, temporalUi);
-        this.ops = new FlowOps(registry, new DockerCompose(repo(), registry.composeFiles()),
-                io.concert.orchestration.KinesisClients.fromEnv(), client, store, generator);
+        DockerCompose compose = new DockerCompose(repo(), registry.composeFiles());
+        this.ops = new FlowOps(registry, compose, io.concert.orchestration.KinesisClients.fromEnv(), client, store, generator);
+        // CloudWatch: per-machine metrics every 30 s and every flow's container logs (LocalStack's cloudwatch + logs)
+        this.cloudWatch = new CloudWatchMetrics(CloudWatchMetrics.client(), flows, id -> {
+            FlowRegistry.Flow f = registry.ofMachineFlow(id);
+            return f == null ? "" : f.id();
+        });
+        this.cloudWatchLogs = new CloudWatchLogs(CloudWatchMetrics.logsClient(), compose, registry::all);
+        this.ops.cloudWatchStatus(cloudWatch::status);
         this.perf = new PerfOps(ops, generator, flows, openPerfStore());
         this.model = new ModelQuery(Env.get("LEGEND_LITE_URL", "http://legend-lite:8095"), sinkDuckDb, clickHouse, http);
     }
@@ -215,6 +224,7 @@ public final class DashboardMain {
         server.createContext("/api/flows", this::flows);
         server.createContext("/api/control/", this::control);
         server.createContext("/api/perf", this::perf);
+        server.createContext("/api/cloudwatch/", this::cloudWatch);
         server.createContext("/api/marketdata/", this::marketData);
         server.createContext("/api/model/", this::model);
         server.createContext("/api/recent", ex -> json(ex, Map.of("events", store.recentEvents(50))));
@@ -431,7 +441,8 @@ public final class DashboardMain {
                                 + workerHint(flows.flow(id).group()) + ", or pass force=true.");
                     }
                     json(ex, generator.start(id, Double.parseDouble(q.getOrDefault("rate", "2")),
-                            Integer.parseInt(q.getOrDefault("duration", "60")), Boolean.parseBoolean(q.getOrDefault("errors", "false"))));
+                            Integer.parseInt(q.getOrDefault("duration", "60")), Boolean.parseBoolean(q.getOrDefault("errors", "false")),
+                            Boolean.parseBoolean(q.getOrDefault("noLocks", "false"))));
                 }
                 case "generate/stop" -> json(ex, generator.stop(id));
                 case "temporal" -> {
@@ -506,6 +517,54 @@ public final class DashboardMain {
     private static int intParam(Map<String, String> q, String key, int dflt) {
         String v = q.get(key);
         return v == null || v.isBlank() ? dflt : (int) Double.parseDouble(v);
+    }
+
+    /**
+     * CloudWatch for one machine flow: {@code GET /api/cloudwatch/metrics/<machine>?window=} (the Metrics tab),
+     * {@code GET /api/cloudwatch/logs/<machine>?window=&filter=&streams=a,b&limit=} (the Logs tab: its flow's log group)
+     * and {@code GET /api/cloudwatch/status}.
+     */
+    private void cloudWatch(HttpExchange ex) throws IOException {
+        String rest = tail(ex, "/api/cloudwatch/");
+        int slash = rest.indexOf('/');
+        String what = slash < 0 ? rest : rest.substring(0, slash);
+        String machine = slash < 0 ? "" : rest.substring(slash + 1);
+        Map<String, String> q = query(ex);
+        int window;
+        try {
+            window = Math.max(60, Math.min(14 * 86_400, Integer.parseInt(q.getOrDefault("window", "900"))));
+        } catch (NumberFormatException e) {
+            window = 900;
+        }
+        try {
+            switch (what) {
+                case "status" -> {
+                    Map<String, Object> m = new LinkedHashMap<>(cloudWatch.status());
+                    m.put("endpoint", CloudWatchMetrics.endpoint());
+                    m.put("namespace", CloudWatchMetrics.NAMESPACE);
+                    m.put("publishSec", CloudWatchMetrics.PUBLISH_SEC);
+                    m.put("logShipper", cloudWatchLogs.status());
+                    json(ex, m);
+                }
+                case "metrics" -> json(ex, cloudWatch.query(machine, window));
+                case "logs" -> {
+                    FlowRegistry.Flow f = registry.ofMachineFlow(machine);
+                    if (f == null) {
+                        f = registry.all().stream().filter(x -> x.id().equals(machine)).findFirst().orElse(null);
+                    }
+                    String streams = q.getOrDefault("streams", "");
+                    int limit = Math.max(10, Math.min(2000, Integer.parseInt(q.getOrDefault("limit", "300"))));
+                    Map<String, Object> m = cloudWatchLogs.query(f == null ? "" : f.id(), window,
+                            streams.isBlank() ? List.of() : List.of(streams.split(",")), q.getOrDefault("filter", ""), limit);
+                    m.put("flow", f == null ? null : f.id());
+                    m.put("services", f == null ? List.of() : f.services());
+                    json(ex, m);
+                }
+                default -> json(ex, 404, Map.of("error", "GET /api/cloudwatch/status | metrics/<machine> | logs/<machine>"));
+            }
+        } catch (RuntimeException e) {
+            json(ex, 502, Map.of("error", String.valueOf(e.getMessage())));
+        }
     }
 
     /**

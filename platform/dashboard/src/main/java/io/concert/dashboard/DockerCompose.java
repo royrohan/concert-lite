@@ -30,7 +30,7 @@ final class DockerCompose {
 
     /** Interpolated by the compose files; everything else comes from the repo's .env and the files' defaults. */
     private static final List<String> PASSED_ENV = List.of("STORE_KIND", "KAFKA_BOOTSTRAP", "TRACE_SAMPLE", "SM_TYPE",
-            "EVENT_DOMAINS", "DEEPHAVEN_PSK", "KINESIS_SHARDS", "TRADING_ORDERS", "TRADING_RATE", "DOCKER_HOST", "HOME",
+            "EVENT_DOMAINS", "DEEPHAVEN_PSK", "KINESIS_SHARDS", "INGEST_IDLE_POLL_MS", "TRADING_ORDERS", "TRADING_RATE", "DOCKER_HOST", "HOME",
             "COORDINATOR_TARGET");
 
     /**
@@ -150,12 +150,22 @@ final class DockerCompose {
                 m.put("state", c.path("State").asText());
                 m.put("health", health);
                 m.put("status", status);
+                m.put("name", c.path("Names").asText());
                 out.putIfAbsent(service, m);
             } catch (IOException e) {
                 // not a JSON line (warnings)
             }
         }
         return out;
+    }
+
+    /**
+     * Lines a container logged after {@code sinceEpochNanos} (stdout and stderr), each prefixed with Docker's RFC 3339
+     * timestamp ({@code docker logs --timestamps}). Returns the exit code.
+     */
+    int logsSince(String container, long sinceEpochNanos, Consumer<String> line, long timeoutSec) {
+        String since = (sinceEpochNanos / 1_000_000_000L) + "." + String.format("%09d", sinceEpochNanos % 1_000_000_000L);
+        return run(List.of("docker", "logs", "--timestamps", "--since", since, container), line, timeoutSec, Map.of());
     }
 
     private static String label(String labels, String key) {

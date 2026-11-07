@@ -62,7 +62,7 @@ class FlowGeneratorTest {
 
     @Test
     void instancesCarryLocksAndInjectInvalidEvents() {
-        FlowGenerator.Run claim = gen.new Run("claim", "samples", 1, 10, true, false);
+        FlowGenerator.Run claim = gen.new Run("claim", "samples", 1, 10, true, false, false);
         List<EventEnvelope> events = claim.instance(1, false, 1000);
         assertTrue(events.size() >= 3);
         EventEnvelope first = events.getFirst();
@@ -72,11 +72,11 @@ class FlowGeneratorTest {
         assertEquals(1, bad.size(), "no error samples for claim: the last event alone, invalid in the initial state");
         assertEquals(events.getLast().eventType(), bad.getFirst().eventType());
 
-        FlowGenerator.Run order = gen.new Run("order", "walk", 1, 10, true, false);
+        FlowGenerator.Run order = gen.new Run("order", "walk", 1, 10, true, false, false);
         assertEquals(1, order.instance(5, true, 0).size());
         assertTrue(order.instance(1, false, 0).size() >= 2);
 
-        FlowGenerator.Run ev = gen.new Run("ev:orders", "samples", 1, 10, false, false);
+        FlowGenerator.Run ev = gen.new Run("ev:orders", "samples", 1, 10, false, false, false);
         EventEnvelope create = ev.instance(1, false, 0).stream().filter(e -> e.eventType().equals("OrderCreateEvent"))
                 .findAny().orElse(null);
         if (create != null) {
@@ -102,5 +102,23 @@ class FlowGeneratorTest {
         io.concert.common.EventEnvelope tick = io.concert.common.EventEnvelope.event("t1", "ticks", "Tick",
                 java.util.List.of("sym:AAPL"), "{}", 1);
         assertEquals(java.util.List.of("sym:AAPL"), FlowGenerator.withoutLockKeys(tick).lockKeys(), "event style keeps its keys");
+    }
+
+    @Test
+    void nonLockEventsGoDirectWithoutAnyKey() {
+        io.concert.common.EventEnvelope e = new io.concert.common.EventEnvelope("e1", "gen_trading_system", "O1", "submit",
+                java.util.List.of("account:ACCOUNT-ID-1001"), "{}", 5L, 0);
+        io.concert.common.EventEnvelope bare = FlowGenerator.withoutLocks(e);
+        assertEquals(java.util.List.of("gen_trading_system:O1"), bare.effectiveLockKeys());
+        org.junit.jupiter.api.Assertions.assertTrue(bare.isSingleKey());
+        org.junit.jupiter.api.Assertions.assertTrue(bare.direct(), "dispatched straight to the entity, no lock workflow");
+        org.junit.jupiter.api.Assertions.assertTrue(FlowGenerator.restamp(bare, 9L).direct());
+        org.junit.jupiter.api.Assertions.assertTrue(io.concert.common.Json.write(bare).contains("\"direct\":true"));
+        org.junit.jupiter.api.Assertions.assertFalse(io.concert.common.Json.write(e).contains("direct"), "omitted when false");
+        assertEquals(e.payload(), bare.payload());
+        assertEquals(5L, bare.sourceTsMillis());
+        io.concert.common.EventEnvelope tick = io.concert.common.EventEnvelope.event("t1", "ticks", "Tick",
+                java.util.List.of("sym:AAPL"), "{}", 1);
+        org.junit.jupiter.api.Assertions.assertSame(tick, FlowGenerator.withoutLocks(tick), "event style is unchanged");
     }
 }

@@ -65,8 +65,8 @@ task queue, worker task queues and lock workflows (`lock:<flow>:<key>`), all set
 (`io.concert.common.Flows`). The sinks follow every flow's topic: DuckDB and ClickHouse subscribe by pattern, and
 Deephaven reads the topics that exist when it starts (Start restarts it for a new topic).
 
-The landing page has one switch for the **shared services**: Kinesis, Kafka, DuckDB, ClickHouse and legend-lite (with
-Legend Studio). To drive compose, the Concert Dashboard container gets the host's Docker socket and the repo mounted at its host
+The landing page has one switch for the **shared services**: Kinesis, CloudWatch, Kafka, DuckDB, ClickHouse and
+legend-lite (with Legend Studio). To drive compose, the Concert Dashboard container gets the host's Docker socket and the repo mounted at its host
 path. That is root on the host, so it's for local development only.
 
 ### Performance page
@@ -107,6 +107,32 @@ and every timeline action. The table under the page lists the runs with their av
 events processed/s and p95 latency over time, with each run's chaos actions marked. A run still going when the
 dashboard stops is marked `interrupted`. The API is `GET /api/perf/runs`, `GET /api/perf/compare?ids=a,b` and
 `POST /api/perf/runs/{id}/delete`.
+
+### CloudWatch: metrics and logs
+
+LocalStack also runs **CloudWatch** and **CloudWatch Logs** (`SERVICES: kinesis,dynamodb,cloudwatch,logs`). The
+dashboard writes to both, and each machine page's State machine panel has three tabs: **State machine** (completions,
+processed, failed, rejected), **Metrics** and **Logs**.
+
+* **Metrics**: every `CLOUDWATCH_PUBLISH_SEC` (default 30 s, high resolution) the dashboard publishes each active
+  machine's numbers from `event_trace` to namespace `Concert` with dimensions `Flow` and `Machine`. Counts
+  (`EventsDispatched`, `EventsProcessed`, `EventsFailed`, `EventsRejected`, `Completions`, `LockWaits`,
+  `DuplicatesDropped`) are per interval. Latencies are per-interval percentiles in ms (`EventLatencyP50/P95/P99`,
+  `InstanceLifetimeP50/P95`, `KinesisTransitP95`, `LockWaitP95`). The tab shows the live trace percentiles and charts
+  the CloudWatch history (15 min to 24 h). Calls use CloudWatch's Query protocol (`CloudWatchApi`), because LocalStack
+  4.12 can't parse the SDK's RPC v2 CBOR.
+* **Logs**: every 15 s (`CLOUDWATCH_LOGS_POLL_SEC`) the dashboard ships every running container of a flow to log
+  group `/concert/<flow>`, one stream per compose service. It ships at most 1000 lines per container per poll
+  (`CLOUDWATCH_LOGS_MAX_LINES`, the newest, with a marker line for the rest), so a container stuck in an error loop
+  can't flood LocalStack. Shared services go to `/concert/shared` only with `CLOUDWATCH_LOGS_SHARED=true`. Groups have
+  a 7-day retention. The tab searches the
+  flow's group with CloudWatch filter patterns (`ERROR`, `?WARN ?ERROR`, `"lock wait"`, `-term`), can narrow to one
+  stream and can tail. LocalStack ignores filter patterns, so the dashboard applies the text forms itself.
+* `CLOUDWATCH_ENDPOINT` points at LocalStack. Unset it for real AWS, which then uses the default credentials chain.
+  `CLOUDWATCH_PUBLISH=false` and `CLOUDWATCH_LOGS_SHIP=false` turn the writers off.
+* LocalStack containers created before this change run without CloudWatch, and the landing page says so. To fix that,
+  recreate LocalStack once with `docker compose up -d localstack`, then restart the coordinators so they recreate
+  their streams.
 
 ## Quickstart
 
@@ -154,6 +180,10 @@ An event names its entity (`smType` + `instanceKey`), its type, and the **lock k
   transfer queue. Measured here: signal → local activity p50 28 ms, update round trip p50 9 ms. Every lock
   interaction is an update.
 * `DIRECT_SM_TYPES` lets types that never share keys bypass locks.
+* An entity event with `"direct": true` and no extra lock keys does the same on its own: the coordinator (Java and
+  Rust) updates the entity workflow directly. It still applies in order per instance, but it starts no lock workflow
+  and never waits on a lock. The generator's **non-lock events** option sends events this way. Multi-key events on the
+  same entity can interleave with direct events.
 
 ### State machines and typed models
 
@@ -742,3 +772,21 @@ Modules are grouped in directories. Gradle project names stay flat (`./gradlew :
 | | `tools` | `tools loadgen` / `tools verify` (chaos and DB-load scripts) |
 | | `insurance`, `trading-gen`, `trading-gen-rs` | generated ecosystems ([insurance](showcases/insurance/README.md), [trading-gen](showcases/trading-gen/README.md), [trading-gen-rs](showcases/trading-gen-rs/README.md): trading-gen on the Rust coordinator) |
 | `tests/` | `integration-tests` | Testcontainers end-to-end tests + latency / scaling benchmarks |
+
+## License
+
+Copyright 2026 the concert-temporal authors.
+
+Licensed under the [Apache License, Version 2.0](LICENSE). You may not use this project except in compliance with the
+License. Unless required by applicable law or agreed to in writing, software distributed under the License is
+distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+
+Third-party dependencies keep their own licenses:
+- Java runtime: Apache-2.0, MIT, BSD-2/3-Clause, and Bouncy Castle (MIT-style). `javax.annotation-api`, pulled in by
+  the Spanner client, is CDDL / GPLv2 with the classpath exception.
+- Rust (`platform/coordinator-rs`): MIT / Apache-2.0 and other permissive licenses (ISC, BSD, Zlib, Unicode-3.0,
+  CDLA-Permissive-2.0), plus one MPL-2.0 crate (`option-ext`), used unmodified.
+- Test only: JUnit and jqwik (EPL-2.0).
+- Docker images the compose file runs (Temporal, Postgres, Kafka, ClickHouse, LocalStack, Deephaven, Redpanda Console,
+  the Spanner emulator) are pulled, not redistributed, and come under their own terms. Deephaven is under the
+  source-available Deephaven Community License.

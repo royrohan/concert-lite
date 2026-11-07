@@ -37,6 +37,10 @@ import java.util.TreeSet;
  * @param scheduledAtMillis event style: apply no earlier than this (epoch millis); 0 = now
  * @param parentEventId the event whose handler (or entity transition) emitted this one, if any
  * @param causationRoot the first event of the causation chain this one belongs to, if emitted
+ * @param direct entity style, single key only: the coordinator updates the entity workflow directly instead of queuing
+ *     the event on its entity lock (still in order per instance, but no {@code KeyLockWorkflow}, no lock waits). Like
+ *     {@code DIRECT_SM_TYPES} for one event: a multi-key event on the same entity may interleave with it. Omitted on the
+ *     wire when false.
  */
 public record EventEnvelope(
         String eventId,
@@ -50,7 +54,8 @@ public record EventEnvelope(
         String style,
         @JsonInclude(JsonInclude.Include.NON_DEFAULT) long scheduledAtMillis,
         @JsonInclude(JsonInclude.Include.NON_NULL) String parentEventId,
-        @JsonInclude(JsonInclude.Include.NON_NULL) String causationRoot) {
+        @JsonInclude(JsonInclude.Include.NON_NULL) String causationRoot,
+        @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean direct) {
 
     public static final String STYLE_ENTITY = "entity";
     public static final String STYLE_EVENT = "event";
@@ -69,6 +74,15 @@ public record EventEnvelope(
         }
         Objects.requireNonNull(instanceKey, "instanceKey");
         lockKeys = lockKeys == null ? List.of() : List.copyOf(lockKeys);
+    }
+
+    /** Every field but {@code direct} (false). */
+    public EventEnvelope(
+            String eventId, String smType, String instanceKey, String eventType, List<String> lockKeys, String payload,
+            long sourceTsMillis, long ingestTsMillis, String style, long scheduledAtMillis, String parentEventId,
+            String causationRoot) {
+        this(eventId, smType, instanceKey, eventType, lockKeys, payload, sourceTsMillis, ingestTsMillis, style,
+                scheduledAtMillis, parentEventId, causationRoot, false);
     }
 
     /** An entity-style event (the original eight fields). */
@@ -144,18 +158,24 @@ public record EventEnvelope(
 
     public EventEnvelope withIngestTs(long ts) {
         return new EventEnvelope(eventId, smType, instanceKey, eventType, lockKeys, payload, sourceTsMillis, ts,
-                style, scheduledAtMillis, parentEventId, causationRoot);
+                style, scheduledAtMillis, parentEventId, causationRoot, direct);
     }
 
     public EventEnvelope withScheduledAt(long atMillis) {
         return new EventEnvelope(eventId, smType, instanceKey, eventType, lockKeys, payload, sourceTsMillis,
-                ingestTsMillis, style, atMillis, parentEventId, causationRoot);
+                ingestTsMillis, style, atMillis, parentEventId, causationRoot, direct);
     }
 
     /** A copy emitted by {@code parent}: parent id set, causation root inherited (or the parent itself). */
     public EventEnvelope withParent(EventEnvelope parent) {
         String root = parent.causationRoot() != null ? parent.causationRoot() : parent.eventId();
         return new EventEnvelope(eventId, smType, instanceKey, eventType, lockKeys, payload, sourceTsMillis,
-                ingestTsMillis, style, scheduledAtMillis, parent.eventId(), root);
+                ingestTsMillis, style, scheduledAtMillis, parent.eventId(), root, false); // emitted: locks as declared
+    }
+
+    /** A copy flagged {@code direct} (see the record doc). */
+    public EventEnvelope withDirect(boolean direct) {
+        return new EventEnvelope(eventId, smType, instanceKey, eventType, lockKeys, payload, sourceTsMillis,
+                ingestTsMillis, style, scheduledAtMillis, parentEventId, causationRoot, direct);
     }
 }
