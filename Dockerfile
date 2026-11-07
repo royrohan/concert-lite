@@ -80,3 +80,22 @@ RUN --mount=type=cache,target=/root/.gradle \
 FROM runtime AS showcase-worker
 COPY --from=showcase-build /out/app /app
 ENTRYPOINT ["/app/bin/ecosystem-worker"]
+
+# The Rust coordinator (platform/coordinator-rs): a drop-in for target "coordinator" on postgres, dsql and dynamo
+# (same task queue, workflow types, payloads and tables). scripts/up.sh postgres|dynamo --rust-coordinator.
+# Only the crate and the shared schema are copied, so Java changes don't rebuild it.
+FROM rust:1.92-bookworm AS coordinator-rs-build
+WORKDIR /src
+COPY platform/store/src/main/resources/db/schema.sql platform/store/src/main/resources/db/schema.sql
+COPY platform/coordinator-rs platform/coordinator-rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/platform/coordinator-rs/target \
+    cd platform/coordinator-rs && cargo build --release --locked \
+    && cp target/release/concert-coordinator /concert-coordinator
+
+FROM debian:bookworm-slim AS coordinator-rs
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/* \
+    && useradd --system --uid 10001 concert
+USER concert
+COPY --from=coordinator-rs-build /concert-coordinator /usr/local/bin/concert-coordinator
+ENTRYPOINT ["/usr/local/bin/concert-coordinator"]

@@ -9,8 +9,8 @@ services:
   # the flow's coordinator: its own Kinesis stream concert-trading-gen, ingest and locks (task queue orchestration-trading-gen)
   trading-gen-coordinator:
     profiles: [trading-gen]
-    build: { context: ., target: coordinator }
-    image: concert-temporal/coordinator
+    build: { context: ., target: "${COORDINATOR_TARGET:-coordinator}" }
+    image: concert-temporal/${COORDINATOR_TARGET:-coordinator}
     depends_on:
       temporal-init: { condition: service_completed_successfully }
       localstack: { condition: service_healthy }

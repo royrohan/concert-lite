@@ -145,13 +145,16 @@ services:
 
   # ---------------------------------------------------------------- apps (profile "apps")
 
+  # COORDINATOR_TARGET=coordinator-rs (scripts/up.sh ... --rust-coordinator) runs every flow's coordinator as the Rust
+  # coordinator (platform/coordinator-rs): same contract, postgres / dsql / dynamo only. One implementation per
+  # Temporal namespace at a time: they cannot replay each other's lock histories.
   # Each flow (ecosystem) has its own coordinator, Kinesis stream concert-<flow>, orchestration-<flow> task queue and
   # Kafka topic snapshots.<flow> (CONCERT_FLOW, io.concert.common.Flows), so flows never overlap. The dashboard's flow
   # page starts / stops / deletes a flow's coordinator and workers. Scale out: --scale samples-coordinator=3
   samples-coordinator:
     profiles: [apps]
-    build: { context: ., target: coordinator }
-    image: concert-temporal/coordinator
+    build: { context: ., target: "${COORDINATOR_TARGET:-coordinator}" }
+    image: concert-temporal/${COORDINATOR_TARGET:-coordinator}
     depends_on: *app-deps
     environment:
       <<: *app-env
@@ -176,8 +179,8 @@ services:
 
   trading-coordinator:
     profiles: [trading]
-    build: { context: ., target: coordinator }
-    image: concert-temporal/coordinator
+    build: { context: ., target: "${COORDINATOR_TARGET:-coordinator}" }
+    image: concert-temporal/${COORDINATOR_TARGET:-coordinator}
     depends_on: *app-deps
     environment:
       <<: *app-env
@@ -237,6 +240,7 @@ services:
       <<: *app-env
       CONCERT_REPO: ${PWD}
       TEMPORAL_UI_URL: http://localhost:8080
+      COORDINATOR_TARGET: ${COORDINATOR_TARGET:-coordinator}   # Start flow builds the same coordinator image
       SINK_DUCKDB_URL: http://sink-duckdb:8090
       CLICKHOUSE_URL: http://clickhouse:8123
       CLICKHOUSE_USER: readonly

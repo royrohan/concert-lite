@@ -4,3 +4,4 @@
 **/build
 **/.jqwik-database
 *.iml
+**/target

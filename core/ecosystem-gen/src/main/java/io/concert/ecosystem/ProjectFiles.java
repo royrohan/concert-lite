@@ -194,8 +194,8 @@ final class ProjectFiles {
         services.append("  # the flow's coordinator: its own Kinesis stream concert-").append(n)
                 .append(", ingest and locks (task queue orchestration-").append(n).append(")\n  ")
                 .append(n).append("-coordinator:\n    profiles: [").append(n).append("]\n").append("""
-                    build: { context: ., target: coordinator }
-                    image: concert-temporal/coordinator
+                    build: { context: ., target: "${COORDINATOR_TARGET:-coordinator}" }
+                    image: concert-temporal/${COORDINATOR_TARGET:-coordinator}
                     depends_on:
                       temporal-init: { condition: service_completed_successfully }
                       localstack: { condition: service_healthy }

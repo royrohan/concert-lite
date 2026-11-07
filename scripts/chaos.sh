@@ -7,6 +7,8 @@
 #   STORE_KIND=spanner scripts/chaos.sh      # same experiment on another backend
 #   EVENT_STYLE=1 scripts/chaos.sh           # event-style: DemoEvents Ticks (handlers, keyed state, chained
 #                                            # child events) instead of ledger state machines
+#   RUST_COORDINATOR=1 scripts/chaos.sh      # coordinators are the Rust coordinator (platform/coordinator-rs)
+#   SKIP_BUILD=1 scripts/chaos.sh            # use the distributions / binary already built
 #
 # What it exercises (all Temporal out of the box, no custom failover code):
 #   kill -9 coordinator  -> shard-consumer activity heartbeat times out, retried on the other coordinator
@@ -31,6 +33,8 @@ CHAOS_TEMPORAL=${CHAOS_TEMPORAL:-0}
 KEEP=${KEEP:-0}                    # 1 = leave processes running afterwards
 EVENT_STYLE=${EVENT_STYLE:-0}      # 1 = event-style load (workers run the demo event domain, ev-demo)
 CHAIN_EVERY=${CHAIN_EVERY:-5}      # event style: every n-th Tick of a key emits a ChainTick
+RUST_COORDINATOR=${RUST_COORDINATOR:-0}   # 1 = run platform/coordinator-rs instead of the Java coordinator
+SKIP_BUILD=${SKIP_BUILD:-0}
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 RUN_ID=${RUN_ID:-chaos$(date +%H%M%S)}
@@ -52,6 +56,7 @@ esac
 export INGEST_SHARD_LIST_SEC=${INGEST_SHARD_LIST_SEC:-5}
 
 ORCH="$ROOT/platform/orchestration/build/install/orchestration/bin/orchestration"
+[ "$RUST_COORDINATOR" = "1" ] && ORCH="$ROOT/platform/coordinator-rs/target/release/concert-coordinator"
 WORKER="$ROOT/showcases/sample-workers/build/install/sample-workers/bin/sample-workers"
 TOOLS="$ROOT/showcases/tools/build/install/tools/bin/tools"
 
@@ -101,7 +106,7 @@ trap cleanup EXIT
 # ---------------------------------------------------------------- setup
 mkdir -p "$RUN_DIR"; : > "$CHAOS_LOG"
 STYLE=entity; [ "$EVENT_STYLE" = "1" ] && STYLE=event
-log "run $RUN_ID (store: $STORE_KIND, style: $STYLE): ${DURATION}s @ ${RATE}/s over $KEYS keys, chaos every ${KILL_EVERY}s, $COORDINATORS coordinators, $WORKERS workers"
+log "run $RUN_ID (store: $STORE_KIND, style: $STYLE, coordinator: $([ "$RUST_COORDINATOR" = "1" ] && echo rust || echo java)): ${DURATION}s @ ${RATE}/s over $KEYS keys, chaos every ${KILL_EVERY}s, $COORDINATORS coordinators, $WORKERS workers"
 log "logs: $RUN_DIR"
 
 (cd "$ROOT" && docker compose up -d >/dev/null 2>&1) || { log "docker compose up failed"; exit 1; }
@@ -109,12 +114,19 @@ for _ in $(seq 1 60); do
   (cd "$ROOT" && docker compose exec -T temporal temporal operator cluster health --address temporal:7233 >/dev/null 2>&1) && break
   sleep 2
 done
-log "building distributions"
-(cd "$ROOT" && ./gradlew -q :orchestration:installDist :sample-workers:installDist :tools:installDist) || exit 1
+if [ "$SKIP_BUILD" != "1" ]; then
+  log "building distributions"
+  if [ "$RUST_COORDINATOR" = "1" ]; then
+    (cd "$ROOT/platform/coordinator-rs" && cargo build --release -q) || exit 1
+    (cd "$ROOT" && ./gradlew -q :sample-workers:installDist :tools:installDist) || exit 1
+  else
+    (cd "$ROOT" && ./gradlew -q :orchestration:installDist :sample-workers:installDist :tools:installDist) || exit 1
+  fi
+fi
 
-if pgrep -f "orchestration/build/install|sample-workers/build/install" >/dev/null; then
+if pgrep -f "orchestration/build/install|coordinator-rs/target|sample-workers/build/install" >/dev/null; then
   log "stopping previously started coordinators/workers so they don't join the experiment"
-  pkill -TERM -f "orchestration/build/install|sample-workers/build/install"; sleep 3
+  pkill -TERM -f "orchestration/build/install|coordinator-rs/target|sample-workers/build/install"; sleep 3
 fi
 
 # Start from a fresh ingest supervisor so it picks up the current failover settings; consumers
