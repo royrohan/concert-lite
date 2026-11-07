@@ -1,0 +1,48 @@
+[package]
+name = "concert-coordinator"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+description = "concert's coordinator in Rust: Kinesis ingest, dedupe, per-key FIFO lock chains and dispatch to the (Java) entity and event workers"
+publish = false
+
+[[bin]]
+name = "concert-coordinator"
+path = "src/main.rs"
+
+[dependencies]
+temporalio-sdk = { version = "=1.1.2", default-features = false }
+temporalio-client = { version = "=1.1.2", features = ["vendored-protox"] }
+temporalio-macros = "=1.1.2"
+temporalio-common = "=1.1.2"
+temporalio-workflow = "=1.1.2"
+tokio = { version = "1.47", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4"] }
+rand = "0.9"
+async-trait = "0.1"
+# stores
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+deadpool = { version = "0.13", features = ["managed", "rt_tokio_1"] }
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-kinesis = "1"
+aws-sdk-dynamodb = "1"
+aws-sdk-dsql = "1"
+aws-smithy-types = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

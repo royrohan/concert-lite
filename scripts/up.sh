@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Bring up the whole platform on one backend, apps included:
 #   scripts/up.sh postgres | dynamo | spanner
-#   scripts/up.sh spanner --scale coordinator=2      (extra args go to docker compose up)
+#   scripts/up.sh spanner --scale samples-coordinator=2   (extra args go to docker compose up)
 #   scripts/up.sh spanner --analytics                (+ Kafka, DuckDB sink, ClickHouse, Deephaven, market data)
 #   scripts/up.sh spanner --analytics --trading      (+ trading worker; then scripts/trading-load.sh [orders] [rate])
+#   scripts/up.sh postgres --rust-coordinator        (the Rust coordinator, platform/coordinator-rs; not on spanner)
 #   scripts/up.sh down                               (stop everything, keep volumes)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -31,14 +32,18 @@ for a in "$@"; do
   case $a in
     --analytics) analytics=",analytics" ;;
     --trading) trading=",trading" ;;
+    --rust-coordinator) export COORDINATOR_TARGET=coordinator-rs ;;
     *) args+=("$a") ;;
   esac
 done
 if [ -n "$analytics" ]; then unset KAFKA_BOOTSTRAP; else export KAFKA_BOOTSTRAP=""; fi
+if [ "${COORDINATOR_TARGET:-}" = "coordinator-rs" ] && [ "$kind" = "spanner" ]; then
+  echo "the Rust coordinator supports postgres, dsql and dynamo; spanner stays on the Java coordinator" >&2; exit 2
+fi
 
 export STORE_KIND=$kind
 export COMPOSE_PROFILES=${db_profile:+$db_profile,}apps$analytics$trading
-echo "STORE_KIND=$STORE_KIND COMPOSE_PROFILES=$COMPOSE_PROFILES"
+echo "STORE_KIND=$STORE_KIND COMPOSE_PROFILES=$COMPOSE_PROFILES COORDINATOR=${COORDINATOR_TARGET:-coordinator}"
 docker compose up -d --build ${args[@]+"${args[@]}"}
 echo
 echo "Temporal UI http://localhost:8080   Dashboard http://localhost:8088   (store: $STORE_KIND)"
