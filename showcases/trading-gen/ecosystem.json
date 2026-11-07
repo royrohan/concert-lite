@@ -5,6 +5,7 @@
   "module" : "showcases/trading-gen",
   "service" : "trading-gen-worker",
   "profile" : "trading-gen",
+  "coordinator" : "java",
   "files" : [ "commands.pure", "common.pure", "marketdata.pure", "order.pure", "refdata.pure" ],
   "roots" : [ {
     "smType" : "gen_trading_system",

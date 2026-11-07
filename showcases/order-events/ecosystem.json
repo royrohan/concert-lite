@@ -5,6 +5,7 @@
   "module" : "showcases/order-events",
   "eventService" : "order-events-event-worker",
   "profile" : "order-events",
+  "coordinator" : "java",
   "files" : [ "inventory.pure", "orders.pure" ],
   "roots" : [ ],
   "domains" : [ "inventory", "orders" ],

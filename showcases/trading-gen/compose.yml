@@ -24,6 +24,13 @@ services:
       TRACE_SAMPLE: ${TRACE_SAMPLE:-1.0}
       AWS_REGION: us-east-1
       CONCERT_FLOW: trading-gen
+      # Temporal / worker tuning (the dashboard's Performance presets set these)
+      WORKFLOW_TASK_TIMEOUT_MS: ${WORKFLOW_TASK_TIMEOUT_MS:-2000}
+      WORKER_WF_SLOTS: ${WORKER_WF_SLOTS:-1000}
+      WORKER_LA_SLOTS: ${WORKER_LA_SLOTS:-2000}
+      ORCH_WF_POLLERS_MAX: ${ORCH_WF_POLLERS_MAX:-64}
+      INGEST_PARALLEL_GROUPS: ${INGEST_PARALLEL_GROUPS:-256}
+      DIRECT_SM_TYPES: ${DIRECT_SM_TYPES:-}
       STORE_INIT_SCHEMA: "false"
     restart: unless-stopped
 
@@ -49,6 +56,13 @@ services:
       TRACE_SAMPLE: ${TRACE_SAMPLE:-1.0}
       AWS_REGION: us-east-1
       CONCERT_FLOW: trading-gen
+      # Temporal / worker tuning (the dashboard's Performance presets set these)
+      WORKFLOW_TASK_TIMEOUT_MS: ${WORKFLOW_TASK_TIMEOUT_MS:-2000}
+      WORKER_WF_SLOTS: ${WORKER_WF_SLOTS:-1000}
+      WORKER_LA_SLOTS: ${WORKER_LA_SLOTS:-2000}
+      ORCH_WF_POLLERS_MAX: ${ORCH_WF_POLLERS_MAX:-64}
+      INGEST_PARALLEL_GROUPS: ${INGEST_PARALLEL_GROUPS:-256}
+      DIRECT_SM_TYPES: ${DIRECT_SM_TYPES:-}
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP-kafka:9092}
       SINK_DUCKDB_URL: http://sink-duckdb:8090
       STORE_INIT_SCHEMA: "false"

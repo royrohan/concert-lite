@@ -28,6 +28,15 @@ class ChainEmissionsTest {
     }
 
     @Test
+    void sourceTypeIdsAreNotCopied() {
+        var source = ChainEmissions.source("{\"@type\":\"t::Trade\",\"orderId\":\"O-1\",\"qty\":5}",
+                "{\"@type\":\"t::SubmitTradeCommand\",\"qty\":7}");
+        var p = ChainEmissions.payload(E, source);
+        assertTrue(!p.has("@type"), "the target binds its own payload class: " + p);
+        assertEquals("O-1-E1", p.get("execId").asText());
+    }
+
+    @Test
     void missingValuesAreErrors() {
         var source = ChainEmissions.source("{\"qty\":5}", null);
         assertThrows(IllegalArgumentException.class, () -> ChainEmissions.payload(E, source));

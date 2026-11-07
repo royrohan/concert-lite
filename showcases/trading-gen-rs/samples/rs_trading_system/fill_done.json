@@ -1,0 +1,11 @@
+{
+  "@type" : "trading::command::ChainStepCommand",
+  "orderId" : "RS-TRADING-ORDER-1001",
+  "accountId" : "ACCOUNT-ID-1001",
+  "ts" : "2026-01-15T10:00:00Z",
+  "step" : "step-1",
+  "refId" : "REF-ID-1001",
+  "state" : "state-1",
+  "quantity" : 10,
+  "price" : 101.25
+}

@@ -69,6 +69,45 @@ The landing page has one switch for the **shared services**: Kinesis, Kafka, Duc
 Legend Studio). To drive compose, the Concert Dashboard container gets the host's Docker socket and the repo mounted at its host
 path. That is root on the host, so it's for local development only.
 
+### Performance page
+
+The dashboard's **Performance** tab measures one flow at a time, on its own:
+
+1. **Flow**: pick a state machine flow (for example `trading-gen-rs`, which runs on the Rust coordinator, against
+   `trading-gen` on the Java one) and the machine to load.
+2. **Configuration**: a sample Temporal / coordinator / worker setup (Smoke, Balanced, Scale-out, Fast failover,
+   Constrained). Each sets the coordinator and worker replicas (`docker compose --scale`), a load rate and tuning
+   (`WORKER_WF_SLOTS`, `WORKER_LA_SLOTS`, `ORCH_WF_POLLERS_MAX`, `INGEST_PARALLEL_GROUPS`, `WORKFLOW_TASK_TIMEOUT_MS`).
+   The counts and rate can be overridden.
+3. **Lock keys**: how events are serialized.
+   - **Serial keys** (default): each event takes its entity key plus the lock keys its model declares (for example
+     every order's `account:<id>`), as in production.
+   - **Entity key only**: the generator drops the declared lock keys, so each event waits only on its own entity.
+   - **No locks (direct)**: entity key only, and `DIRECT_SM_TYPES` is set to the flow's machines, so the coordinator
+     hands single-key events straight to the worker without a lock workflow.
+
+   Comparing the modes shows what the shared locks cost. The modes change the events the generator publishes; events
+   that workers emit (chained machines) keep their lock keys in every mode. In the trading sample data every order
+   has the same account, so a chain entry point (`rs_trading_system`) queues every trade's order events on one lock.
+4. **Chaos and services**: optional chaos (every N seconds a random coordinator or worker replica is killed or stopped
+   for 3 to 12 s, Kafka too if chosen), and whether to stop the analytics services so they don't compete for CPU.
+
+**Stop all other services and start** stops every other flow first, so only one flow runs. The run page then shows
+the flow like any machine page (completions, instance lifetime, event latency p50 / p95 / p99, the pipeline), plus its
+instances with **Kill** (SIGKILL), **Stop** (SIGTERM) and **Start** per coordinator or worker replica, **Stop / Start
+Kafka**, and a timeline of every manual and chaos action to line up with dips in the metrics. **Stop run** ends the
+load and chaos and brings back whatever is down; the flow keeps running. A run also ends on its own 30 s after its
+load finishes.
+
+**Past runs** are kept in DuckDB (`PERF_DB`: `/data/perf-runs.duckdb` on the dashboard's `dashboard-data` volume, or
+`build/perf/perf-runs.duckdb` when the dashboard runs on the host). Each run stores its configuration (flow, coordinator
+implementation, machine, preset, replicas, rate, lock mode, chaos, tuning), a sample of the flow's metrics every 10 s
+and every timeline action. The table under the page lists the runs with their averages. Select up to four and click
+**Compare** to see them side by side: a table of the summaries (best value in bold) and charts of completions/s,
+events processed/s and p95 latency over time, with each run's chaos actions marked. A run still going when the
+dashboard stops is marked `interrupted`. The API is `GET /api/perf/runs`, `GET /api/perf/compare?ids=a,b` and
+`POST /api/perf/runs/{id}/delete`.
+
 ## Quickstart
 
 Requirements: Docker (about 14 GiB of memory for the full analytics profile) and JDK 25
@@ -174,8 +213,10 @@ The generated module contains:
 * a worker main, an event sender, sample payloads and happy-path flows;
 * a compose override (generic `showcase-worker` image, sink roots) and Deephaven tables.
 
-Generated ecosystems: [`showcases/insurance`](showcases/insurance/README.md) and
-[`showcases/trading-gen`](showcases/trading-gen/README.md).
+Generated ecosystems: [`showcases/insurance`](showcases/insurance/README.md),
+[`showcases/trading-gen`](showcases/trading-gen/README.md) and
+[`showcases/trading-gen-rs`](showcases/trading-gen-rs/README.md) (the same machines as trading-gen with `rs_` smTypes,
+on the Rust coordinator: `--coordinator rust`).
 
 ### Two processing styles: entity state machines and event handlers
 
@@ -364,7 +405,7 @@ Three independent consumers read it, each with its own group and pace (see
 
 | what | where | credentials / notes |
 |---|---|---|
-| Concert Dashboard: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)) | http://localhost:8088 | — |
+| Concert Dashboard: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)), **Performance** tab (one flow at a time with a sample configuration, optional chaos, kill / stop / start per instance and Kafka, see [Performance page](#performance-page)) | http://localhost:8088 | — |
 | legend-lite (profile `analytics`) | http://localhost:8095 (`/health`, legend-engine's `pure/v1` API) | plans only; pinned commit, built from source |
 | Legend Studio Lite (profile `analytics`) | http://localhost:8200 (from a flow page or the Model tab: **Legend Studio ↗**) | level 0: runs in the browser, projects kept in that browser |
 | Temporal UI | http://localhost:8080 | workflow ids `lock:<key>`, `<smType>:<key>`, `reconcile-<smType>…`; Schedules page |
@@ -599,6 +640,11 @@ Measured on a 10-core laptop with Docker limited to 6 CPUs, the whole stack loca
   Latency under chaos is dominated by the down time of a killed tier. Each run writes
   `build/chaos/<run-id>/report.txt`, with a throughput timeline and every chaos action marked.
 
+A hot lock key (one account shared by every order) keeps many updates open on its lock workflow: an `acquire` per
+waiting event plus the `release` of each holder. Temporal's default of 10 in-flight updates per workflow rejects
+the rest, and the key stops moving, so `infra/temporal-init/dynamicconfig.yaml` raises
+`history.maxInFlightUpdates` to 500. Set the same on a production cluster that has hot keys.
+
 Failover speed is Temporal's, tuned in `core/common/.../Failover.java`. Lower values fail over faster but
 redo more (idempotent) work when a process merely pauses.
 
@@ -622,6 +668,7 @@ redo more (idempotent) work when a process merely pauses.
 | `TRACE_SAMPLE` | `1.0` | fraction of events traced, deterministic per event id |
 | `LOCK_IDLE_SECONDS` | `600` | how long an idle lock workflow stays warm |
 | `DIRECT_SM_TYPES` | — | types allowed to bypass locks (only if they never share keys) |
+| `PERF_DB` | `build/perf/perf-runs.duckdb` (`/data/perf-runs.duckdb` in compose) | DuckDB file with the Performance page's past runs (dashboard) |
 | `DEDUPE_TTL_HOURS` | `24` | |
 | `MD_AUTOSTART` | `true` | marketdata-sim: `false` starts it paused (start it from a flow's Deephaven page or `POST :8091/start?rate=N`) |
 | `KAFKA_BOOTSTRAP` | — | workers: publish snapshots (unset: logged, not delivered, no reconcile schedule); sinks/dashboard: Kafka |
@@ -693,5 +740,5 @@ Modules are grouped in directories. Gradle project names stay flat (`./gradlew :
 | `showcases/` | `sample-workers` | `order`, `payment`, `shipment`, `ledger` machines; `SM_TYPE=order ./gradlew :sample-workers:run` |
 | | `trading` | the four `trading_*` machines + order-flow generator ([README](showcases/trading/README.md)) |
 | | `tools` | `tools loadgen` / `tools verify` (chaos and DB-load scripts) |
-| | `insurance`, `trading-gen` | generated ecosystems ([insurance](showcases/insurance/README.md), [trading-gen](showcases/trading-gen/README.md)) |
+| | `insurance`, `trading-gen`, `trading-gen-rs` | generated ecosystems ([insurance](showcases/insurance/README.md), [trading-gen](showcases/trading-gen/README.md), [trading-gen-rs](showcases/trading-gen-rs/README.md): trading-gen on the Rust coordinator) |
 | `tests/` | `integration-tests` | Testcontainers end-to-end tests + latency / scaling benchmarks |

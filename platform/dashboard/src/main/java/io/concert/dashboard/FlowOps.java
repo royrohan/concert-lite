@@ -101,6 +101,14 @@ final class FlowOps {
         this.generator = generator;
     }
 
+    DockerCompose compose() {
+        return compose;
+    }
+
+    FlowRegistry registry() {
+        return registry;
+    }
+
     // ---------------------------------------------------------------- status
 
     /** Every flow with its state ({@link #flow}), for the landing page. */
@@ -124,6 +132,7 @@ final class FlowOps {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", f.id());
         m.put("label", f.label());
+        m.put("coordinatorImpl", f.coordinatorImpl());
         m.put("machines", f.machines());
         m.put("machineFlows", f.machineFlows());
         m.put("eventCatalogs", f.eventCatalogs());
@@ -219,27 +228,61 @@ final class FlowOps {
 
     Map<String, Object> start(String id) {
         FlowRegistry.Flow f = registry.get(id);
-        return submit(id, "start", job -> {
-            ensureKinesisAndKafka(job);
-            job.log("stream " + f.stream() + ": " + (KinesisStreams.ensure(kinesis, f.stream(), Env.getInt("KINESIS_SHARDS", 2), 120_000)
-                    ? "created" : "exists"));
-            boolean newTopic = false;
-            if (kafka.isBlank()) {
-                job.log("KAFKA_BOOTSTRAP not set: no snapshot topic (workers log snapshots instead)");
-            } else {
-                newTopic = SnapshotTopics.ensure(kafka, f.topic());
-                job.log("topic " + f.topic() + ": " + (newTopic ? "created" : "exists"));
-            }
-            job.log("starting " + String.join(", ", f.services()) + " (images are built if missing: the first start takes a few minutes)");
-            // --no-deps: Kinesis and Kafka are ensured above; never recreate a shared service from here
-            List<String> args = new ArrayList<>(List.of("up", "-d", "--no-deps"));
-            args.addAll(f.services());
-            check(job, compose.compose(profiles(f), args, job::log, 1800), "docker compose up");
-            if (newTopic && "running".equals(containersOrEmptyFresh().getOrDefault("deephaven", Map.of()).get("state"))) {
-                job.log("restarting Deephaven so it reads " + f.topic());
-                compose.compose(List.of("analytics"), List.of("restart", "deephaven"), job::log, 300);
-            }
-        });
+        return submit(id, "start", job -> bringUp(f, job, 0, 0, Map.of()));
+    }
+
+    /**
+     * Start's work: Kinesis and Kafka, the flow's stream and topic, then its coordinator and workers. With
+     * {@code coordinators} / {@code workers} above 0 each runs that many replicas ({@code --scale}); {@code tuning} sets
+     * {@link DockerCompose#TUNING_ENV} variables for the started containers.
+     */
+    void bringUp(FlowRegistry.Flow f, Job job, int coordinators, int workers, Map<String, String> tuning) {
+        ensureKinesisAndKafka(job);
+        job.log("stream " + f.stream() + ": " + (KinesisStreams.ensure(kinesis, f.stream(), Env.getInt("KINESIS_SHARDS", 2), 120_000)
+                ? "created" : "exists"));
+        boolean newTopic = false;
+        if (kafka.isBlank()) {
+            job.log("KAFKA_BOOTSTRAP not set: no snapshot topic (workers log snapshots instead)");
+        } else {
+            newTopic = SnapshotTopics.ensure(kafka, f.topic());
+            job.log("topic " + f.topic() + ": " + (newTopic ? "created" : "exists"));
+        }
+        job.log("starting " + String.join(", ", f.services()) + " (images are built if missing: the first start takes a few minutes)");
+        // --no-deps: Kinesis and Kafka are ensured above; never recreate a shared service from here
+        List<String> args = new ArrayList<>(List.of("up", "-d", "--no-deps"));
+        if (coordinators > 0) {
+            args.addAll(List.of("--scale", f.coordinator() + "=" + coordinators));
+        }
+        if (workers > 0) {
+            f.workers().forEach(w -> args.addAll(List.of("--scale", w + "=" + workers)));
+        }
+        if (!tuning.isEmpty()) {
+            job.log("tuning " + tuning);
+        }
+        args.addAll(f.services());
+        check(job, compose.compose(profiles(f), args, job::log, 1800, tuning), "docker compose up");
+        if (newTopic && "running".equals(containersOrEmptyFresh().getOrDefault("deephaven", Map.of()).get("state"))) {
+            job.log("restarting Deephaven so it reads " + f.topic());
+            compose.compose(List.of("analytics"), List.of("restart", "deephaven"), job::log, 300);
+        }
+    }
+
+    /** Stops the data generators and containers of these flows in one compose call (Stop, for several flows). */
+    void stopFlows(List<FlowRegistry.Flow> flows, Job job) {
+        if (flows.isEmpty()) {
+            return;
+        }
+        List<String> services = new ArrayList<>();
+        java.util.Set<String> profiles = new java.util.LinkedHashSet<>(List.of("analytics"));
+        for (FlowRegistry.Flow f : flows) {
+            stopGenerators(f, job);
+            services.addAll(f.services());
+            profiles.add(f.profile());
+        }
+        job.log("stopping " + String.join(", ", services));
+        List<String> args = new ArrayList<>(List.of("stop"));
+        args.addAll(services);
+        check(job, compose.compose(List.copyOf(profiles), args, job::log, 300), "docker compose stop");
     }
 
     Map<String, Object> stop(String id) {
@@ -298,11 +341,11 @@ final class FlowOps {
         return j == null ? Map.of() : j.view();
     }
 
-    private interface Body {
+    interface Body {
         void run(Job job) throws Exception;
     }
 
-    private synchronized Map<String, Object> submit(String key, String action, Body body) {
+    synchronized Map<String, Object> submit(String key, String action, Body body) {
         String why = compose.unavailable();
         if (why != null) {
             throw new IllegalStateException("cannot " + action + ": " + why);
@@ -331,7 +374,7 @@ final class FlowOps {
         return job.view();
     }
 
-    private void ensureKinesisAndKafka(Job job) {
+    void ensureKinesisAndKafka(Job job) {
         Map<String, Map<String, String>> c = containersOrEmptyFresh();
         List<String> down = new ArrayList<>();
         for (String s : kafka.isBlank() ? List.of("localstack") : List.of("localstack", "kafka")) {
@@ -356,12 +399,12 @@ final class FlowOps {
         }
     }
 
-    private Map<String, Map<String, String>> containersOrEmptyFresh() {
+    Map<String, Map<String, String>> containersOrEmptyFresh() {
         containersCache = null;
         return containersOrEmpty();
     }
 
-    private void stopGenerators(FlowRegistry.Flow f, Job job) {
+    void stopGenerators(FlowRegistry.Flow f, Job job) {
         for (String mf : f.machineFlows()) {
             Object run = generator.status(mf).get("run");
             if (run instanceof Map<?, ?> r && Boolean.TRUE.equals(r.get("running"))) {
@@ -410,11 +453,11 @@ final class FlowOps {
     }
 
     /** The flow's profile plus analytics (Kafka), so its services and their dependencies resolve. */
-    private static List<String> profiles(FlowRegistry.Flow f) {
+    static List<String> profiles(FlowRegistry.Flow f) {
         return List.of(f.profile(), "analytics");
     }
 
-    private static void check(Job job, int rc, String what) {
+    static void check(Job job, int rc, String what) {
         if (rc != 0) {
             throw new IllegalStateException(what + " exited with " + rc);
         }

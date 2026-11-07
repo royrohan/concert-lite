@@ -7,9 +7,17 @@ and analytics config.
 
 ```bash
 ./generate-concert-ecosystem examples/insurance --name insurance   # [--package io.concert.eco.insurance] [--force]
+./generate-concert-ecosystem examples/trading-gen-rs --name trading-gen-rs --coordinator rust   # flow on the Rust coordinator
 ./generate-concert-ecosystem examples/order-events --name order-events   # event style
 ./generate-concert-ecosystem check examples/insurance             # validate only
 ./deploy-concert-ecosystem insurance --store spanner              # [--no-analytics]
+```
+
+`--coordinator java|rust` picks the flow's coordinator (default `java`, `platform/orchestration`). `rust` writes the
+compose service with the `coordinator-rs` image target (`platform/coordinator-rs`); the choice is recorded in
+`ecosystem.json` and kept by later runs without the option. The Rust coordinator supports postgres, dsql and dynamo.
+
+```bash
 ./showcases/insurance/send-flow all
 ```
 

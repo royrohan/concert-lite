@@ -74,19 +74,32 @@ final class Generator {
     private final Map<String, String> sampleHashes = new LinkedHashMap<>();
     private Map<String, String> previousSampleHashes = Map.of();
 
+    /** {@code java} or {@code rust}: the flow's coordinator; null keeps the previous run's choice (default java). */
+    private final String coordinator;
+
     Generator(Path repo, Ecosystem eco, boolean force) {
+        this(repo, eco, force, null);
+    }
+
+    Generator(Path repo, Ecosystem eco, boolean force, String coordinator) {
         this.repo = repo;
         this.eco = eco;
         this.force = force;
+        if (coordinator != null && !ProjectFiles.COORDINATORS.contains(coordinator)) {
+            throw new IllegalArgumentException("--coordinator must be one of " + ProjectFiles.COORDINATORS + ": " + coordinator);
+        }
+        this.coordinator = coordinator;
     }
 
     Report generate(Path modelsDir) {
         JavaSources java = new JavaSources(eco);
-        ProjectFiles files = new ProjectFiles(eco, java);
+        Path moduleDir = repo.resolve("showcases/" + eco.name());
+        JsonNode previous = readJson(moduleDir.resolve("ecosystem.json"));
+        String coord = coordinator != null ? coordinator
+                : previous != null && !previous.path("coordinator").asText().isEmpty() ? previous.path("coordinator").asText() : "java";
+        ProjectFiles files = new ProjectFiles(eco, java, coord);
         SampleGenerator samples = new SampleGenerator(eco);
         String module = files.moduleDir();
-        Path moduleDir = repo.resolve(module);
-        JsonNode previous = readJson(moduleDir.resolve("ecosystem.json"));
         List<String> previousGenerated = new ArrayList<>();
         if (previous != null) {
             Map<String, String> h = new LinkedHashMap<>();

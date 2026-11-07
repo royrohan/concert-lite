@@ -33,6 +33,9 @@ public final class ModelJson {
             .disable(SerializationFeature.FAIL_ON_EMPTY_BEANS)
             .enable(StreamWriteFeature.WRITE_BIGDECIMAL_AS_PLAIN)
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            // A document without "@type" binds to the requested class (e.g. a chained event's payload, bound to the
+            // target transition's payload class); a present type id is still checked against the hierarchy.
+            .enable(MapperFeature.USE_BASE_TYPE_AS_DEFAULT_IMPL)
             .disable(DeserializationFeature.ADJUST_DATES_TO_CONTEXT_TIME_ZONE)
             .defaultPropertyInclusion(JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.NON_NULL))
             .addModule(new JavaTimeModule())

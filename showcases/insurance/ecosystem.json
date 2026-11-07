@@ -5,6 +5,7 @@
   "module" : "showcases/insurance",
   "service" : "insurance-worker",
   "profile" : "insurance",
+  "coordinator" : "java",
   "files" : [ "claim.pure", "common.pure", "payout.pure", "policy.pure" ],
   "roots" : [ {
     "smType" : "claim",

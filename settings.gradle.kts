@@ -37,6 +37,7 @@ val modules = linkedMapOf(
     "insurance" to "showcases",
     "trading-gen" to "showcases",
     "order-events" to "showcases",
+    "trading-gen-rs" to "showcases",
     // </concert-ecosystems>
     // tests: Docker-based end-to-end tests and benchmarks
     "integration-tests" to "tests",

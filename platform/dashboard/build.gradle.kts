@@ -19,6 +19,8 @@ dependencies {
     // Flow view: tails the ingest stream for published/s per flow (KinesisTail)
     implementation(platform(libs.aws.bom))
     implementation(libs.aws.kinesis)
+    // Performance page: past runs, their samples and timelines in a DuckDB file (PerfStore, PERF_DB)
+    implementation(libs.duckdb.jdbc)
     // STORE_KIND=dynamo|spanner backends, discovered via ServiceLoader
     runtimeOnly(project(":store-dynamo"))
     runtimeOnly(project(":store-spanner"))
@@ -31,6 +33,12 @@ dependencies {
 
 application {
     mainClass.set("io.concert.dashboard.DashboardMain")
+    // DuckDB (PerfStore) loads its native library
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.test {
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
 }
 
 // The flow view's "Generate data flow" replays the showcases' sample flows (samples/flows/*.json for entity
