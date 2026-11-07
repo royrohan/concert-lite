@@ -86,8 +86,9 @@ The dashboard's **Performance** tab measures one flow at a time, on its own:
    - **No locks (direct)**: entity key only, and `DIRECT_SM_TYPES` is set to the flow's machines, so the coordinator
      hands single-key events straight to the worker without a lock workflow.
 
-   Comparing the modes shows what the shared locks cost. In the trading sample data every order has the same account,
-   so serial runs queue all order events on one lock.
+   Comparing the modes shows what the shared locks cost. The modes change the events the generator publishes; events
+   that workers emit (chained machines) keep their lock keys in every mode. In the trading sample data every order
+   has the same account, so a chain entry point (`rs_trading_system`) queues every trade's order events on one lock.
 4. **Chaos and services**: optional chaos (every N seconds a random coordinator or worker replica is killed or stopped
    for 3 to 12 s, Kafka too if chosen), and whether to stop the analytics services so they don't compete for CPU.
 

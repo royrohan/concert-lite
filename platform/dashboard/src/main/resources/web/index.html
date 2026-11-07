@@ -1862,7 +1862,12 @@ function lineChart(id, title, fmtv, series) {
   const xs = [30, 60, 120, 300, 600, 900].find(st => xmax / st <= 6) || 1800, xt = []; for (let t = 0; t <= xmax; t += xs) xt.push(t);
   const lines = series.map(s => s.pts.length ? `<path d="${s.pts.map((p, i) => (i ? 'L' : 'M') + x(p[0]).toFixed(1) + ' ' + y(p[1]).toFixed(1)).join(' ')}"
       fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : '').join('');
-  const ends = series.map(s => { const p = s.pts.at(-1); return p ? `<text class="end" x="${x(p[0]) + 4}" y="${y(p[1]) + 4}">${esc(s.label)}</text>` : ''; }).join('');
+  // end labels, nudged apart vertically when runs end on (nearly) the same value
+  const endPts = series.filter(s => s.pts.length).map(s => { const p = s.pts.at(-1); return { s, px: x(p[0]) + 4, py: y(p[1]) + 4 }; })
+    .sort((a, b) => a.py - b.py);
+  endPts.forEach((e, i) => { if (i && e.py - endPts[i - 1].py < 11) e.py = endPts[i - 1].py + 11; });
+  const shift = Math.max(0, (endPts.at(-1)?.py ?? 0) - (H - B + 4));
+  const ends = endPts.map(e => `<text class="end" x="${e.px}" y="${e.py - shift}">${esc(e.s.label)}</text>`).join('');
   const ticks = series.map((s, i) => s.marks.map(([t, what]) => `<line x1="${x(Math.min(t, xmax))}" x2="${x(Math.min(t, xmax))}" y1="${H - B + 4 + i * 3}" y2="${H - B + 9 + i * 3}"
       stroke="${s.color}" stroke-width="2"><title>${esc(s.label + ': ' + what)}</title></line>`).join('')).join('');
   perfChartData[id] = { series, x, xmax, L, R, W, fmtv };
