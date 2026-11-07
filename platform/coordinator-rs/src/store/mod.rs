@@ -1,7 +1,7 @@
 //! The part of `io.concert.store.StateStore` the coordinator uses: dedupe, shard checkpoints, trace rows
 //! and the dedupe sweep. Entity projections (`sm_state`) belong to the workers and are never touched here.
 //! Each backend writes the same tables, keys and values as its Java counterpart (`JdbcStateStore`,
-//! `DynamoStateStore`), so the Java workers, trace UI and tools read what this coordinator writes.
+//! `DynamoStateStore`), so the Java workers, dashboard and tools read what this coordinator writes.
 
 mod dynamo;
 mod memory;

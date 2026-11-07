@@ -40,7 +40,7 @@ CONCERT_FLOW=samples STORE_KIND=postgres KINESIS_ENDPOINT=http://localhost:4566 
 
 With Docker: `scripts/up.sh postgres --rust-coordinator` (or set `COORDINATOR_TARGET=coordinator-rs` for
 `docker compose`). Every flow's coordinator service (`samples-coordinator`, `trading-coordinator`, the generated
-`<ecosystem>-coordinator`) then builds the `coordinator-rs` image target, and so does the trace UI's Start flow.
+`<ecosystem>-coordinator`) then builds the `coordinator-rs` image target, and so does the dashboard's Start flow.
 Scaling (`--scale samples-coordinator=3`) works the same way.
 
 Chaos test with Rust coordinators and Java workers: `RUST_COORDINATOR=1 scripts/chaos.sh`.

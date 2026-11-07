@@ -52,8 +52,9 @@ async fn main() -> anyhow::Result<()> {
         env.str("DIRECT_SM_TYPES", "").split(',').map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned).collect();
     let dispatcher = Arc::new(Dispatcher::new(store.clone(), router.clone(), traces.clone(), direct.clone(), env.usize("INGEST_PARALLEL_GROUPS", 256)));
     let kinesis = kinesis_client(&env).await;
+    let activities_kinesis = kinesis.clone();
     if env.bool("INGEST_CREATE_STREAM", !flow.is_legacy()) {
-        // a flow's stream is the flow's own: its coordinator creates it if Start flow (trace UI) did not
+        // a flow's stream is the flow's own: its coordinator creates it if Start flow (dashboard) did not
         if ensure_stream(&kinesis, &stream, env.i64("KINESIS_SHARDS", 2) as i32, Duration::from_secs(120)).await? {
             info!("created stream {stream}");
         }
@@ -114,6 +115,21 @@ async fn main() -> anyhow::Result<()> {
             heartbeat_timeout_sec: env.shard_heartbeat_timeout_sec(),
         };
         ensure_ingest(&client, &env, &queue, config).await?;
+    }
+
+    if env.bool("INGEST_CREATE_STREAM", !flow.is_legacy()) {
+        // the flow's stream must outlive LocalStack restarts and stray deletes: recreate it when it disappears
+        let (kinesis, stream, shards) = (activities_kinesis.clone(), stream.clone(), env.i64("KINESIS_SHARDS", 2) as i32);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                match ensure_stream(&kinesis, &stream, shards, Duration::from_secs(120)).await {
+                    Ok(true) => warn!("stream {stream} had disappeared: recreated it"),
+                    Ok(false) => {}
+                    Err(e) => warn!("stream check of {stream} failed: {e:#}"),
+                }
+            }
+        });
     }
 
     let ttl = Duration::from_secs(env.i64("DEDUPE_TTL_HOURS", 24).max(0) as u64 * 3600);
