@@ -69,6 +69,25 @@ The landing page has one switch for the **shared services**: Kinesis, Kafka, Duc
 Legend Studio). To drive compose, the Concert Dashboard container gets the host's Docker socket and the repo mounted at its host
 path. That is root on the host, so it's for local development only.
 
+### Performance page
+
+The dashboard's **Performance** tab measures one flow at a time, on its own:
+
+1. **Flow**: pick a state machine flow (for example `trading-gen-rs`, which runs on the Rust coordinator, against
+   `trading-gen` on the Java one) and the machine to load.
+2. **Configuration**: a sample Temporal / coordinator / worker setup (Smoke, Balanced, Scale-out, Fast failover,
+   Constrained). Each sets the coordinator and worker replicas (`docker compose --scale`), a load rate and tuning
+   (`WORKER_WF_SLOTS`, `WORKER_LA_SLOTS`, `ORCH_WF_POLLERS_MAX`, `INGEST_PARALLEL_GROUPS`, `WORKFLOW_TASK_TIMEOUT_MS`).
+   The counts and rate can be overridden.
+3. **Chaos and services**: optional chaos (every N seconds a random coordinator or worker replica is killed or stopped
+   for 3 to 12 s, Kafka too if chosen), and whether to stop the analytics services so they don't compete for CPU.
+
+**Stop all other services and start** stops every other flow first, so only one flow runs. The run page then shows
+the flow like any machine page (completions, instance lifetime, event latency p50 / p95 / p99, the pipeline), plus its
+instances with **Kill** (SIGKILL), **Stop** (SIGTERM) and **Start** per coordinator or worker replica, **Stop / Start
+Kafka**, and a timeline of every manual and chaos action to line up with dips in the metrics. **Stop run** ends the
+load and chaos and brings back whatever is down; the flow keeps running.
+
 ## Quickstart
 
 Requirements: Docker (about 14 GiB of memory for the full analytics profile) and JDK 25
@@ -174,8 +193,10 @@ The generated module contains:
 * a worker main, an event sender, sample payloads and happy-path flows;
 * a compose override (generic `showcase-worker` image, sink roots) and Deephaven tables.
 
-Generated ecosystems: [`showcases/insurance`](showcases/insurance/README.md) and
-[`showcases/trading-gen`](showcases/trading-gen/README.md).
+Generated ecosystems: [`showcases/insurance`](showcases/insurance/README.md),
+[`showcases/trading-gen`](showcases/trading-gen/README.md) and
+[`showcases/trading-gen-rs`](showcases/trading-gen-rs/README.md) (the same machines as trading-gen with `rs_` smTypes,
+on the Rust coordinator: `--coordinator rust`).
 
 ### Two processing styles: entity state machines and event handlers
 
@@ -364,7 +385,7 @@ Three independent consumers read it, each with its own group and pace (see
 
 | what | where | credentials / notes |
 |---|---|---|
-| Concert Dashboard: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)) | http://localhost:8088 | — |
+| Concert Dashboard: **Flows** (landing page: pick a flow, then its Publisher → Kinesis → Coordinator → Worker → Kafka → DuckDB / Deephaven / ClickHouse pipeline with per-hop metrics; **Generate data flow** publishes test events for the flow, optionally with failures; each box opens that area for the flow: Coordinator = serial key queues + Temporal state, Worker = failures grouped and filterable, **Legend lite** (DuckDB + ClickHouse in one box) = the flow's classes and Legend example queries, each run on both stores, Deephaven = its widgets + start/stop simulated market data), events, entities (state + model diagrams), locks, **Events** (error queue, Retry / Skip, scheduled, event types), **Analytics** tab, **Model** tab (Pure queries over the models on DuckDB / ClickHouse, see [Model queries](#model-queries-legend-lite)), **Performance** tab (one flow at a time with a sample configuration, optional chaos, kill / stop / start per instance and Kafka, see [Performance page](#performance-page)) | http://localhost:8088 | — |
 | legend-lite (profile `analytics`) | http://localhost:8095 (`/health`, legend-engine's `pure/v1` API) | plans only; pinned commit, built from source |
 | Legend Studio Lite (profile `analytics`) | http://localhost:8200 (from a flow page or the Model tab: **Legend Studio ↗**) | level 0: runs in the browser, projects kept in that browser |
 | Temporal UI | http://localhost:8080 | workflow ids `lock:<key>`, `<smType>:<key>`, `reconcile-<smType>…`; Schedules page |
@@ -693,5 +714,5 @@ Modules are grouped in directories. Gradle project names stay flat (`./gradlew :
 | `showcases/` | `sample-workers` | `order`, `payment`, `shipment`, `ledger` machines; `SM_TYPE=order ./gradlew :sample-workers:run` |
 | | `trading` | the four `trading_*` machines + order-flow generator ([README](showcases/trading/README.md)) |
 | | `tools` | `tools loadgen` / `tools verify` (chaos and DB-load scripts) |
-| | `insurance`, `trading-gen` | generated ecosystems ([insurance](showcases/insurance/README.md), [trading-gen](showcases/trading-gen/README.md)) |
+| | `insurance`, `trading-gen`, `trading-gen-rs` | generated ecosystems ([insurance](showcases/insurance/README.md), [trading-gen](showcases/trading-gen/README.md), [trading-gen-rs](showcases/trading-gen-rs/README.md): trading-gen on the Rust coordinator) |
 | `tests/` | `integration-tests` | Testcontainers end-to-end tests + latency / scaling benchmarks |

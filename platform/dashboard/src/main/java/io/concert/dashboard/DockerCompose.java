@@ -30,7 +30,12 @@ final class DockerCompose {
 
     /** Interpolated by the compose files; everything else comes from the repo's .env and the files' defaults. */
     private static final List<String> PASSED_ENV = List.of("STORE_KIND", "KAFKA_BOOTSTRAP", "TRACE_SAMPLE", "SM_TYPE",
-            "EVENT_DOMAINS", "DEEPHAVEN_PSK", "KINESIS_SHARDS", "TRADING_ORDERS", "TRADING_RATE", "DOCKER_HOST", "HOME");
+            "EVENT_DOMAINS", "DEEPHAVEN_PSK", "KINESIS_SHARDS", "TRADING_ORDERS", "TRADING_RATE", "DOCKER_HOST", "HOME",
+            "COORDINATOR_TARGET");
+
+    /** Variables a caller may set for one compose call: the Temporal / worker tuning of the Performance presets. */
+    static final List<String> TUNING_ENV = List.of("WORKFLOW_TASK_TIMEOUT_MS", "WORKER_WF_SLOTS", "WORKER_LA_SLOTS",
+            "ORCH_WF_POLLERS_MAX", "INGEST_PARALLEL_GROUPS");
 
     private final Path repo;
     private final List<String> files;
@@ -56,11 +61,64 @@ final class DockerCompose {
 
     /** Runs {@code docker compose <args>} with every profile active; streams output lines to {@code log}. */
     int compose(List<String> profiles, List<String> args, Consumer<String> log, long timeoutSec) {
+        return compose(profiles, args, log, timeoutSec, Map.of());
+    }
+
+    /** Like {@link #compose(List, List, Consumer, long)}, with {@link #TUNING_ENV} values for this call only. */
+    int compose(List<String> profiles, List<String> args, Consumer<String> log, long timeoutSec, Map<String, String> tuning) {
         List<String> cmd = new ArrayList<>(List.of("docker", "compose", "-p", project, "--project-directory", repo.toString()));
         files.forEach(f -> cmd.addAll(List.of("-f", f)));
         profiles.forEach(p -> cmd.addAll(List.of("--profile", p)));
         cmd.addAll(args);
-        return run(cmd, log, timeoutSec);
+        tuning.keySet().forEach(k -> {
+            if (!TUNING_ENV.contains(k)) {
+                throw new IllegalArgumentException("not a tuning variable: " + k + " (expected one of " + TUNING_ENV + ")");
+            }
+        });
+        return run(cmd, log, timeoutSec, tuning);
+    }
+
+    /** Runs {@code docker <args>} (kill / stop / start of one container). */
+    int docker(List<String> args, Consumer<String> log, long timeoutSec) {
+        List<String> cmd = new ArrayList<>(List.of("docker"));
+        cmd.addAll(args);
+        return run(cmd, log, timeoutSec, Map.of());
+    }
+
+    /**
+     * Every container of the given services, replicas included: {@code [{service, name, number, state, status}]}, by
+     * service then replica number. One {@code docker ps} call.
+     */
+    List<Map<String, String>> replicas(java.util.Collection<String> services) {
+        List<String> lines = new ArrayList<>();
+        int rc = run(List.of("docker", "ps", "-a", "--filter", "label=com.docker.compose.project=" + project,
+                "--format", "{{json .}}"), lines::add, 15, Map.of());
+        if (rc != 0) {
+            throw new IllegalStateException("docker ps failed: " + String.join(" ", lines));
+        }
+        List<Map<String, String>> out = new ArrayList<>();
+        for (String line : lines) {
+            try {
+                JsonNode c = Json.MAPPER.readTree(line);
+                String labels = c.path("Labels").asText();
+                String service = label(labels, "com.docker.compose.service");
+                if (service == null || !services.contains(service)) {
+                    continue;
+                }
+                Map<String, String> m = new LinkedHashMap<>();
+                m.put("service", service);
+                m.put("name", c.path("Names").asText());
+                m.put("number", String.valueOf(label(labels, "com.docker.compose.container-number")));
+                m.put("state", c.path("State").asText());
+                m.put("status", c.path("Status").asText());
+                out.add(m);
+            } catch (IOException e) {
+                // not a JSON line (warnings)
+            }
+        }
+        out.sort(java.util.Comparator.<Map<String, String>, String>comparing(m -> m.get("service"))
+                .thenComparingInt(m -> m.get("number").matches("\\d+") ? Integer.parseInt(m.get("number")) : 0));
+        return out;
     }
 
     /**
@@ -70,7 +128,7 @@ final class DockerCompose {
     Map<String, Map<String, String>> containers() {
         List<String> lines = new ArrayList<>();
         int rc = run(List.of("docker", "ps", "-a", "--filter", "label=com.docker.compose.project=" + project,
-                "--format", "{{json .}}"), lines::add, 15);
+                "--format", "{{json .}}"), lines::add, 15, Map.of());
         Map<String, Map<String, String>> out = new LinkedHashMap<>();
         if (rc != 0) {
             throw new IllegalStateException("docker ps failed: " + String.join(" ", lines));
@@ -107,7 +165,7 @@ final class DockerCompose {
         return null;
     }
 
-    private int run(List<String> cmd, Consumer<String> log, long timeoutSec) {
+    private int run(List<String> cmd, Consumer<String> log, long timeoutSec, Map<String, String> extraEnv) {
         ProcessBuilder pb = new ProcessBuilder(cmd).directory(repo.toFile()).redirectErrorStream(true);
         Map<String, String> env = pb.environment();
         Map<String, String> keep = new LinkedHashMap<>();
@@ -121,6 +179,7 @@ final class DockerCompose {
         env.putAll(keep);
         env.put("PWD", repo.toString());
         env.put("CONCERT_REPO", repo.toString());
+        env.putAll(extraEnv);
         env.putIfAbsent("HOME", "/tmp");
         try {
             Process p = pb.start();

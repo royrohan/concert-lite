@@ -48,4 +48,15 @@ class FlowRegistryTest {
         assertTrue(orders.services().contains("order-events-event-worker"), orders.services().toString());
         assertTrue(registry.composeFiles().contains("showcases/order-events/compose.yml"));
     }
+
+    @Test
+    void tradingGenRsRunsOnTheRustCoordinator() {
+        FlowRegistry.Flow rs = registry.get("trading-gen-rs");
+        assertEquals("rust", rs.coordinatorImpl());
+        assertEquals("trading-gen-rs-coordinator", rs.coordinator());
+        assertEquals("orchestration-trading-gen-rs", rs.orchestrationQueue());
+        assertTrue(rs.machines().containsAll(List.of("rs_trading_system", "rs_trading_order")), rs.machines().toString());
+        assertEquals("java", registry.get("trading-gen").coordinatorImpl());
+        assertEquals("rs_trading_order", PerfOps.defaultMachine(rs));
+    }
 }

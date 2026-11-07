@@ -195,6 +195,20 @@
             font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
   .model-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
   .model-results > .panel { margin: 0; }
+  .presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin: 8px 0 4px; }
+  .preset { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; background: var(--panel); }
+  .preset:hover, .preset:focus-visible { border-color: var(--accent); outline: none; }
+  .preset.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .preset .lbl { font-weight: 600; }
+  .preset .tun { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
+  .perfform { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .perfform select, .perfform input[type=number] { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12.5px; }
+  .perfform input[type=number] { width: 70px; }
+  .tl td { font-size: 12.5px; }
+  .tl .act { font-family: ui-monospace, monospace; font-size: 11.5px; }
+  .tl .act.bad { color: var(--bad); } .tl .act.warn { color: var(--warn); } .tl .act.ok { color: var(--ok); }
+  .inst td .ops { gap: 6px; }
+  .inst button { padding: 2px 8px; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -202,6 +216,7 @@
   <h1>Concert Dashboard</h1>
   <nav>
     <button data-view="flows" class="on">Flows</button>
+    <button data-view="perf">Performance</button>
     <button data-view="event">Event</button>
     <button data-view="entity">Entity</button>
     <button data-view="lock">Lock</button>
@@ -245,6 +260,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   if (v === 'analytics') showAnalytics('duckdb');
   else if (v === 'events') go('events', 'errors');
   else if (v === 'flows') showFlows();
+  else if (v === 'perf') showPerf();
   else if (v === 'model') showModel();
   else if (v === 'event') { setView('event'); setHash('event'); showRecent(); }
   else setView(v);
@@ -253,9 +269,10 @@ document.getElementById('search').onsubmit = e => { e.preventDefault(); if (q.va
 function setView(v) {
   view = v; q.placeholder = placeholders[v] ?? '';
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
-  document.getElementById('search').style.visibility = ['analytics', 'events', 'flows', 'model'].includes(v) ? 'hidden' : '';
-  out.classList.toggle('wide', ['analytics', 'flows', 'model'].includes(v));
+  document.getElementById('search').style.visibility = ['analytics', 'events', 'flows', 'model', 'perf'].includes(v) ? 'hidden' : '';
+  out.classList.toggle('wide', ['analytics', 'flows', 'model', 'perf'].includes(v));
   if (v !== 'flows') clearTimeout(flowTimer);
+  if (v !== 'perf') clearTimeout(perfTimer);
 }
 async function api(path) { const r = await fetch(path); return r.json(); }
 
@@ -725,6 +742,7 @@ const ecoById = id => (controlFlows?.flows || []).find(f => f.id === id);
 const ecoOfMachine = mid => (controlFlows?.flows || []).find(f => f.machineFlows.includes(mid));
 const STATE = { running: ['ok', 'Running'], partial: ['warn', 'Partly running'], stopped: ['idle', 'Stopped'], absent: ['idle', 'Not created'] };
 const ecoStatus = f => status(...(STATE[f.state] || ['idle', f.state]));
+const implBadge = f => f.coordinatorImpl === 'rust' ? '<span class="badge" title="its coordinator is the Rust coordinator (platform/coordinator-rs)">Rust coordinator</span>' : '';
 const jobRunning = j => j && j.state === 'RUNNING';
 const jobLog = j => j ? `<details ${jobRunning(j) || j.state === 'FAILED' ? 'open' : ''}><summary class="muted">${esc(j.action)}: ${esc(j.state.toLowerCase())}
     ${j.endedAt ? '· ' + ago(j.endedAt) : ''}</summary><pre class="joblog">${esc(j.log.join('\n'))}</pre></details>` : '';
@@ -771,7 +789,7 @@ async function showFlows() {
     return `<div class="card ${f.state === 'running' || f.state === 'partial' ? '' : 'idle'}" ${open}>
       <div class="top"><span class="name">${esc(f.label)}</span>${jobRunning(f.job) ? status('warn', f.job.action + '…') : ecoStatus(f)}</div>
       <div class="muted" style="font-size:12px">${f.machines.length} machine${f.machines.length === 1 ? '' : 's'}${f.eventCatalogs.length
-        ? ` · ${f.machineFlows.length - f.machines.length} event domain${f.machineFlows.length - f.machines.length === 1 ? '' : 's'}` : ''}</div>
+        ? ` · ${f.machineFlows.length - f.machines.length} event domain${f.machineFlows.length - f.machines.length === 1 ? '' : 's'}` : ''} ${implBadge(f)}</div>
       <div><div class="tile-label">Processed</div><div class="tile-value">${rate(sum('processedPerSec'))}</div></div>
       ${spark(series, step, 'processed')}
       <div class="minis"><div><b>${fmt(sum('published'))}</b><span>published</span></div><div><b>${fmt(sum('processed'))}</b><span>processed</span></div>
@@ -832,7 +850,7 @@ async function showEco(id) {
   const svc = x => `<tr><td class="mono">${esc(x.name)}</td><td>${x.state === 'running' ? status('ok', 'running') : x.state === 'absent' ? status('idle', 'not created')
     : status(x.state === 'restarting' ? 'warn' : 'idle', x.state)}</td><td class="muted">${esc(x.status)}</td></tr>`;
   out.innerHTML = `<div id="eco-root"><div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span><h2>${esc(f.label)}</h2>
-      ${jobRunning(f.job) ? status('warn', f.job.action + '…') : ecoStatus(f)}<span class="spacer"></span>${flowButtons(f)}</div>
+      ${implBadge(f)}${jobRunning(f.job) ? status('warn', f.job.action + '…') : ecoStatus(f)}<span class="spacer"></span>${flowButtons(f)}</div>
     ${controlFlows.docker ? `<div class="panel">${status('bad', 'No Docker control')} ${esc(controlFlows.docker)}</div>` : ''}
     ${f.job ? `<div class="panel">${jobLog(f.job)}</div>` : ''}
     <div class="panel"><h3>Runs on</h3>
@@ -961,7 +979,8 @@ async function showFlow(id) {
   flowTimer = setTimeout(() => location.hash === '#flow/' + encodeURIComponent(id) && showFlow(id), 3000);
 }
 
-function renderFlow(d) {
+/** The flow map of a machine flow page (also on the Performance page): one node per hop. */
+function pipelineNodes(d) {
   const f = d.flow, p = d.publisher, k = d.kinesis, c = d.coordinator, w = d.worker, kf = d.kafka, s = d.stores;
   const step = Math.max(1, d.coveredSec / 30);
   const active = (x, label = 'Active') => x > 0 ? status('ok', label) : status('idle', 'Idle');
@@ -1002,6 +1021,12 @@ function renderFlow(d) {
       ${node('deephaven', 'Deephaven', dhSt, 'Volume', fmt(dh.volume) + '<small>records</small>', [['latency', '–']])}
     </div></div>`,
   ].join('');
+  return nodes;
+}
+
+function renderFlow(d) {
+  const f = d.flow, kf = d.kafka;
+  const nodes = pipelineNodes(d);
 
   const eco = ecoOfMachine(f.id);
   out.innerHTML = `<div id="flow-root"><div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span>
@@ -1515,6 +1540,182 @@ async function renderDiagram(sel, machines, events) {
 }
 
 /** Opens the page of the current hash (on load, and to redraw after a theme switch). Startup lands on the flows. */
+// ---------------------------------------------------------------- Performance: one flow at a time, measured on its own
+
+let perfTimer = null, perfLast = null, perfSetup = false;
+let perfForm = (() => { try { return JSON.parse(localStorage.getItem('perfForm') || '{}'); } catch (e) { return {}; } })();
+function savePerfForm() { try { localStorage.setItem('perfForm', JSON.stringify(perfForm)); } catch (e) { /* private window */ } }
+
+async function showPerf() {
+  setView('perf'); setHash('perf');
+  clearTimeout(perfTimer);
+  if (!document.getElementById('perf-root')) out.innerHTML = '<div class="panel muted">Loading…</div>';
+  const p = await apiJson('/api/perf');
+  if (!location.hash.startsWith('#perf')) return;
+  if (p.error) { out.innerHTML = `<div class="panel FAILED">${esc(p.error)}</div>`; return; }
+  perfLast = p;
+  let d = null;
+  if (p.run && !(perfSetup)) {
+    d = await apiJson('/api/flows/' + encodeURIComponent(p.run.machine) + '?window=' + flowWindow);
+    if (!location.hash.startsWith('#perf')) return;
+    if (!d.error) lastFlow = d;
+  }
+  renderPerf(p, d);
+  // The setup form is not refreshed while it is open (it would reset what you are typing), unless a job runs.
+  const busy = jobRunning(p.job);
+  if (busy || (p.run && !perfSetup)) perfTimer = setTimeout(() => location.hash.startsWith('#perf') && showPerf(), busy ? 1500 : 3000);
+}
+
+function renderPerf(p, d) {
+  const run = p.run, setup = !run || perfSetup;
+  const busy = jobRunning(p.job);
+  out.innerHTML = `<div id="perf-root"><div class="crumbs"><h2>Performance</h2>
+      <span class="muted">one flow at a time, measured on its own</span><span class="spacer"></span>
+      ${run && !setup ? `<button class="ghost" onclick="perfSetup=true;renderPerf(perfLast,null)" ${busy ? 'disabled' : ''}>New run…</button>` : ''}
+      ${run && setup ? `<button class="ghost" onclick="perfSetup=false;showPerf()">Back to the run</button>` : ''}
+      ${run && !setup ? windowPicker('showPerf()') : ''}</div>
+    ${p.docker ? `<div class="panel">${status('bad', 'No Docker control')} ${esc(p.docker)}</div>` : ''}
+    ${p.job && p.job.action ? `<div class="panel">${jobLog(p.job)}</div>` : ''}
+    ${setup ? perfSetupPanel(p) : perfRunPanel(p) + perfInstancesPanel(p) + perfMetrics(d, p) + perfTimeline(p)}</div>`;
+}
+
+function perfFlow(p) {
+  const ids = p.flows.map(f => f.id);
+  const id = ids.includes(perfForm.flow) ? perfForm.flow : ids.includes('trading-gen-rs') ? 'trading-gen-rs' : ids[0];
+  return p.flows.find(f => f.id === id);
+}
+function perfPreset(p) { return p.presets.find(x => x.id === perfForm.preset) || p.presets.find(x => x.id === 'balanced') || p.presets[0]; }
+
+function perfSetupPanel(p) {
+  if (!p.flows.length) return '<div class="panel muted">No state machine flow is registered.</div>';
+  const f = perfFlow(p), pr = perfPreset(p);
+  const machine = f.machines.includes(perfForm.machine) ? perfForm.machine : f.defaultMachine;
+  const v = (k, dflt) => perfForm[k] ?? dflt;
+  const opt = (val, cur, label) => `<option value="${esc(val)}" ${val == cur ? 'selected' : ''}>${esc(label)}</option>`;
+  const presetCard = x => `<div class="preset ${x.id === pr.id ? 'on' : ''}" tabindex="0" role="radio" aria-checked="${x.id === pr.id}"
+      onclick="perfPick('${esc(x.id)}')" onkeydown="if(event.key==='Enter'||event.key===' ')perfPick('${esc(x.id)}')">
+      <span class="lbl">${esc(x.label)}</span><span class="muted" style="font-size:12px">${esc(x.note)}</span>
+      <span class="tun">${x.rate}/s load${Object.entries(x.tuning).map(([k, val]) => ` · ${esc(k)}=${esc(val)}`).join('') || ' · default tuning'}</span></div>`;
+  const others = p.otherFlowsRunning || [];
+  const analyticsUp = (p.analytics || []).filter(a => a.state === 'running').map(a => a.service);
+  return `<div class="panel"><h3>1. Flow</h3>
+      <div class="perfform">
+        <label>flow <select id="pf-flow" onchange="perfForm.flow=this.value;perfForm.machine=null;savePerfForm();renderPerf(perfLast,null)">
+          ${p.flows.map(x => opt(x.id, f.id, x.label + (x.coordinatorImpl === 'rust' ? ' (Rust coordinator)' : ' (Java coordinator)'))).join('')}</select></label>
+        <label>load on <select id="pf-machine" onchange="perfForm.machine=this.value;savePerfForm()">${f.machines.map(m => opt(m, machine, m)).join('')}</select></label>
+      </div>
+      <div class="note">Only one flow runs during a run: starting it stops every other flow. Load replays the machine's sample flow with unique
+        ids per instance; a chain entry point (<span class="mono">*_system</span>) sends every instance's chained events through the sample's one account, a single lock key.</div></div>
+    <div class="panel"><h3>2. Configuration</h3>
+      <div class="presets" role="radiogroup">${p.presets.map(presetCard).join('')}</div>
+      <div class="perfform">
+        <label>coordinators <input type="number" id="pf-coord" min="1" max="8" value="${v('coordinators', pr.coordinators)}" oninput="perfForm.coordinators=+this.value;savePerfForm()"></label>
+        <label>workers <input type="number" id="pf-work" min="1" max="8" value="${v('workers', pr.workers)}" oninput="perfForm.workers=+this.value;savePerfForm()"></label>
+        <label>load <input type="number" id="pf-rate" min="0.5" max="500" step="0.5" value="${v('rate', pr.rate)}" oninput="perfForm.rate=+this.value;savePerfForm()"> instances/s</label>
+        <label>for <select id="pf-dur" onchange="perfForm.duration=+this.value;savePerfForm()">${[60, 300, 600, 1800, 3600].map(x => opt(x, v('duration', 300), x < 120 ? x + ' s' : x / 60 + ' min')).join('')}</select></label>
+      </div>
+      <div class="note">Replicas run with <span class="mono">docker compose --scale</span>; the tuning applies to this flow's coordinator and worker containers.</div></div>
+    <div class="panel"><h3>3. Chaos and services</h3>
+      <div class="perfform">
+        <label><input type="checkbox" id="pf-chaos" ${v('chaos', false) ? 'checked' : ''} onchange="perfForm.chaos=this.checked;savePerfForm()"> include chaos: a random coordinator or worker goes down every</label>
+        <label><input type="number" id="pf-every" min="5" max="600" value="${v('chaosEvery', 20)}" oninput="perfForm.chaosEvery=+this.value;savePerfForm()"> s</label>
+        <label><input type="checkbox" id="pf-kafka" ${v('chaosKafka', false) ? 'checked' : ''} onchange="perfForm.chaosKafka=this.checked;savePerfForm()"> chaos may stop Kafka too</label>
+      </div>
+      <div class="perfform">
+        <label><input type="checkbox" id="pf-analytics" ${v('stopAnalytics', true) ? 'checked' : ''} onchange="perfForm.stopAnalytics=this.checked;savePerfForm()">
+          stop the analytics services (DuckDB sink, ClickHouse, Deephaven, Legend, market data) for performance-only metrics</label>
+      </div>
+      <div class="note">Victims stay down 3 to 12 s (SIGKILL or a graceful SIGTERM), then start again. You can also kill or stop any instance, or Kafka, by hand once the run is up.
+        Temporal, Postgres and Kinesis keep running: they hold the work while processes are down.</div></div>
+    <div class="panel"><div class="ops">
+      <button class="primary" onclick="perfStart()" ${jobRunning(p.job) || p.docker ? 'disabled' : ''}>${others.length || analyticsUp.length ? 'Stop all other services and start' : 'Start'}</button>
+      <span class="muted">${others.length ? `stops ${esc(others.map(o => o.label).join(', '))}` : 'no other flow is running'}${analyticsUp.length && v('stopAnalytics', true)
+        ? ` · stops ${esc(analyticsUp.join(', '))}` : ''}</span></div></div>`;
+}
+function perfPick(id) {
+  const pr = perfLast.presets.find(x => x.id === id);
+  perfForm = { ...perfForm, preset: id, coordinators: pr.coordinators, workers: pr.workers, rate: pr.rate };
+  savePerfForm(); renderPerf(perfLast, null);
+}
+async function perfStart() {
+  const f = perfFlow(perfLast), pr = perfPreset(perfLast);
+  const val = id => document.getElementById(id);
+  const q = new URLSearchParams({ flow: f.id, preset: pr.id, machine: val('pf-machine').value, coordinators: val('pf-coord').value,
+    workers: val('pf-work').value, rate: val('pf-rate').value, duration: val('pf-dur').value, chaos: val('pf-chaos').checked,
+    chaosEvery: val('pf-every').value, chaosKafka: val('pf-kafka').checked, stopAnalytics: val('pf-analytics').checked });
+  const others = perfLast.otherFlowsRunning || [];
+  if (others.length && !confirm(`Start the performance run on ${f.label}?\n\nThis stops ${others.map(o => o.label).join(', ')} first (only one flow runs at a time).`)) return;
+  perfForm = { ...perfForm, flow: f.id, machine: val('pf-machine').value }; savePerfForm();
+  const d = await apiJson('/api/perf/start?' + q, { method: 'POST' });
+  if (d.error) { alert(d.error); return; }
+  perfSetup = false; showPerf();
+}
+async function perfOp(path, ask) {
+  if (ask && !confirm(ask)) return;
+  const d = await apiJson('/api/perf/' + path, { method: 'POST' });
+  if (d.error) alert(d.error);
+  showPerf();
+}
+
+function perfRunPanel(p) {
+  const r = p.run, g = r.generator, f = p.flows.find(x => x.id === r.flow) || { label: r.flow };
+  const busy = jobRunning(p.job);
+  const loading = g && g.running;
+  const pct = g ? Math.min(100, Math.round(g.elapsedSec * 100 / Math.max(1, g.durationSec))) : 0;
+  const tuning = Object.entries(r.preset.tuning || {}).map(([k, v]) => `${k}=${v}`).join(' · ') || 'default tuning';
+  return `<div class="panel"><div class="ops"><b>${esc(f.label)}</b>${implBadge(f)}
+      ${busy ? status('warn', p.job.action + '…') : loading ? status('ok', 'Loading') : status('idle', 'Load finished')}
+      ${r.chaos.on ? status('warn', 'Chaos every ' + r.chaos.everySec + ' s' + (r.chaos.kafka ? ' (Kafka too)' : '')) : ''}
+      <span class="spacer" style="flex:1"></span>
+      <button class="ghost" onclick="perfOp('chaos/${r.chaos.on ? 'off' : 'on'}')" ${busy ? 'disabled' : ''}>${r.chaos.on ? 'Stop chaos' : 'Start chaos'}</button>
+      <button class="ghost" onclick="perfOp('restore')" ${busy ? 'disabled' : ''} title="start every stopped instance (and Kafka if this run stopped it)">Restore all</button>
+      <button class="danger" onclick="perfOp('stop')" ${busy ? 'disabled' : ''} title="stop the load and chaos and bring back what is down; the flow keeps running">Stop run</button></div>
+    <div class="kv" style="margin-top:10px">
+      <span class="muted">configuration</span><span>${esc(r.preset.label.split(':')[0])} preset · <b>${r.coordinators}</b> coordinator${r.coordinators === 1 ? '' : 's'} · <b>${r.workers}</b> worker${r.workers === 1 ? '' : 's'} <span class="muted mono">${esc(tuning)}</span></span>
+      <span class="muted">load</span><span>${fmt(r.rate)} instances/s on <a class="mono" onclick="go('flow','${esc(r.machine)}')">${esc(r.machine)}</a> for ${fmt(r.durationSec)} s
+        ${g ? `<span class="muted">· ${fmt(g.elapsedSec)} s · ${fmt(g.instances)} instances · ${fmt(g.sent)} events sent${g.failed ? ` · <span class="FAILED">${fmt(g.failed)} put failures</span>` : ''}</span>` : ''}</span>
+      <span class="muted">started</span><span>${ago(r.startedAt)}</span></div>
+    ${g ? `<div class="progress" style="width:100%;margin-top:8px" title="${g.elapsedSec}s of ${g.durationSec}s"><div style="width:${pct}%"></div></div>` : ''}</div>`;
+}
+
+function perfInstancesPanel(p) {
+  const st = x => x === 'running' ? status('ok', 'running') : x === 'absent' ? status('idle', 'not created') : status(x === 'restarting' ? 'warn' : 'bad', x);
+  const btns = (name, state) => `<div class="ops">
+      <button class="danger" onclick="perfOp('instance/${encodeURIComponent(name)}/kill')" ${state !== 'running' ? 'disabled' : ''} title="SIGKILL: like a crash">Kill</button>
+      <button class="ghost" onclick="perfOp('instance/${encodeURIComponent(name)}/stop')" ${state !== 'running' ? 'disabled' : ''} title="SIGTERM: graceful shutdown">Stop</button>
+      <button class="ghost" onclick="perfOp('instance/${encodeURIComponent(name)}/start')" ${state === 'running' ? 'disabled' : ''}>Start</button></div>`;
+  const rows = (p.instances || []).map(i => `<tr><td>${esc(i.role)}</td><td class="mono">${esc(i.name)}</td><td>${st(i.state)}</td>
+      <td class="muted">${esc(i.status)}</td><td>${btns(i.name, i.state)}</td></tr>`).join('');
+  const kafka = `<tr><td>kafka</td><td class="mono">kafka</td><td>${st(p.kafka)}</td><td class="muted">snapshot topics; workers keep transitioning while it is down</td>
+      <td><div class="ops"><button class="danger" onclick="perfOp('kafka/stop')" ${p.kafka !== 'running' ? 'disabled' : ''}>Stop</button>
+        <button class="ghost" onclick="perfOp('kafka/start')" ${p.kafka === 'running' ? 'disabled' : ''}>Start</button></div></td></tr>`;
+  const analytics = (p.analytics || []).map(a => `<span class="svc">${a.state === 'running' ? status('ok', a.service) : status('idle', a.service)}</span>`).join('');
+  return `<div class="panel"><h3>Instances</h3>
+      <table class="inst"><tr><th>role</th><th>container</th><th>state</th><th>status</th><th></th></tr>${rows}${kafka}</table>
+      <div class="note">Kill or stop an instance and watch the pipeline below: coordinator work moves to the other coordinators (shard consumers after the heartbeat timeout),
+        worker tasks to the other workers; with none left, events wait in Kinesis and Temporal until one is back.</div>
+      <div class="svcs" style="margin-top:8px"><span class="muted" style="font-size:12px">analytics</span>${analytics}</div></div>`;
+}
+
+function perfMetrics(d, p) {
+  if (!d) return '<div class="panel muted">Loading metrics…</div>';
+  if (d.error) return `<div class="panel FAILED">${esc(d.error)}</div>`;
+  const stopped = (p.analytics || []).filter(a => a.state !== 'running').map(a => a.service);
+  return `${machineWidget(d)}<div class="panel"><div class="flowmap">${pipelineNodes(d)}</div>
+      <div class="note">${esc(d.flow.label)}, last ${fmt(d.coveredSec)} s${d.truncated ? ' (trace read capped: newest rows only)' : ''}${d.traceSample < 1 ? ` · trace sampling ${d.traceSample}: counts scaled` : ''}.
+        The same view as the machine's flow page: <a onclick="go('flow','${esc(d.flow.id)}')">open it</a> for its coordinator, worker and failures.
+        ${stopped.length ? `Stores show down while the analytics services are stopped (${esc(stopped.join(', '))}): this run measures Kinesis → coordinator → worker.` : ''}</div></div>`;
+}
+
+function perfTimeline(p) {
+  const marks = [...(p.run.timeline || [])].reverse();
+  const cls = a => a.includes('KILL') ? 'bad' : a.startsWith('CHAOS') || a === 'STOP' ? 'warn' : a === 'START' || a === 'LOAD' ? 'ok' : '';
+  return `<div class="panel"><h3>Timeline</h3>${marks.length ? `<table class="tl"><tr><th>time</th><th>action</th><th>target</th><th>detail</th></tr>
+      ${marks.map(m => `<tr><td class="mono">${time(m.ts)}</td><td class="act ${cls(m.action)}">${esc(m.action)}</td><td class="mono">${esc(m.target)}</td>
+        <td class="muted">${esc(m.detail)}</td></tr>`).join('')}</table>` : '<div class="muted">Nothing yet.</div>'}
+    <div class="note">Every manual and chaos action, newest first: line them up with dips in the completions above.</div></div>`;
+}
+
 function route() {
   const [hv, hid, hextra] = location.hash.slice(1).split('/');
   if (hv === 'analytics') showAnalytics(hid || 'duckdb', hextra ? decodeURIComponent(hextra) : undefined);
@@ -1522,6 +1723,7 @@ function route() {
   else if (hv === 'diagrams') showDiagrams(hid ? decodeURIComponent(hid) : undefined);
   else if (hv === 'model') showModel(hid ? decodeURIComponent(location.hash.slice('#model/'.length)) : undefined, !!hid);
   else if (hv === 'flow' && hid) go('flow', location.hash.slice('#flow/'.length).split('/').map(decodeURIComponent).join('/'));
+  else if (hv === 'perf') showPerf();
   else if (hv === 'event' && !hid) { setView('event'); showRecent(); }
   else if (hv && hid) go(hv, decodeURIComponent(hid)); else showFlows();
 }

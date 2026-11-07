@@ -45,6 +45,12 @@ import org.slf4j.LoggerFactory;
  * POST /api/flows/{flow}/generate?rate=&duration=&errors=   start it (instances/s, seconds, inject failures)
  * POST /api/flows/{flow}/generate/stop                     stop it
  * GET /api/flows/{flow}/temporal?window=300  serial key queues, workflows by status, task queues, ingest consumers
+ * GET  /api/perf           Performance page: presets, flows, the current run (settings, timeline, load), its instances,
+ *                          Kafka and analytics service states
+ * POST /api/perf/start?flow=&preset=&machine=&coordinators=&workers=&rate=&duration=&chaos=&chaosEvery=&chaosKafka=&stopAnalytics=
+ *                          one flow at a time: stops the others (and analytics if asked), starts it scaled, loads it
+ * POST /api/perf/stop · /api/perf/restore · /api/perf/chaos/{on|off} · /api/perf/kafka/{stop|start}
+ * POST /api/perf/instance/{container}/{kill|stop|start}
  * GET /api/flows/{flow}/failures?window=     failures grouped by stage and message (+ event lifecycle errors)
  * GET  /api/model/info     Model query: legend-lite status, mapped classes (per table) and sample queries
  * POST /api/model/query    {"query": "<Pure lambda>", "stores": "duckdb,clickhouse"} -> per store {sql, columns, rows, ...}
@@ -77,6 +83,7 @@ public final class DashboardMain {
 
     private final FlowRegistry registry;
     private final FlowOps ops;
+    private final PerfOps perf;
     private final StateStore store;
     private final WorkflowClient client;
     private final String temporalUi = Env.get("TEMPORAL_UI_URL", "http://localhost:8080");
@@ -153,6 +160,7 @@ public final class DashboardMain {
         this.temporal = new FlowTemporal(client, temporalUi);
         this.ops = new FlowOps(registry, new DockerCompose(repo(), registry.composeFiles()),
                 io.concert.orchestration.KinesisClients.fromEnv(), client, store, generator);
+        this.perf = new PerfOps(ops, generator);
         this.model = new ModelQuery(Env.get("LEGEND_LITE_URL", "http://legend-lite:8095"), sinkDuckDb, clickHouse, http);
     }
 
@@ -189,6 +197,7 @@ public final class DashboardMain {
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/api/flows", this::flows);
         server.createContext("/api/control/", this::control);
+        server.createContext("/api/perf", this::perf);
         server.createContext("/api/marketdata/", this::marketData);
         server.createContext("/api/model/", this::model);
         server.createContext("/api/recent", ex -> json(ex, Map.of("events", store.recentEvents(50))));
@@ -422,6 +431,49 @@ public final class DashboardMain {
             log.warn("flow metrics failed", e);
             json(ex, 500, Map.of("error", String.valueOf(e.getMessage())));
         }
+    }
+
+    /** The Performance page ({@link PerfOps}). */
+    private void perf(HttpExchange ex) throws IOException {
+        String rest = ex.getRequestURI().getPath().substring("/api/perf".length()).replaceFirst("^/", "");
+        String[] p = rest.isEmpty() ? new String[0] : rest.split("/");
+        boolean post = ex.getRequestMethod().equals("POST");
+        Map<String, String> q = query(ex);
+        try {
+            if (p.length == 0) {
+                json(ex, perf.view());
+                return;
+            }
+            if (!post) {
+                json(ex, 405, Map.of("error", "POST /api/perf/" + rest));
+                return;
+            }
+            json(ex, switch (p[0]) {
+                case "start" -> perf.start(q.getOrDefault("flow", ""), q.getOrDefault("preset", "balanced"), q.get("machine"),
+                        intParam(q, "coordinators", 0), intParam(q, "workers", 0), Double.parseDouble(q.getOrDefault("rate", "0")),
+                        intParam(q, "duration", 300), Boolean.parseBoolean(q.getOrDefault("chaos", "false")),
+                        intParam(q, "chaosEvery", 20), Boolean.parseBoolean(q.getOrDefault("chaosKafka", "false")),
+                        Boolean.parseBoolean(q.getOrDefault("stopAnalytics", "true")));
+                case "stop" -> perf.stop();
+                case "restore" -> perf.restore();
+                case "chaos" -> perf.chaos(p.length > 1 && p[1].equals("on"));
+                case "kafka" -> perf.kafka(p.length > 1 ? p[1] : "");
+                case "instance" -> {
+                    if (p.length < 3) {
+                        throw new IllegalArgumentException("POST /api/perf/instance/{container}/{kill|stop|start}");
+                    }
+                    yield perf.instance(p[1], p[2]);
+                }
+                default -> throw new IllegalArgumentException("unknown performance operation " + p[0]);
+            });
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            json(ex, 409, Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    private static int intParam(Map<String, String> q, String key, int dflt) {
+        String v = q.get(key);
+        return v == null || v.isBlank() ? dflt : (int) Double.parseDouble(v);
     }
 
     /**

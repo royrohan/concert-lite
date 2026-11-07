@@ -1,6 +1,7 @@
 package io.concert.dashboard;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.concert.common.Env;
 import io.concert.common.Flows;
 import io.concert.common.Json;
 import io.concert.common.TaskQueues;
@@ -37,10 +38,12 @@ final class FlowRegistry {
      * @param smTypes sm_type values of its rows: entity types, event lifecycle ({@code evt_*}) and keyed state ({@code st_*})
      * @param taskQueues its worker task queues plus its orchestration queue
      * @param workflowPrefixes ids of its workflows start with one of these (traces and Temporal clean-up)
+     * @param coordinatorImpl {@code java} (platform/orchestration) or {@code rust} (platform/coordinator-rs): a generated
+     *     ecosystem's {@code coordinator} in ecosystem.json, else java, unless {@code COORDINATOR_TARGET=coordinator-rs}
      */
     record Flow(String id, String label, String profile, String composeFile, String coordinator, List<String> workers,
             List<String> machineFlows, List<String> machines, List<String> eventCatalogs, Set<String> smTypes,
-            List<String> taskQueues, List<String> workflowPrefixes) {
+            List<String> taskQueues, List<String> workflowPrefixes, String coordinatorImpl) {
 
         List<String> services() {
             List<String> out = new ArrayList<>();
@@ -141,6 +144,7 @@ final class FlowRegistry {
             String profile;
             String file = null;
             String coordinator = id + "-coordinator";
+            String impl = "java";
             List<String> workers = new ArrayList<>();
             if (BUILT_IN.containsKey(id)) {
                 String[] d = BUILT_IN.get(id);
@@ -153,6 +157,7 @@ final class FlowRegistry {
                 label = id;
                 profile = e.path("profile").asText(id);
                 file = e.path("module").asText("showcases/" + id) + "/compose.yml";
+                impl = e.path("coordinator").asText("java");
                 if (!e.path("service").asText().isEmpty()) {
                     workers.add(e.path("service").asText());
                 }
@@ -166,9 +171,12 @@ final class FlowRegistry {
             taskQueues.add(Flows.orchestrationQueue(id));
             List<String> prefixes = new ArrayList<>(x.prefixes);
             prefixes.add(Flows.lockWorkflowId(id, ""));
+            if (impl.equals("java") && "coordinator-rs".equals(Env.get("COORDINATOR_TARGET", ""))) {
+                impl = "rust"; // compose builds every Java-default coordinator from the Rust target
+            }
             out.put(id, new Flow(id, label, profile, file, coordinator, List.copyOf(workers), List.copyOf(x.machineFlows),
                     List.copyOf(x.machines), List.copyOf(x.eventCatalogs), Set.copyOf(x.smTypes), List.copyOf(taskQueues),
-                    List.copyOf(prefixes)));
+                    List.copyOf(prefixes), impl));
         }
         return out;
     }
