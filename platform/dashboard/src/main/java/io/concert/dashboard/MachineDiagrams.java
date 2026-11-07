@@ -39,12 +39,17 @@ final class MachineDiagrams {
     /** {@code {machines: [...], eventCatalogs: [{name, flowMermaid, modelMermaid}]}}. */
     static Map<String, Object> all() {
         List<Map<String, Object>> machines = new ArrayList<>();
+        Map<String, String> chains = new LinkedHashMap<>();
         Set<String> seen = new LinkedHashSet<>();
         for (MachineCatalog c : MachineCatalog.load()) {
             for (MachineCatalog.Machine m : c.machines()) {
                 if (seen.add(m.smType())) {
                     machines.add(machine(c.name(), m));
                 }
+            }
+            String chain = chainMermaid(c.machines());
+            if (chain != null) {
+                chains.put(c.name(), chain);
             }
         }
         List<Map<String, Object>> events = new ArrayList<>();
@@ -58,6 +63,7 @@ final class MachineDiagrams {
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("machines", machines);
+        out.put("chains", chains);
         out.put("eventCatalogs", events);
         return out;
     }
@@ -80,6 +86,15 @@ final class MachineDiagrams {
             return t;
         }).toList());
         out.put("classes", classes(root, spec));
+        out.put("emits", spec.emissions().stream().map(e -> {
+            Map<String, Object> x = new LinkedHashMap<>();
+            x.put("onEnter", List.copyOf(e.onEnter()));
+            x.put("smType", e.smType());
+            x.put("event", e.eventType());
+            x.put("key", e.keyTemplate());
+            x.put("fields", e.fields());
+            return x;
+        }).toList());
         out.put("stateMermaid", stateMermaid(spec));
         out.put("transitionMermaid", transitionMermaid(m.smType(), root, spec, m.modelMermaid()));
         out.put("modelMermaid", m.modelMermaid());
@@ -110,6 +125,13 @@ final class MachineDiagrams {
         for (String t : spec.terminalStates()) {
             sb.append("    ").append(t).append(" --> [*]\n");
         }
+        // event chaining: what entering a state emits to other machines
+        Map<String, List<String>> byState = new LinkedHashMap<>();
+        for (StateMachineSpec.Emission e : spec.emissions()) {
+            e.onEnter().stream().sorted().forEach(st -> byState.computeIfAbsent(st, k -> new ArrayList<>()).add(e.smType() + "." + e.eventType()));
+        }
+        byState.forEach((st, targets) -> sb.append("    note right of ").append(st).append(" : emits ")
+                .append(String.join(", ", new LinkedHashSet<>(targets))).append('\n'));
         return sb.toString();
     }
 
@@ -150,6 +172,35 @@ final class MachineDiagrams {
                 sb.append("  ").append(pid).append(" ..> ").append(rootId).append(" : ")
                         .append(String.join(" / ", events)).append('\n');
             }
+        });
+        return sb.toString();
+    }
+
+    /**
+     * How a catalog's machines are chained ({@code concert::sm.emits}): one node per machine, one edge per emitting
+     * state and target machine labelled with the state and the events; {@code null} when nothing is chained.
+     */
+    static String chainMermaid(List<MachineCatalog.Machine> machines) {
+        Map<String, List<String>> edges = new LinkedHashMap<>();
+        for (MachineCatalog.Machine m : machines) {
+            for (StateMachineSpec.Emission e : m.spec().emissions()) {
+                String k = m.smType() + "|" + e.smType() + "|" + String.join(" / ", e.onEnter().stream().sorted().toList());
+                edges.computeIfAbsent(k, x -> new ArrayList<>()).add(e.eventType());
+            }
+        }
+        if (edges.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("flowchart LR\n");
+        for (MachineCatalog.Machine m : machines) {
+            sb.append("    ").append(m.smType()).append("[\"").append(m.smType()).append("<br/><small>")
+                    .append(m.spec().initialState()).append(" → ").append(String.join(" | ", m.spec().terminalStates()))
+                    .append("</small>\"]\n");
+        }
+        edges.forEach((k, events) -> {
+            String[] p = k.split("\\|", 3);
+            sb.append("    ").append(p[0]).append(" -- \"").append(p[2]).append(": ").append(String.join(", ", events))
+                    .append("\" --> ").append(p[1]).append('\n');
         });
         return sb.toString();
     }

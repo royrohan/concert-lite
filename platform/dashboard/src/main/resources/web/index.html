@@ -910,8 +910,12 @@ async function showEcoFlowDiagram(id) {
   diagramsData = diagramsData || await apiJson('/api/model/diagrams');
   const machines = diagramsData.machines.filter(m => e.machines.includes(m.smType));
   const events = diagramsData.eventCatalogs.filter(c => e.eventCatalogs.includes(c.name));
+  const catalogs = [...new Set(machines.map(m => m.catalog))];
+  const chains = Object.entries(diagramsData.chains || {}).filter(([c]) => catalogs.includes(c));
   out.innerHTML = `<div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span><a onclick="go('flow','${esc(id)}')">${esc(e.label)}</a>
       <span class="sep">›</span><h2>Flow diagram</h2><span class="muted">the state machines as declared in Pure: each transition's event and payload class</span></div>
+    ${chains.map((c, i) => `<div class="panel"><h3>Event chain <span class="muted" style="font-weight:400">${esc(c[0])}: what entering a state
+      emits to another machine (concert::sm.emits)</span></h3><div id="fd-c${i}" style="overflow:auto"></div></div>`).join('')}
     ${machines.map((m, i) => `<div class="panel"><h3 class="mono">${esc(m.smType)} <span class="muted" style="font-weight:400">${esc(m.root || '')}</span></h3>
       <div id="fd-m${i}" style="overflow:auto"></div></div>`).join('')}
     ${events.map((c, i) => `<div class="panel"><h3 class="mono">${esc(c.name)} <span class="muted" style="font-weight:400">event flow</span></h3>
@@ -919,6 +923,7 @@ async function showEcoFlowDiagram(id) {
     ${!machines.length && !events.length ? '<div class="panel muted">No state machines or event catalogs in this flow.</div>' : ''}`;
   const draw = async (elId, src) => { const el = document.getElementById(elId); if (!el || !src) return;
     try { el.innerHTML = (await mermaid.render(elId + Date.now(), src)).svg; } catch (err) { el.textContent = 'diagram: ' + err; } };
+  for (const [i, c] of chains.entries()) await draw('fd-c' + i, c[1]);
   for (const [i, m] of machines.entries()) await draw('fd-m' + i, m.stateMermaid);
   for (const [i, c] of events.entries()) await draw('fd-e' + i, c.flowMermaid);
 }
@@ -1492,6 +1497,10 @@ async function renderDiagram(sel, machines, events) {
       + panel('dg-states', 'State machine', 'each transition: event (payload class)')
       + panel('dg-classes', 'Transition classes', 'the entity class and the payload classes that move it, linked by event')
       + (m.modelMermaid ? panel('dg-model', 'Pure model', 'every class of the machine\'s model files', false) : '')
+      + (m.emits && m.emits.length ? `<div class="panel"><h3>Emits <span class="muted" style="font-weight:400">event chaining declared in Pure (concert::sm.emits)</span></h3>
+        <table><tr><th>on entering</th><th>emits</th><th>instance key</th><th>fields</th></tr>
+        ${m.emits.map(x => `<tr><td class="mono">${esc(x.onEnter.join(' | '))}</td><td class="mono">${esc(x.smType)}.${esc(x.event)}</td>
+          <td class="mono">${esc(x.key)}</td><td class="mono muted">${esc(Object.entries(x.fields).map(([k, v]) => k + ' = ' + v).join(', ') || 'copied by name')}</td></tr>`).join('')}</table></div>` : '')
       + `<div class="panel"><h3>Transitions</h3><table><tr><th>from</th><th>event</th><th>to</th><th>payload class</th></tr>
         ${m.transitions.map(t => `<tr><td class="mono">${esc(t.from)}</td><td class="mono">${esc(t.event)}</td><td class="mono">${esc(t.to)}</td>
           <td class="mono muted">${esc(t.payload || '')}</td></tr>`).join('')}</table></div>`;

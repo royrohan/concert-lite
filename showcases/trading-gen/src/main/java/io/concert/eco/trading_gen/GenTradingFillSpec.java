@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * State machine {@code gen_trading_fill} declared on {@code trading::order::Fill} (order.pure:142:1).
+ * State machine {@code gen_trading_fill} declared on {@code trading::order::Fill} (order.pure:212:1).
  *
  * <pre>
  *   initial PENDING; terminal BOOKED
@@ -32,6 +32,18 @@ public final class GenTradingFillSpec {
 
     public static final StateMachineSpec SPEC = StateMachineSpec.startingAt("PENDING")
             .on("PENDING", "book", "BOOKED", io.concert.eco.trading_gen.model.trading.command.FillCommand.class)
+            // BOOKED -> gen_trading_system.fill_done (order.pure:208:5)
+            .emit(java.util.Set.of("BOOKED"), "gen_trading_system", "fill_done", "{orderId}",
+                    Map.ofEntries(Map.entry("step", "fill"), Map.entry("refId", "{fillId}"), Map.entry("state", "{status}")),
+                    List.of())
+            // BOOKED -> gen_trading_allocation.allocate (order.pure:209:5)
+            .emit(java.util.Set.of("BOOKED"), "gen_trading_allocation", "allocate", "{orderId}-A1",
+                    Map.ofEntries(Map.entry("allocId", "{orderId}-A1"), Map.entry("allocAccountId", "{accountId}"), Map.entry("avgPx", "{price}")),
+                    List.of("gen_trading_order:{orderId}", "account:{allocAccountId}"))
+            // BOOKED -> gen_trading_allocation.confirm (order.pure:210:5)
+            .emit(java.util.Set.of("BOOKED"), "gen_trading_allocation", "confirm", "{orderId}-A1",
+                    Map.ofEntries(Map.entry("allocId", "{orderId}-A1"), Map.entry("allocAccountId", "{accountId}")),
+                    List.of("gen_trading_order:{orderId}", "account:{allocAccountId}"))
             .build();
 
     /**

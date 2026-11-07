@@ -250,7 +250,21 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
         if (!errors.isEmpty()) {
             return Decision.reject("invalid data: " + String.join("; ", errors));
         }
-        return Decision.accept(ModelJson.write(data));
+        String dataJson = ModelJson.write(data);
+        // declared event chaining (concert::sm.emits): what entering toState emits to other machines
+        for (StateMachineSpec.Emission em : spec().emissionsOf(fromState, toState)) {
+            try {
+                var source = ChainEmissions.source(dataJson, event.payload());
+                var emitted = ChainEmissions.payload(em, source);
+                String key = ChainEmissions.render(em.keyTemplate(), source, em);
+                List<String> locks = LockTemplates.render(em.lockTemplates(), key, emitted);
+                addEmit(EventEmissions.entity(event, emitBuffer.size() + 1, em.smType(), key, em.eventType(),
+                        io.concert.common.Json.write(emitted), locks, Workflow.currentTimeMillis()));
+            } catch (IllegalArgumentException e) {
+                return Decision.reject(e.getMessage());
+            }
+        }
+        return Decision.accept(dataJson);
     }
 
     @Override

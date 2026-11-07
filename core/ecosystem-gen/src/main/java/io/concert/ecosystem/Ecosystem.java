@@ -116,6 +116,7 @@ record Ecosystem(
         Set<String> smTypes = new LinkedHashSet<>();
         machines.forEach(m -> smTypes.add(m.smType()));
         EventDeclarationParser.Result ev = new EventDeclarationParser(resolved, text, diag).parse(smTypes);
+        checkEmits(machines, resolved, diag);
         if (machines.isEmpty() && ev.events().isEmpty() && diag.errors.isEmpty()) {
             diag.error(null, "no class is marked <<" + ConcertProfile.NAME + "." + ConcertProfile.ROOT + ">> or <<"
                     + ConcertProfile.EVENT_PROFILE + "." + ConcertProfile.EVENT + ">>: declare at least one state machine or event");
@@ -129,6 +130,53 @@ record Ecosystem(
         }
         return new Ecosystem(name, javaPackage, List.copyOf(sources.keySet()), sources, resolved, machines, ev.events(),
                 ev.states(), diag.warnings);
+    }
+
+    /**
+     * Event chaining across machines: an emit names a machine of this ecosystem and one of its events; explicit fields
+     * must be properties of that event's payload; required payload fields that neither the fields nor the source
+     * (entity data and triggering payloads) provide are warned about.
+     */
+    private static void checkEmits(List<MachineDecl> machines, ResolvedModel model, Diagnostics diag) {
+        Map<String, MachineDecl> byType = new java.util.HashMap<>();
+        machines.forEach(m -> byType.put(m.smType(), m));
+        for (MachineDecl m : machines) {
+            for (MachineDecl.Emit e : m.emits()) {
+                MachineDecl target = byType.get(e.smType());
+                if (target == null) {
+                    diag.error(e.location(), "emit target '" + e.smType() + "' is not a machine of this ecosystem " + byType.keySet());
+                    continue;
+                }
+                if (!target.eventTypes().contains(e.eventType())) {
+                    diag.error(e.location(), "machine " + e.smType() + " has no event '" + e.eventType() + "'; its events are "
+                            + target.eventTypes());
+                    continue;
+                }
+                String payload = target.payloadClass(e.eventType());
+                if (payload == null) {
+                    continue;
+                }
+                var cls = model.findClass(payload).orElseThrow();
+                Set<String> props = new LinkedHashSet<>();
+                model.allProperties(cls).forEach(p -> props.add(p.name()));
+                for (String f : e.fields().keySet()) {
+                    if (!props.contains(f)) {
+                        diag.error(e.location(), "emit field '" + f + "' is not a property of " + payload + " (payload of "
+                                + e.smType() + "." + e.eventType() + ")");
+                    }
+                }
+                Set<String> source = new LinkedHashSet<>(e.fields().keySet());
+                model.allProperties(m.root()).forEach(p -> source.add(p.name()));
+                m.transitions().stream().filter(t -> e.onEnter().contains(t.to()) && t.payloadClass() != null)
+                        .forEach(t -> model.allProperties(model.findClass(t.payloadClass()).orElseThrow()).forEach(p -> source.add(p.name())));
+                for (var p : model.allProperties(cls)) {
+                    if (p.multiplicity().isToOne() && !p.multiplicity().isOptional() && p.defaultValue() == null && !source.contains(p.name())) {
+                        diag.warn(e.location(), "emit " + e.smType() + "." + e.eventType() + ": required field '" + p.name() + "' of "
+                                + payload + " is not set (add it to the emit's fields)");
+                    }
+                }
+            }
+        }
     }
 
     // ---- names ----

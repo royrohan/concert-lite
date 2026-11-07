@@ -52,6 +52,15 @@ class FlowGeneratorTest {
     }
 
     @Test
+    void entityLockFieldsAreRewrittenSoInstancesDontShareALock() {
+        FlowGenerator.Sample flow = gen.samplesFor("gen_trading_execution", false).getFirst();
+        String text = Json.write(gen.rewrite(flow, "r2-1"));
+        // the execution's lock key gen_trading_order:{orderId}: each generated instance gets its own order id
+        assertTrue(text.contains("\"GEN-TRADING-ORDER-1001-r2-1\""), text);
+        assertFalse(text.contains("\"GEN-TRADING-ORDER-1001\""), text);
+    }
+
+    @Test
     void instancesCarryLocksAndInjectInvalidEvents() {
         FlowGenerator.Run claim = gen.new Run("claim", "samples", 1, 10, true);
         List<EventEnvelope> events = claim.instance(1, false, 1000);

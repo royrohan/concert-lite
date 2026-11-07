@@ -13,7 +13,11 @@
 //     concert::sm.terminal = 'APPROVED',                           // default: states without outgoing transitions
 //     concert::sm.locks = 'approve: policy:{policyId}',            // event[,event2|*]: template[, template]
 //     concert::sm.statusProperty = 'status',                       // enum property kept equal to the state
-//     concert::sm.idProperty = 'claimId'                           // String property set to the instance key
+//     concert::sm.idProperty = 'claimId',                          // String property set to the instance key
+//     concert::sm.emits = 'APPROVED -> payout.schedule [{claimId}-P] (payoutId = {claimId}-P, amount = {approvedAmount})'
+//                                    // event chaining: entering APPROVED emits 'schedule' to the payout machine,
+//                                    // instance key [template]; payload fields not listed in (...) are copied by name
+//                                    // from the entity's data and the triggering event's payload; entries end with ';'
 //   }
 //   insurance::Claim { ... }
 //
@@ -21,7 +25,7 @@
 Profile concert::sm
 {
   stereotypes: [root, command];
-  tags: [type, initial, transitions, terminal, locks, statusProperty, idProperty];
+  tags: [type, initial, transitions, terminal, locks, statusProperty, idProperty, emits];
 }
 
 // The concert event profile: event-style processing (one handler per event type, every event NEW -> DONE).

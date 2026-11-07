@@ -94,3 +94,33 @@ Class <<concert::sm.command>> trading::command::CloseOrderCommand extends OrderE
   allocatedQty: Integer[1];
   allocationCount: Integer[1];
 }
+
+// The trading system (gen_trading_system) starts a trade's chain with a submit, and each machine of the chain reports
+// its terminal state back to it with a ChainStepCommand (concert::sm.emits in order.pure).
+Class <<concert::sm.command>> trading::command::SubmitTradeCommand extends OrderEvent
+{
+  clientId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  orderType: OrderType[1] = OrderType.MARKET;
+  quantity: Integer[1];
+  limitPrice: Decimal[0..1];
+  // Venue the trade executes on, its fill price, fee and liquidity, and the account it is allocated to.
+  venue: String[1];
+  price: Decimal[1];
+  fee: Decimal[1] = 0.0D;
+  liquidity: Liquidity[1] = Liquidity.REMOVE;
+  allocAccountId: String[1];
+}
+
+Class <<concert::sm.command>> trading::command::ChainStepCommand extends OrderEvent
+{
+  // order | execution | fill | allocation
+  step: String[1];
+  // Id of the entity that finished the step (orderId, execId, fillId, allocId).
+  refId: String[1];
+  // The state it finished in.
+  state: String[1];
+  quantity: Integer[0..1];
+  price: Decimal[0..1];
+}

@@ -1,0 +1,26 @@
+{
+  "name" : "gen_trading_system-happy-path",
+  "description" : "PENDING -submit-> SUBMITTED (then chained: -order_done-> ORDER_DONE -execution_done-> EXECUTED -fill_done-> FILLED -allocation_done-> COMPLETE)",
+  "events" : [ {
+    "smType" : "gen_trading_system",
+    "instanceKey" : "GEN-TRADING-ORDER-1001",
+    "eventType" : "submit",
+    "payload" : {
+      "@type" : "trading::command::SubmitTradeCommand",
+      "orderId" : "GEN-TRADING-ORDER-1001",
+      "accountId" : "ACCOUNT-ID-1001",
+      "ts" : "2026-01-15T10:00:00Z",
+      "clientId" : "CLIENT-ID-1001",
+      "symbol" : "AAPL",
+      "side" : "BUY",
+      "orderType" : "MARKET",
+      "quantity" : 10,
+      "limitPrice" : 101.25,
+      "venue" : "XNAS",
+      "price" : 101.25,
+      "fee" : 1.50,
+      "liquidity" : "REMOVE",
+      "allocAccountId" : "ALLOC-ACCOUNT-ID-1001"
+    }
+  } ]
+}

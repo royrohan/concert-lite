@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * State machine {@code gen_trading_order} declared on {@code trading::order::Order} (order.pure:62:1).
+ * State machine {@code gen_trading_order} declared on {@code trading::order::Order} (order.pure:125:1).
  *
  * <pre>
  *   initial PENDING_NEW; terminal REJECTED, CANCELLED, FILLED
@@ -64,6 +64,22 @@ public final class GenTradingOrderSpec {
             .on("ALLOCATING", "close", "FILLED", io.concert.eco.trading_gen.model.trading.command.CloseOrderCommand.class)
             .on("CANCEL_ALLOCATING", "allocate", "CANCEL_ALLOCATING", io.concert.eco.trading_gen.model.trading.command.AllocateCommand.class)
             .on("CANCEL_ALLOCATING", "close", "CANCELLED", io.concert.eco.trading_gen.model.trading.command.CloseOrderCommand.class)
+            // FILLED -> gen_trading_system.order_done (order.pure:119:5)
+            .emit(java.util.Set.of("FILLED"), "gen_trading_system", "order_done", "{orderId}",
+                    Map.ofEntries(Map.entry("step", "order"), Map.entry("refId", "{orderId}"), Map.entry("state", "{status}")),
+                    List.of())
+            // REJECTED|CANCELLED -> gen_trading_system.order_failed (order.pure:120:5)
+            .emit(java.util.Set.of("REJECTED", "CANCELLED"), "gen_trading_system", "order_failed", "{orderId}",
+                    Map.ofEntries(Map.entry("step", "order"), Map.entry("refId", "{orderId}"), Map.entry("state", "{status}")),
+                    List.of())
+            // FILLED -> gen_trading_execution.route (order.pure:121:5)
+            .emit(java.util.Set.of("FILLED"), "gen_trading_execution", "route", "{orderId}-E1",
+                    Map.ofEntries(Map.entry("execId", "{orderId}-E1"), Map.entry("venue", "XNYS")),
+                    List.of("gen_trading_order:{orderId}"))
+            // FILLED -> gen_trading_execution.complete_fill (order.pure:122:5)
+            .emit(java.util.Set.of("FILLED"), "gen_trading_execution", "complete_fill", "{orderId}-E1",
+                    Map.ofEntries(Map.entry("execId", "{orderId}-E1"), Map.entry("fillId", "{orderId}-F1"), Map.entry("venue", "XNYS"), Map.entry("price", "{arrivalPx}"), Map.entry("liquidity", "REMOVE"), Map.entry("fee", "0")),
+                    List.of("gen_trading_order:{orderId}"))
             .build();
 
     /**

@@ -8,6 +8,13 @@
 //   Execution  trading_execution  child order routed to one venue; owns copies of its fills
 //   Fill       trading_fill       one venue fill; BOOKED (terminal) on its first event
 //   Allocation trading_allocation part of a filled order given to an account
+//   Trade      gen_trading_system the trading system: one trade's entry point, chaining the machines below
+//
+// Event chaining (concert::sm.emits): the trading system's submit drives the order; then each machine's terminal state
+// starts the next one, and reports back to the trading system:
+//   trade SUBMITTED -> order (submit, ack, route, complete_fill, allocate, close)
+//   order FILLED -> execution (route, complete_fill)    execution FILLED -> fill (book)    fill BOOKED -> allocation
+//   (allocate, confirm)    allocation CONFIRMED -> trade COMPLETE;  order REJECTED | CANCELLED -> trade FAILED
 // The owned to-many ends (Order.executions, Execution.fills, Order.allocations) are the serialized
 // side, so an Order snapshot carries its full execution and fill tree for analytics. The back
 // references are [0..1] because Execution, Fill and Allocation are also aggregate roots of their own
@@ -34,6 +41,56 @@ Enum trading::order::AllocationStatus
   PENDING, ALLOCATED, CONFIRMED
 }
 
+Enum trading::order::TradeStatus
+{
+  PENDING, SUBMITTED, ORDER_DONE, EXECUTED, FILLED, COMPLETE, FAILED
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'gen_trading_system',
+  concert::sm.initial = 'PENDING',
+  concert::sm.transitions = '
+    PENDING    -submit->          SUBMITTED  : SubmitTradeCommand;
+    SUBMITTED  -order_done->      ORDER_DONE : ChainStepCommand;
+    SUBMITTED  -order_failed->    FAILED     : ChainStepCommand;
+    ORDER_DONE -execution_done->  EXECUTED   : ChainStepCommand;
+    EXECUTED   -fill_done->       FILLED     : ChainStepCommand;
+    FILLED     -allocation_done-> COMPLETE   : ChainStepCommand',
+  // one trade per order: the instance key is the order id, which the whole chain carries
+  concert::sm.idProperty = 'orderId',
+  concert::sm.emits = '
+    SUBMITTED -> gen_trading_order.submit [{orderId}] (arrivalPx = {price});
+    SUBMITTED -> gen_trading_order.ack [{orderId}];
+    SUBMITTED -> gen_trading_order.route [{orderId}] (execId = {orderId}-E1);
+    SUBMITTED -> gen_trading_order.complete_fill [{orderId}] (fillId = {orderId}-F1, execId = {orderId}-E1);
+    SUBMITTED -> gen_trading_order.allocate [{orderId}] (allocId = {orderId}-A1, avgPx = {price});
+    SUBMITTED -> gen_trading_order.close [{orderId}] (allocatedQty = {quantity}, allocationCount = 1)'
+}
+trading::order::Trade
+{
+  orderId: String[1];
+  accountId: String[1];
+  clientId: String[1];
+  symbol: String[1];
+  side: Side[1];
+  orderType: OrderType[1] = OrderType.MARKET;
+  quantity: Integer[1];
+  limitPrice: Decimal[0..1];
+  venue: String[1];
+  price: Decimal[1];
+  fee: Decimal[1] = 0.0D;
+  liquidity: Liquidity[1] = Liquidity.REMOVE;
+  allocAccountId: String[1];
+  status: TradeStatus[1] = TradeStatus.PENDING;
+  // The last step reported by the chain, and the ids of the entities it created.
+  step: String[0..1];
+  refId: String[0..1];
+  state: String[0..1];
+  submittedAt: DateTime[0..1];
+  completedAt: DateTime[0..1];
+}
+
 Class <<concert::sm.root>>
 {
   concert::sm.type = 'gen_trading_order',
@@ -57,7 +114,13 @@ Class <<concert::sm.root>>
     CANCEL_ALLOCATING -allocate->      CANCEL_ALLOCATING : AllocateCommand;
     CANCEL_ALLOCATING -close->         CANCELLED         : CloseOrderCommand',
   concert::sm.locks = '*: account:{accountId}',
-  concert::sm.idProperty = 'orderId'
+  concert::sm.idProperty = 'orderId',
+  concert::sm.emits = '
+    FILLED -> gen_trading_system.order_done [{orderId}] (step = order, refId = {orderId}, state = {status});
+    REJECTED | CANCELLED -> gen_trading_system.order_failed [{orderId}] (step = order, refId = {orderId}, state = {status});
+    FILLED -> gen_trading_execution.route [{orderId}-E1] (execId = {orderId}-E1, venue = XNYS);
+    FILLED -> gen_trading_execution.complete_fill [{orderId}-E1]
+      (execId = {orderId}-E1, fillId = {orderId}-F1, venue = XNYS, price = {arrivalPx}, liquidity = REMOVE, fee = 0)'
 }
 trading::order::Order
 [
@@ -112,7 +175,10 @@ Class <<concert::sm.root>>
     PARTIALLY_FILLED -complete_fill-> FILLED           : FillCommand;
     PARTIALLY_FILLED -cancel->        CANCELLED        : CancelCommand',
   concert::sm.locks = '*: gen_trading_order:{orderId}',
-  concert::sm.idProperty = 'execId'
+  concert::sm.idProperty = 'execId',
+  concert::sm.emits = '
+    FILLED -> gen_trading_system.execution_done [{orderId}] (step = execution, refId = {execId}, state = {status});
+    FILLED -> gen_trading_fill.book [{fillId}]'
 }
 trading::order::Execution
 {
@@ -137,7 +203,11 @@ Class <<concert::sm.root>>
   concert::sm.initial = 'PENDING',
   concert::sm.transitions = 'PENDING -book-> BOOKED : FillCommand',
   concert::sm.locks = '*: gen_trading_order:{orderId}, gen_trading_execution:{execId}',
-  concert::sm.idProperty = 'fillId'
+  concert::sm.idProperty = 'fillId',
+  concert::sm.emits = '
+    BOOKED -> gen_trading_system.fill_done [{orderId}] (step = fill, refId = {fillId}, state = {status});
+    BOOKED -> gen_trading_allocation.allocate [{orderId}-A1] (allocId = {orderId}-A1, allocAccountId = {accountId}, avgPx = {price});
+    BOOKED -> gen_trading_allocation.confirm [{orderId}-A1] (allocId = {orderId}-A1, allocAccountId = {accountId})'
 }
 trading::order::Fill
 {
@@ -165,7 +235,9 @@ Class <<concert::sm.root>>
     PENDING   -allocate-> ALLOCATED : AllocateCommand;
     ALLOCATED -confirm->  CONFIRMED : ConfirmAllocationCommand',
   concert::sm.locks = '*: gen_trading_order:{orderId}, account:{allocAccountId}',
-  concert::sm.idProperty = 'allocId'
+  concert::sm.idProperty = 'allocId',
+  concert::sm.emits = '
+    CONFIRMED -> gen_trading_system.allocation_done [{orderId}] (step = allocation, refId = {allocId}, state = {status})'
 }
 trading::order::Allocation
 {

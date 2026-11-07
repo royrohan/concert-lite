@@ -83,7 +83,8 @@ class TradingGenGeneratedTest {
             for (Path flow : flows) {
                 String last = null;
                 String smType = null;
-                for (JsonNode e : Json.MAPPER.readTree(Files.readString(flow)).path("events")) {
+                JsonNode doc = Json.MAPPER.readTree(Files.readString(flow));
+                for (JsonNode e : doc.path("events")) {
                     JsonNode p = e.get("payload");
                     EventEnvelope event = TradingGenEvents.envelope(e.path("smType").asText(), e.path("eventType").asText(),
                             e.path("instanceKey").asText(), p == null || p.isNull() ? null : Json.write(p));
@@ -92,7 +93,9 @@ class TradingGenGeneratedTest {
                     last = r.toState();
                     smType = event.smType();
                 }
-                assertTrue(last != null && TradingGenMachines.get(smType).spec().isTerminal(last),
+                // a chained machine's flow stops where the chain (concert::sm.emits) takes over
+                boolean chained = doc.path("description").asText().contains("(then chained");
+                assertTrue(last != null && (chained || TradingGenMachines.get(smType).spec().isTerminal(last)),
                         flow.getFileName() + " ends in non-terminal state " + last);
             }
         }

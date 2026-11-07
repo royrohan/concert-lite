@@ -21,6 +21,7 @@ import java.util.Set;
  * @param statusProperty enum property kept equal to the state, or {@code null}
  * @param statusEnum qualified name of that property's enum, or {@code null}
  * @param idProperty String property set to the instance key, or {@code null}
+ * @param emits events this machine emits to other machines when it enters a state ({@code concert::sm.emits})
  */
 record MachineDecl(
         String smType,
@@ -32,7 +33,18 @@ record MachineDecl(
         Map<String, List<String>> locks,
         String statusProperty,
         String statusEnum,
-        String idProperty) {
+        String idProperty,
+        List<Emit> emits) {
+
+    /**
+     * {@code STATE[|STATE] -> smType.event [keyTemplate] (field = template, ...)}: entering a state emits an event to
+     * another machine of the ecosystem.
+     *
+     * @param fields explicit target payload fields (templates); the rest is copied by name from the entity's data
+     *     and the triggering event's payload
+     */
+    record Emit(Set<String> onEnter, String smType, String eventType, String keyTemplate, Map<String, String> fields,
+            SourceLocation location) {}
 
     /**
      * {@code from -eventType-> to : payloadClass}.

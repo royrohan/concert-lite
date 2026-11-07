@@ -38,6 +38,11 @@ import java.util.regex.Pattern;
  *                                                 if it is an enum property)
  * idProperty     'claimId'                        String property set to the instance key (default:
  *                                                 '&lt;rootName&gt;Id', then 'id')
+ * emits          'PAID -> payout.schedule [{claimId}-P] (payoutId = {claimId}-P, amount = {paidAmount})'
+ *                                                 event chaining: entering a state emits an event to another machine;
+ *                                                 [instance key template]; (payload field = template, ...) optional,
+ *                                                 other payload fields are copied by name from the entity's data and
+ *                                                 the triggering payload; entries end with ';'; the tag may be repeated
  * </pre>
  *
  * Errors (and warnings) carry the {@code file:line:col} of the offending text, inside the tagged value
@@ -50,7 +55,10 @@ final class DeclarationParser {
     private static final Pattern TRANSITION = Pattern.compile(
             "(?<from>[A-Za-z_]\\w*(?:\\s*\\|\\s*[A-Za-z_]\\w*)*)\\s*-\\s*(?<event>[A-Za-z_][A-Za-z0-9_.]*)\\s*->\\s*"
                     + "(?<to>[A-Za-z_]\\w*)\\s*(?::\\s*(?<payload>[A-Za-z_][\\w:]*)\\s*)?");
-    private static final Set<String> REPEATABLE = Set.of(ConcertProfile.TRANSITIONS, ConcertProfile.LOCKS);
+    private static final Set<String> REPEATABLE = Set.of(ConcertProfile.TRANSITIONS, ConcertProfile.LOCKS, ConcertProfile.SM_EMITS);
+    private static final Pattern EMIT = Pattern.compile(
+            "(?<from>[A-Za-z_]\\w*(?:\\s*\\|\\s*[A-Za-z_]\\w*)*)\\s*->\\s*(?<target>[a-z][a-z0-9_]*)\\.(?<event>[A-Za-z_][A-Za-z0-9_.]*)"
+                    + "\\s*\\[(?<key>[^\\]]+)]\\s*(?:\\((?<fields>[^)]*)\\))?");
 
     private final ResolvedModel model;
     private final TagText text;
@@ -349,13 +357,60 @@ final class DeclarationParser {
             }
         }
 
+        // emits (event chaining); targets are checked against the other machines by Ecosystem
+        List<MachineDecl.Emit> emits = new ArrayList<>();
+        for (Entry e : entries(byTag.getOrDefault(ConcertProfile.SM_EMITS, List.of()), false)) {
+            Matcher m = EMIT.matcher(e.text());
+            if (!m.matches()) {
+                diag.error(at(e, 0), "malformed emit '" + e.text() + "'; expected STATE[|STATE] -> smType.event [key template] "
+                        + "(field = template, ...)");
+                continue;
+            }
+            Set<String> onEnter = new LinkedHashSet<>();
+            for (String st : m.group("from").split("\\|")) {
+                st = st.trim();
+                if (!states.contains(st)) {
+                    diag.error(at(e, m.start("from")), "unknown state '" + st + "' in concert::sm.emits; states of " + smType + " are " + states);
+                }
+                onEnter.add(st);
+            }
+            Set<String> source = sourceFields(c, onEnter, transitions);
+            String key = m.group("key").trim();
+            checkPlaceholders(key, source, smType, onEnter, at(e, m.start("key")));
+            Map<String, String> fields = new LinkedHashMap<>();
+            if (m.group("fields") != null && !m.group("fields").isBlank()) {
+                int offset = m.start("fields");
+                for (String part : m.group("fields").split(",", -1)) {
+                    int eq = part.indexOf('=');
+                    SourceLocation partAt = at(e, offset + Math.max(0, part.length() - part.stripLeading().length()));
+                    offset += part.length() + 1;
+                    if (eq <= 0 || part.substring(0, eq).isBlank()) {
+                        diag.error(partAt, "malformed emit field '" + part.trim() + "'; expected field = template");
+                        continue;
+                    }
+                    String name = part.substring(0, eq).trim();
+                    String template = part.substring(eq + 1).trim();
+                    if (template.isEmpty()) {
+                        diag.error(partAt, "empty template for emit field '" + name + "'");
+                        continue;
+                    }
+                    checkPlaceholders(template, source, smType, onEnter, partAt);
+                    if (fields.put(name, template) != null) {
+                        diag.error(partAt, "emit field '" + name + "' is given twice");
+                    }
+                }
+            }
+            emits.add(new MachineDecl.Emit(Collections.unmodifiableSet(onEnter), m.group("target"), m.group("event"), key,
+                    Collections.unmodifiableMap(fields), at(e, 0)));
+        }
+
         if (diag.errors.size() > errorsBefore) {
             return null;
         }
         Map<String, List<String>> frozen = new LinkedHashMap<>();
         locks.forEach((k, v) -> frozen.put(k, List.copyOf(v)));
         return new MachineDecl(smType, c, initial, List.copyOf(transitions), Collections.unmodifiableSet(terminal),
-                terminalTag != null, Collections.unmodifiableMap(frozen), statusProperty, statusEnum, idProperty);
+                terminalTag != null, Collections.unmodifiableMap(frozen), statusProperty, statusEnum, idProperty, List.copyOf(emits));
     }
 
     private TaggedValue single(Map<String, List<TaggedValue>> byTag, String tag) {
@@ -369,12 +424,46 @@ final class DeclarationParser {
 
     /** Splits tag values into trimmed, non-empty entries on ';' and new lines. */
     private static List<Entry> entries(List<TaggedValue> tags) {
+        return entries(tags, true);
+    }
+
+    /**
+     * The fields an emit's templates may use: the root's properties (the entity after the transition) and those of
+     * the payloads of every transition into its states.
+     */
+    private Set<String> sourceFields(ClassDef root, Set<String> onEnter, List<MachineDecl.Transition> transitions) {
+        Set<String> out = new LinkedHashSet<>();
+        model.allProperties(root).forEach(p -> out.add(p.name()));
+        for (MachineDecl.Transition t : transitions) {
+            if (onEnter.contains(t.to()) && t.payloadClass() != null) {
+                model.allProperties(model.findClass(t.payloadClass()).orElseThrow()).forEach(p -> out.add(p.name()));
+            }
+        }
+        return out;
+    }
+
+    private void checkPlaceholders(String template, Set<String> source, String smType, Set<String> onEnter, SourceLocation at) {
+        Matcher m = Pattern.compile("\\{([^}]*)}").matcher(template);
+        while (m.find()) {
+            String field = m.group(1).trim();
+            if (!source.contains(field)) {
+                diag.error(at, "'{" + field + "}' in emit template '" + template + "' is neither a property of " + smType
+                        + " nor of the payloads entering " + onEnter);
+            }
+        }
+        if (template.chars().filter(ch -> ch == '{').count() != template.chars().filter(ch -> ch == '}').count()) {
+            diag.error(at, "unbalanced braces in emit template '" + template + "'");
+        }
+    }
+
+    /** Splits tag values into trimmed, non-empty entries on ';' (and new lines when {@code newLines}). */
+    private static List<Entry> entries(List<TaggedValue> tags, boolean newLines) {
         List<Entry> out = new ArrayList<>();
         for (TaggedValue t : tags) {
             String v = t.value();
             int start = 0;
             for (int i = 0; i <= v.length(); i++) {
-                if (i == v.length() || v.charAt(i) == ';' || v.charAt(i) == '\n') {
+                if (i == v.length() || v.charAt(i) == ';' || (newLines && v.charAt(i) == '\n')) {
                     String raw = v.substring(start, i);
                     String trimmed = raw.strip();
                     if (!trimmed.isEmpty()) {

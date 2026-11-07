@@ -18,6 +18,7 @@ public final class TradingGenMachines implements MachineCatalog {
 
     /** In declaration order. */
     public static final Map<String, Machine> ALL = index(
+            new Machine(GenTradingSystemSpec.TYPE, GenTradingSystemMachine.class, GenTradingSystemSpec.SPEC, MODEL_MERMAID),
             new Machine(GenTradingOrderSpec.TYPE, GenTradingOrderMachine.class, GenTradingOrderSpec.SPEC, MODEL_MERMAID),
             new Machine(GenTradingExecutionSpec.TYPE, GenTradingExecutionMachine.class, GenTradingExecutionSpec.SPEC, MODEL_MERMAID),
             new Machine(GenTradingFillSpec.TYPE, GenTradingFillMachine.class, GenTradingFillSpec.SPEC, MODEL_MERMAID),
@@ -25,6 +26,7 @@ public final class TradingGenMachines implements MachineCatalog {
 
     /** Lock key templates per smType and event type. */
     public static final Map<String, Map<String, List<String>>> LOCKS = Map.ofEntries(
+            Map.entry(GenTradingSystemSpec.TYPE, GenTradingSystemSpec.LOCKS),
             Map.entry(GenTradingOrderSpec.TYPE, GenTradingOrderSpec.LOCKS),
             Map.entry(GenTradingExecutionSpec.TYPE, GenTradingExecutionSpec.LOCKS),
             Map.entry(GenTradingFillSpec.TYPE, GenTradingFillSpec.LOCKS),

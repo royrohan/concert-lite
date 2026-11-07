@@ -34,6 +34,8 @@ public final class ConcertProfile {
     public static final String LOCKS = "locks";
     public static final String STATUS_PROPERTY = "statusProperty";
     public static final String ID_PROPERTY = "idProperty";
+    /** {@code concert::sm.emits}: event chaining, what entering a state emits to another machine. */
+    public static final String SM_EMITS = "emits";
 
     /** Qualified name of the event-style profile. */
     public static final String EVENT_PROFILE = "concert::event";

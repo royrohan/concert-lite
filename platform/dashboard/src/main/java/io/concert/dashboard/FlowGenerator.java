@@ -416,6 +416,19 @@ final class FlowGenerator implements AutoCloseable {
             if (e.hasNonNull("instanceKey")) {
                 ids.add(e.path("instanceKey").asText());
             }
+            // entity events: the payload fields their lock keys are rendered from (e.g. an execution's orderId) are ids
+            // too; left as in the sample, every generated instance would queue on the same lock
+            Map<String, List<String>> locks = entityLocks.get(e.path("smType").asText());
+            if (!"event".equals(e.path("style").asText()) && locks != null) {
+                for (String tpl : locks.getOrDefault(e.path("eventType").asText(), List.of())) {
+                    for (String field : LockTemplates.placeholders(tpl)) {
+                        JsonNode v = e.path("payload").path(field);
+                        if (v.isTextual()) {
+                            ids.add(v.asText());
+                        }
+                    }
+                }
+            }
             EventCatalog.EventType t = eventTypes.get(e.path("eventType").asText());
             if ("event".equals(e.path("style").asText()) && t != null) {
                 for (String tpl : t.lockTemplates()) {

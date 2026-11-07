@@ -148,6 +148,19 @@ final class JavaSources {
             sb.append(String.join(", ", m.terminal().stream().map(JavaSources::q).toList()));
             sb.append(")\n");
         }
+        for (MachineDecl.Emit e : m.emits()) {
+            MachineDecl target = eco.machines().stream().filter(x -> x.smType().equals(e.smType())).findFirst().orElseThrow();
+            sb.append("            // ").append(html(String.join("|", e.onEnter()))).append(" -> ").append(e.smType()).append('.')
+                    .append(e.eventType()).append(" (").append(html(e.location().toString())).append(")\n");
+            sb.append("            .emit(java.util.Set.of(").append(String.join(", ", e.onEnter().stream().map(JavaSources::q).toList()))
+                    .append("), ").append(q(e.smType())).append(", ").append(q(e.eventType())).append(", ").append(q(e.keyTemplate()))
+                    .append(",\n                    Map.ofEntries(");
+            sb.append(String.join(", ", e.fields().entrySet().stream()
+                    .map(f -> "Map.entry(" + q(f.getKey()) + ", " + q(f.getValue()) + ")").toList()));
+            sb.append("),\n                    List.of(")
+                    .append(String.join(", ", target.locks().getOrDefault(e.eventType(), List.of()).stream().map(JavaSources::q).toList()))
+                    .append("))\n");
+        }
         sb.append("            .build();\n\n");
         sb.append("    /**\n     * Lock key templates per event type, beyond the target entity key (always implied): {@code {id}} is\n"
                 + "     * the instance key, {@code {field}} a payload field.\n     */\n");
@@ -834,7 +847,8 @@ final class JavaSources {
                             for (Path flow : flows) {
                                 String last = null;
                                 String smType = null;
-                                for (JsonNode e : Json.MAPPER.readTree(Files.readString(flow)).path("events")) {
+                                JsonNode doc = Json.MAPPER.readTree(Files.readString(flow));
+                                for (JsonNode e : doc.path("events")) {
                                     JsonNode p = e.get("payload");
                 """
                 + "                    EventEnvelope event = " + eventsClass() + ".envelope(e.path(\"smType\").asText(), e.path(\"eventType\").asText(),\n"
@@ -846,7 +860,9 @@ final class JavaSources {
                                     smType = event.smType();
                                 }
                 """
-                + "                assertTrue(last != null && " + m + ".get(smType).spec().isTerminal(last),\n"
+                + "                // a chained machine's flow stops where the chain (concert::sm.emits) takes over\n"
+                + "                boolean chained = doc.path(\"description\").asText().contains(\"(then chained\");\n"
+                + "                assertTrue(last != null && (chained || " + m + ".get(smType).spec().isTerminal(last)),\n"
                 + """
                                         flow.getFileName() + " ends in non-terminal state " + last);
                             }

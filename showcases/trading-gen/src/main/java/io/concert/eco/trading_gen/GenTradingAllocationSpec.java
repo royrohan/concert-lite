@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * State machine {@code gen_trading_allocation} declared on {@code trading::order::Allocation} (order.pure:170:1).
+ * State machine {@code gen_trading_allocation} declared on {@code trading::order::Allocation} (order.pure:242:1).
  *
  * <pre>
  *   initial PENDING; terminal CONFIRMED
@@ -34,6 +34,10 @@ public final class GenTradingAllocationSpec {
     public static final StateMachineSpec SPEC = StateMachineSpec.startingAt("PENDING")
             .on("PENDING", "allocate", "ALLOCATED", io.concert.eco.trading_gen.model.trading.command.AllocateCommand.class)
             .on("ALLOCATED", "confirm", "CONFIRMED", io.concert.eco.trading_gen.model.trading.command.ConfirmAllocationCommand.class)
+            // CONFIRMED -> gen_trading_system.allocation_done (order.pure:240:5)
+            .emit(java.util.Set.of("CONFIRMED"), "gen_trading_system", "allocation_done", "{orderId}",
+                    Map.ofEntries(Map.entry("step", "allocation"), Map.entry("refId", "{allocId}"), Map.entry("state", "{status}")),
+                    List.of())
             .build();
 
     /**

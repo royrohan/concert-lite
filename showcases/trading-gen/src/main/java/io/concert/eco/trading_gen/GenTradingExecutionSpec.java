@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * State machine {@code gen_trading_execution} declared on {@code trading::order::Execution} (order.pure:117:1).
+ * State machine {@code gen_trading_execution} declared on {@code trading::order::Execution} (order.pure:183:1).
  *
  * <pre>
  *   initial PENDING_NEW; terminal FILLED, CANCELLED, REJECTED
@@ -46,6 +46,14 @@ public final class GenTradingExecutionSpec {
             .on("PARTIALLY_FILLED", "fill", "PARTIALLY_FILLED", io.concert.eco.trading_gen.model.trading.command.FillCommand.class)
             .on("PARTIALLY_FILLED", "complete_fill", "FILLED", io.concert.eco.trading_gen.model.trading.command.FillCommand.class)
             .on("PARTIALLY_FILLED", "cancel", "CANCELLED", io.concert.eco.trading_gen.model.trading.command.CancelCommand.class)
+            // FILLED -> gen_trading_system.execution_done (order.pure:180:5)
+            .emit(java.util.Set.of("FILLED"), "gen_trading_system", "execution_done", "{orderId}",
+                    Map.ofEntries(Map.entry("step", "execution"), Map.entry("refId", "{execId}"), Map.entry("state", "{status}")),
+                    List.of())
+            // FILLED -> gen_trading_fill.book (order.pure:181:5)
+            .emit(java.util.Set.of("FILLED"), "gen_trading_fill", "book", "{fillId}",
+                    Map.ofEntries(),
+                    List.of("gen_trading_order:{orderId}", "gen_trading_execution:{execId}"))
             .build();
 
     /**

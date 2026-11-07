@@ -63,15 +63,43 @@ final class SampleGenerator {
         Map<String, JsonNode> samples = samples(m);
         ObjectNode flow = F.objectNode();
         List<MachineDecl.Transition> path = m.happyPath();
+        // events other machines emit to this one (concert::sm.emits) come from the chain: the flow stops before the
+        // first of them, unless the machine starts with one (then it replays standalone and drives the chain onward)
+        java.util.Set<String> chained = new java.util.HashSet<>();
+        eco.machines().forEach(x -> x.emits().stream().filter(e -> e.smType().equals(m.smType())).forEach(e -> chained.add(e.eventType())));
+        int cut = path.size();
+        boolean startsChained = !path.isEmpty() && chained.contains(path.getFirst().eventType());
+        for (int i = 1; i < path.size() && !startsChained; i++) {
+            if (chained.contains(path.get(i).eventType())) {
+                cut = i;
+                break;
+            }
+        }
+        List<MachineDecl.Transition> rest = path.subList(cut, path.size());
+        path = path.subList(0, cut);
         flow.put("name", m.smType() + "-happy-path");
         StringBuilder desc = new StringBuilder(m.initial());
         path.forEach(t -> desc.append(" -").append(t.eventType()).append("-> ").append(t.to()));
+        if (!rest.isEmpty()) {
+            desc.append(" (then chained:");
+            rest.forEach(t -> desc.append(" -").append(t.eventType()).append("-> ").append(t.to()));
+            desc.append(')');
+        }
         flow.put("description", desc.toString());
         ArrayNode events = flow.putArray("events");
+        // the instance key is the id property's value when the first payload carries it (e.g. a trade keyed by its
+        // orderId), so keys the chain renders from that field address this instance
+        String key = Ecosystem.sampleKey(m);
+        if (!path.isEmpty() && m.idProperty() != null) {
+            JsonNode first = samples.get(path.getFirst().eventType());
+            if (first != null && first.path(m.idProperty()).isTextual()) {
+                key = first.path(m.idProperty()).asText();
+            }
+        }
         for (MachineDecl.Transition t : path) {
             ObjectNode e = events.addObject();
             e.put("smType", m.smType());
-            e.put("instanceKey", Ecosystem.sampleKey(m));
+            e.put("instanceKey", key);
             e.put("eventType", t.eventType());
             JsonNode payload = samples.get(t.eventType());
             e.set("payload", payload == null ? F.nullNode() : payload.deepCopy());

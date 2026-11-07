@@ -5,12 +5,39 @@ Generated from the Pure models in `5` file(s) (`commands.pure`, `common.pure`, `
 
 | smType | root class | states | terminal | events | analytics table |
 |---|---|---|---|---|---|
+| `gen_trading_system` | `trading::order::Trade` | 7 | FAILED, COMPLETE | submit, order_done, order_failed, execution_done, fill_done, allocation_done | `gen_trading_systems` |
 | `gen_trading_order` | `trading::order::Order` | 10 | REJECTED, CANCELLED, FILLED | submit, ack, reject, route, cancel, fill, complete_fill, allocate, close | `gen_trading_orders` |
 | `gen_trading_execution` | `trading::order::Execution` | 6 | FILLED, CANCELLED, REJECTED | route, fill, complete_fill, cancel, reject | `gen_trading_executions` |
 | `gen_trading_fill` | `trading::order::Fill` | 2 | BOOKED | book | `gen_trading_fills` |
 | `gen_trading_allocation` | `trading::order::Allocation` | 3 | CONFIRMED | allocate, confirm | `gen_trading_allocations` |
 
 ## State machines
+
+### gen_trading_system (`trading::order::Trade`)
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> SUBMITTED : submit
+    SUBMITTED --> ORDER_DONE : order_done
+    SUBMITTED --> FAILED : order_failed
+    ORDER_DONE --> EXECUTED : execution_done
+    EXECUTED --> FILLED : fill_done
+    FILLED --> COMPLETE : allocation_done
+    FAILED --> [*]
+    COMPLETE --> [*]
+```
+
+| event | from → to | payload | lock keys (besides `gen_trading_system:<key>`) |
+|---|---|---|---|
+| `submit` | PENDING → SUBMITTED | `trading::command::SubmitTradeCommand` |  |
+| `order_done` | SUBMITTED → ORDER_DONE | `trading::command::ChainStepCommand` |  |
+| `order_failed` | SUBMITTED → FAILED | `trading::command::ChainStepCommand` |  |
+| `execution_done` | ORDER_DONE → EXECUTED | `trading::command::ChainStepCommand` |  |
+| `fill_done` | EXECUTED → FILLED | `trading::command::ChainStepCommand` |  |
+| `allocation_done` | FILLED → COMPLETE | `trading::command::ChainStepCommand` |  |
+
+Data: `trading::order::Trade`, `orderId` = instance key, `status` = state. Happy path (`samples/flows/gen_trading_system-happy-path.json`, key `GEN-TRADING-SYSTEM-1001`): PENDING -submit-> SUBMITTED (then chained: -order_done-> ORDER_DONE -execution_done-> EXECUTED -fill_done-> FILLED -allocation_done-> COMPLETE).
 
 ### gen_trading_order (`trading::order::Order`)
 
@@ -161,6 +188,7 @@ the links. The dashboard finds the machines and event catalogs through their SPI
 Example queries (DuckDB: dashboard → Analytics → DuckDB; ClickHouse: add `FINAL`):
 
 ```sql
+SELECT sm_state, count(*) FROM gen_trading_systems GROUP BY sm_state;
 SELECT sm_state, count(*) FROM gen_trading_orders GROUP BY sm_state;
 SELECT sm_state, count(*) FROM gen_trading_executions GROUP BY sm_state;
 SELECT sm_state, count(*) FROM gen_trading_fills GROUP BY sm_state;

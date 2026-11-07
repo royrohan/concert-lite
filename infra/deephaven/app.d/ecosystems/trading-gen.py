@@ -24,6 +24,27 @@ def _trading_gen_root(sm_type, columns):
         "LatencyMs = (isNull(CreatedAt) || isNull(CompletedAt)) ? NULL_LONG : diffMillis(CreatedAt, CompletedAt)")
 
 
+trading_gen_gen_trading_systems_latest = _trading_gen_root("gen_trading_system", [
+    ("OrderId", "/model/orderId", "string"),
+    ("AccountId", "/model/accountId", "string"),
+    ("ClientId", "/model/clientId", "string"),
+    ("Symbol", "/model/symbol", "string"),
+    ("Side", "/model/side", "string"),
+    ("OrderType", "/model/orderType", "string"),
+    ("Quantity", "/model/quantity", "long"),
+    ("LimitPrice", "/model/limitPrice", "double"),
+    ("Venue", "/model/venue", "string"),
+    ("Price", "/model/price", "double"),
+    ("Fee", "/model/fee", "double"),
+    ("Liquidity", "/model/liquidity", "string"),
+    ("AllocAccountId", "/model/allocAccountId", "string"),
+    ("Status", "/model/status", "string"),
+    ("Step", "/model/step", "string"),
+    ("RefId", "/model/refId", "string"),
+    ("ModelState", "/model/state", "string"),
+    ("SubmittedAt", "/model/submittedAt", "instant"),
+    ("ModelCompletedAt", "/model/completedAt", "instant"),
+])
 trading_gen_gen_trading_orders_latest = _trading_gen_root("gen_trading_order", [
     ("OrderId", "/model/orderId", "string"),
     ("ClientId", "/model/clientId", "string"),
@@ -95,13 +116,14 @@ trading_gen_gen_trading_allocations_latest = _trading_gen_root("gen_trading_allo
     ("ConfirmedAt", "/model/confirmedAt", "instant"),
 ])
 
-trading_gen_latest = merge([trading_gen_gen_trading_orders_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_executions_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_fills_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_allocations_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"])])
+trading_gen_latest = merge([trading_gen_gen_trading_systems_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_orders_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_executions_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_fills_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"]), trading_gen_gen_trading_allocations_latest.view(["EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt", "LatencyMs"])])
 trading_gen_state_distribution = trading_gen_latest.count_by("Entities", by=["SmType", "State"]).sort(["SmType", "State"])
 trading_gen_completions_per_minute = trading_gen_latest.where("!isNull(CompletedAt)") \
     .update("Minute = lowerBin(CompletedAt, MINUTE)") \
     .count_by("Completions", by=["Minute", "SmType"]).sort_descending(["Minute"])
 
 ECOSYSTEM_FIELDS = {
+    "trading_gen_gen_trading_systems_latest": trading_gen_gen_trading_systems_latest,
     "trading_gen_gen_trading_orders_latest": trading_gen_gen_trading_orders_latest,
     "trading_gen_gen_trading_executions_latest": trading_gen_gen_trading_executions_latest,
     "trading_gen_gen_trading_fills_latest": trading_gen_gen_trading_fills_latest,

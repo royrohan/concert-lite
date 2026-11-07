@@ -26,14 +26,37 @@ public final class StateMachineSpec {
         }
     }
 
+    /**
+     * An event this machine emits to another machine when it enters a state (event chaining, declared with
+     * {@code concert::sm.emits} in Pure). The emitted payload is the source entity's data overlaid with the
+     * triggering event's payload, then the {@code fields} templates; fields the target payload doesn't have are ignored.
+     *
+     * @param onEnter the states that trigger it (entered from another state)
+     * @param keyTemplate the target instance key: literal text with {@code {field}} placeholders
+     * @param fields target payload fields as templates; a template that is exactly {@code {field}} copies the value
+     *     with its type, anything else renders as text
+     * @param lockTemplates the target event's lock key templates (rendered against the emitted payload)
+     */
+    public record Emission(Set<String> onEnter, String smType, String eventType, String keyTemplate,
+            Map<String, String> fields, List<String> lockTemplates) {
+
+        public Emission {
+            onEnter = Set.copyOf(onEnter);
+            fields = Collections.unmodifiableMap(new LinkedHashMap<>(fields));
+            lockTemplates = List.copyOf(lockTemplates);
+        }
+    }
+
     private final String initialState;
+    private final List<Emission> emissions;
     private final Map<String, Map<String, Edge>> table;
     private final List<Edge> edges;
     private final Set<String> states;
     private final Set<String> terminalStates;
 
-    private StateMachineSpec(String initialState, List<Edge> edges, List<String> declaredTerminal) {
+    private StateMachineSpec(String initialState, List<Edge> edges, List<String> declaredTerminal, List<Emission> emissions) {
         this.initialState = initialState;
+        this.emissions = List.copyOf(emissions);
         this.edges = List.copyOf(edges);
         Map<String, Map<String, Edge>> t = new LinkedHashMap<>();
         Set<String> s = new LinkedHashSet<>();
@@ -59,6 +82,14 @@ public final class StateMachineSpec {
             }
         }
         this.terminalStates = Collections.unmodifiableSet(terminal);
+        for (Emission e : this.emissions) {
+            for (String state : e.onEnter()) {
+                if (!s.contains(state)) {
+                    throw new IllegalArgumentException("emit " + e.smType() + "." + e.eventType() + " on " + state
+                            + ": not a state of this machine " + s);
+                }
+            }
+        }
     }
 
     public static Builder startingAt(String initialState) {
@@ -104,6 +135,19 @@ public final class StateMachineSpec {
         return states;
     }
 
+    /** The events this machine emits to other machines, in declaration order. */
+    public List<Emission> emissions() {
+        return emissions;
+    }
+
+    /** The emissions an accepted transition triggers: those of the state it enters, unless it stays in it. */
+    public List<Emission> emissionsOf(String fromState, String toState) {
+        if (fromState.equals(toState)) {
+            return List.of();
+        }
+        return emissions.stream().filter(e -> e.onEnter().contains(toState)).toList();
+    }
+
     public String toMermaid(String highlightState) {
         StringBuilder sb = new StringBuilder("stateDiagram-v2\n");
         sb.append("    [*] --> ").append(initialState).append('\n');
@@ -121,6 +165,7 @@ public final class StateMachineSpec {
     public static final class Builder {
         private final String initialState;
         private final List<Edge> edges = new ArrayList<>();
+        private final List<Emission> emissions = new ArrayList<>();
         private List<String> terminal;
 
         private Builder(String initialState) {
@@ -147,8 +192,15 @@ public final class StateMachineSpec {
             return this;
         }
 
+        /** Emits {@code eventType} to {@code smType} whenever the machine enters one of {@code onEnter}. */
+        public Builder emit(Set<String> onEnter, String smType, String eventType, String keyTemplate, Map<String, String> fields,
+                List<String> lockTemplates) {
+            emissions.add(new Emission(onEnter, smType, eventType, keyTemplate, fields, lockTemplates));
+            return this;
+        }
+
         public StateMachineSpec build() {
-            return new StateMachineSpec(initialState, edges, terminal);
+            return new StateMachineSpec(initialState, edges, terminal, emissions);
         }
     }
 }

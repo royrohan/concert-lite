@@ -24,7 +24,7 @@ into every module as `src/main/pure/concert/concert.pure`, so don't add one to y
 Profile concert::sm
 {
   stereotypes: [root, command];
-  tags: [type, initial, transitions, terminal, locks, statusProperty, idProperty];
+  tags: [type, initial, transitions, terminal, locks, statusProperty, idProperty, emits];
 }
 ```
 
@@ -62,6 +62,7 @@ Class <<concert::sm.command>> insurance::FileClaim { policyId: String[1]; ... }
 | `locks` | entries `event[, event] : template[, template]`, `*` = every event; `{id}` = instance key, `{field}` = top-level payload field | no extra locks |
 | `statusProperty` | to-one enum property kept equal to the state (enum values must cover the states) | `status` if it is an enum |
 | `idProperty` | String property set to the instance key | `<rootName>Id`, then `id` |
+| `emits` | event chaining: `STATE[\|STATE] -> smType.event [key template] (field = template, ...)`; entries end with `;` (see below) | none |
 
 A payload name resolves in the root's package first, then as a unique simple name (or write it qualified).
 Lock templates follow the platform rule that every event of an entity should share its *first sorted* lock
@@ -73,6 +74,43 @@ transitions or smTypes, lock events that don't exist, lock fields missing on (or
 payload class, untyped events used by `{field}` templates, status enum mismatches (state not an enum value =
 error, unused value = warning), payloads not marked `<<concert::sm.command>>` (warning), tags without
 `<<concert::sm.root>>`, plus all parse and resolver errors of the models.
+
+### Chaining machines (`concert::sm.emits`)
+
+A machine can start or advance another machine when it enters a state. Each entry names the state(s), the target
+machine and event, the target instance key as a template, and optionally payload fields:
+
+```
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'gen_trading_execution',
+  ...
+  concert::sm.emits = '
+    FILLED -> gen_trading_system.execution_done [{orderId}] (step = execution, refId = {execId}, state = {status});
+    FILLED -> gen_trading_fill.book [{fillId}]'
+}
+```
+
+* **Source.** `{field}` placeholders read the entity's data after the transition, overlaid with the triggering
+  event's payload.
+* **Fields.** A template that is exactly `{field}` copies the value with its type; anything else renders as text,
+  e.g. `{orderId}-E1`.
+* **Copied fields.** Payload fields not listed are copied by name from the same source. Fields the target payload
+  doesn't have are ignored.
+* **When it fires.** An entry fires on every accepted transition into the state from another state, after
+  `onTransition`. Emits are buffered with the transition and enqueued once its state row is persisted, so a rejected
+  event emits nothing.
+* **Locks.** The emitted event takes the target event's lock templates.
+* **Validation.** The generator checks, with `file:line:col` errors, that:
+  * the states exist;
+  * every placeholder is a property of the root or of a payload entering those states;
+  * the target machine and event exist;
+  * explicit fields are properties of the target payload.
+
+  It warns about required target fields that nothing provides.
+* **Generated code.** The entries become `.emit(...)` calls on the spec, so your machine stubs don't change.
+* **Samples and diagrams.** A machine's sample flow stops at the first event another machine emits to it. The
+  dashboard's flow diagram shows the chain across machines, and each state diagram notes what a state emits.
 
 ## Declaring event types (`concert::event`)
 

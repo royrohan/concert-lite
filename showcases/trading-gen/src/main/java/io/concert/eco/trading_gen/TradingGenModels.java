@@ -7,7 +7,7 @@ import io.concert.model.runtime.LegendModel;
  * Generates the Java classes of the ecosystem's Pure models ({@code src/main/pure}) at compile time:
  * {@code a::b::X} becomes {@code io.concert.eco.trading_gen.model.a.b.X}.
  */
-@LegendModel(files = {"concert/concert.pure", "commands.pure", "common.pure", "marketdata.pure", "order.pure", "refdata.pure"}, root = "trading::order::Order", javaPackage = "io.concert.eco.trading_gen.model")
+@LegendModel(files = {"concert/concert.pure", "commands.pure", "common.pure", "marketdata.pure", "order.pure", "refdata.pure"}, root = "trading::order::Trade", javaPackage = "io.concert.eco.trading_gen.model")
 public final class TradingGenModels {
     private TradingGenModels() {}
 

@@ -59,14 +59,14 @@ services:
   sink-duckdb:
     environment:
       MODELS_DIR_TRADING_GEN: /models-eco/trading-gen
-      SINK_ROOTS_TRADING_GEN: gen_trading_order:trading::order::Order,gen_trading_execution:trading::order::Execution,gen_trading_fill:trading::order::Fill,gen_trading_allocation:trading::order::Allocation
+      SINK_ROOTS_TRADING_GEN: gen_trading_system:trading::order::Trade,gen_trading_order:trading::order::Order,gen_trading_execution:trading::order::Execution,gen_trading_fill:trading::order::Fill,gen_trading_allocation:trading::order::Allocation
     volumes:
       - ./showcases/trading-gen/src/main/pure:/models-eco/trading-gen:ro
 
   sink-clickhouse:
     environment:
       MODELS_DIR_TRADING_GEN: /models-eco/trading-gen
-      SINK_ROOTS_TRADING_GEN: gen_trading_order:trading::order::Order,gen_trading_execution:trading::order::Execution,gen_trading_fill:trading::order::Fill,gen_trading_allocation:trading::order::Allocation
+      SINK_ROOTS_TRADING_GEN: gen_trading_system:trading::order::Trade,gen_trading_order:trading::order::Order,gen_trading_execution:trading::order::Execution,gen_trading_fill:trading::order::Fill,gen_trading_allocation:trading::order::Allocation
     volumes:
       - ./showcases/trading-gen/src/main/pure:/models-eco/trading-gen:ro
 
