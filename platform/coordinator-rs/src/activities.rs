@@ -127,21 +127,34 @@ impl Activities {
         Ok(())
     }
 
-    /// `release` to each lock, in parallel. A failed release is logged: the lock's forward lease frees it.
+    /// `release` to each lock, in parallel. Releases are idempotent, so any failure other than "the lock is gone"
+    /// fails the activity and Temporal retries it: a release that is silently dropped (for example rejected while
+    /// the lock's workflow task is failing) would park the lock until its forward lease expires.
     #[activity(name = "ReleaseLocks")]
     pub async fn release_locks(self: Arc<Self>, _ctx: ActivityContext, input: MultiArgs2<Vec<String>, String>) -> Result<(), ActivityError> {
         let MultiArgs2(keys, request_id) = input;
-        join_all(keys.iter().map(|key| {
+        let results = join_all(keys.iter().map(|key| {
             let me = &self;
             let request_id = &request_id;
             async move {
                 match me.router.release(key, request_id).await {
-                    Ok(()) => me.traces.add(TraceRow::new(request_id, now_millis(), Stage::Released, None, Some(key.clone()), None)),
-                    Err(e) => warn!("release of {request_id} on {key} failed: {e:#}"),
+                    Ok(()) => {
+                        me.traces.add(TraceRow::new(request_id, now_millis(), Stage::Released, None, Some(key.clone()), None));
+                        Ok(())
+                    }
+                    Err(e) if crate::routing::is_not_found(&e) => Ok(()), // the lock run is gone: nothing to release
+                    Err(e) => {
+                        warn!("release of {request_id} on {key} failed (retried): {e:#}");
+                        Err(e)
+                    }
                 }
             }
         }))
         .await;
+        let failed = results.iter().filter(|r| r.is_err()).count();
+        if failed > 0 {
+            return Err(anyhow::anyhow!("{failed} of {} releases of {request_id} failed", keys.len()).into());
+        }
         Ok(())
     }
 

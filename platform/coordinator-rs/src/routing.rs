@@ -248,6 +248,14 @@ impl Router {
     }
 }
 
+/// Whether a routed call failed because the target workflow does not exist (or no longer runs).
+pub fn is_not_found(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| {
+        matches!(c.downcast_ref::<WorkflowUpdateError>(), Some(WorkflowUpdateError::NotFound(_)))
+            || c.downcast_ref::<temporalio_client::tonic::Status>().is_some_and(|s| s.code() == temporalio_client::tonic::Code::NotFound)
+    })
+}
+
 /// Waits for the result of a direct-path update.
 pub async fn await_result(handle: WorkflowUpdateHandle<Client, TransitionResult>) -> Result<TransitionResult, WorkflowUpdateError> {
     handle.get_result(RpcOptions::default()).await

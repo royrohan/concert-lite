@@ -8,3 +8,4 @@ pub mod activities;
 pub mod dispatcher;
 pub mod routing;
 pub mod workflows;
+pub mod guard;

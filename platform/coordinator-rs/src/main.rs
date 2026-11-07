@@ -13,6 +13,7 @@
 //! STORE_KIND=postgres|dsql|dynamo   STORE_JDBC_URL=jdbc:postgresql://localhost:5433/concert
 //! DIRECT_SM_TYPES=                  types that may bypass locks (no shared keys!)
 //! DEDUPE_TTL_HOURS=24  TRACE_SAMPLE=1.0  INGEST_PARALLEL_GROUPS=256  INGEST_IDLE_POLL_MS=20 ...
+//! COORDINATOR_ALLOW_FOREIGN_RUNS=false   start even if the queue has runs of the Java coordinator (see guard.rs)
 //! ```
 
 use concert_coordinator::activities::Activities;
@@ -66,6 +67,21 @@ async fn main() -> anyhow::Result<()> {
         idle_poll: env.millis("INGEST_IDLE_POLL_MS", 20),
         checkpoint_every: env.millis("INGEST_CHECKPOINT_MS", 500),
     };
+
+    if !env.bool("COORDINATOR_ALLOW_FOREIGN_RUNS", false) {
+        let foreign = concert_coordinator::guard::foreign_runs(&client, &queue, 200).await?;
+        if !foreign.is_empty() {
+            for (id, identity) in foreign.iter().take(10) {
+                warn!("running workflow {id} on {queue} was last worked on by {identity}");
+            }
+            anyhow::bail!(
+                "{} running workflow(s) on task queue {queue} belong to another coordinator implementation (the Java \
+                 coordinator?); the Rust coordinator cannot replay them. Drain that coordinator first (platform/coordinator-rs/README.md, \
+                 \"Switching an existing deployment\"), or set COORDINATOR_ALLOW_FOREIGN_RUNS=true",
+                foreign.len()
+            );
+        }
+    }
 
     let runtime = Runtime::from_current_tokio(RuntimeOptions::default())?;
     let tuner = TunerHolder::builder()
@@ -135,7 +151,8 @@ async fn main() -> anyhow::Result<()> {
 async fn connect(env: &Env) -> anyhow::Result<Client> {
     let address = env.str("TEMPORAL_ADDRESS", "localhost:7233");
     let url = if address.contains("://") { address } else { format!("http://{address}") };
-    let identity = format!("concert-coordinator-rs@{}", std::env::var("HOSTNAME").unwrap_or_else(|_| "local".into()));
+    let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "local".into());
+    let identity = format!("{}{host}-{}", concert_coordinator::guard::IDENTITY_PREFIX, std::process::id());
     let mut attempt = 0;
     loop {
         let conn_opts = ConnectionOptions::new(url.parse::<temporalio_client::Url>()?).identity(identity.clone()).build();

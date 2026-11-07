@@ -59,7 +59,11 @@ Per flow (each flow has its own task queue, so flows can switch one at a time):
    consumers resume from the checkpoints in the store.
 3. Start the Rust coordinators.
 
-Activities can cross over during the switch (same names and arguments), but workflow tasks cannot.
+Activities can cross over during the switch (same names and arguments), but workflow tasks cannot. A run picked
+up by the other implementation fails its workflow tasks with a nondeterminism error and its key stops moving, so
+the Rust coordinator checks before it polls: if a running workflow on its queue was last worked on by another
+worker implementation, it lists them and exits (`guard.rs`; `COORDINATOR_ALLOW_FOREIGN_RUNS=true` skips the check).
+The Java coordinator has no such check, so don't start it on a queue the Rust coordinator still has runs on.
 
 ## Layout
 
@@ -73,6 +77,7 @@ Activities can cross over during the switch (same names and arguments), but work
 | `src/routing.rs` | `EventRouting` |
 | `src/store/` | `JdbcStateStore` (postgres, dsql), `DynamoStateStore` |
 | `src/trace.rs` | `TraceWriter` |
+| `src/guard.rs` | (new) refuses to start on a queue with the other implementation's runs |
 
 `cargo test` runs the unit tests: wire JSON, lock key order, sampling, the store SQL helpers, dedupe semantics
 and the lock queue logic.
