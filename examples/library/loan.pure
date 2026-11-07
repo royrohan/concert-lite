@@ -1,0 +1,61 @@
+###Pure
+// A library loan: a member borrows a book, may renew it twice, then returns it (or reports it lost).
+// The getting-started guide (docs/getting-started) builds this ecosystem step by step.
+
+Enum library::LoanStatus
+{
+  REQUESTED, BORROWED, RETURNED, LOST, CANCELLED
+}
+
+Class <<concert::sm.root>>
+{
+  concert::sm.type = 'loan',
+  concert::sm.initial = 'REQUESTED',
+  concert::sm.transitions = '
+    REQUESTED -borrow->   BORROWED  : BorrowBook;
+    REQUESTED -cancel->   CANCELLED : CancelLoan;
+    BORROWED  -renew->    BORROWED  : RenewLoan;
+    BORROWED  -return->   RETURNED  : ReturnBook;
+    BORROWED  -lose->     LOST      : ReportLost',
+  concert::sm.statusProperty = 'status',
+  concert::sm.idProperty = 'loanId'
+}
+library::Loan
+{
+  loanId: String[1];
+  status: LoanStatus[1] = LoanStatus.REQUESTED;
+  memberId: String[0..1];
+  bookId: String[0..1];
+  dueDate: StrictDate[0..1];
+  renewals: Integer[1] = 0;
+  borrowedAt: DateTime[0..1];
+  closedAt: DateTime[0..1];
+  note: String[0..1];
+}
+
+Class <<concert::sm.command>> library::BorrowBook
+{
+  memberId: String[1];
+  bookId: String[1];
+  dueDate: StrictDate[1];
+}
+
+Class <<concert::sm.command>> library::RenewLoan
+{
+  dueDate: StrictDate[1];
+}
+
+Class <<concert::sm.command>> library::ReturnBook
+{
+  condition: String[0..1];
+}
+
+Class <<concert::sm.command>> library::ReportLost
+{
+  note: String[0..1];
+}
+
+Class <<concert::sm.command>> library::CancelLoan
+{
+  reason: String[1];
+}

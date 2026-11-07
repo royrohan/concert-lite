@@ -11,6 +11,9 @@ market data.
 Everything runs as Temporal workflows and activities, including the "coordinator", the reconciliation job and
 its schedule. There is no bespoke lease, peer or outbox protocol: failover, retries and durability are Temporal's.
 
+**New here? [Getting started](docs/getting-started/README.md)** walks through your first flow in eight animated steps:
+Pure model, state machine, generate, implement, tests, integration test, deploy, run.
+
 * [Architecture](#architecture) · [Quickstart](#quickstart) · [Concepts](#concepts) ·
   [Guarantees per hop](#guarantees-per-hop) · [UIs and ports](#uis-and-ports) · [Scripts](#scripts-and-commands)
 * [Analytics stores](#analytics-stores) · [Reconciliation, DLQ, metrics](#reconciliation-dead-letters-and-metrics) ·

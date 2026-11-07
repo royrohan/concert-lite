@@ -1,0 +1,32 @@
+{
+  "name" : "library",
+  "package" : "io.concert.eco.library",
+  "modelsDir" : "examples/library",
+  "module" : "showcases/library",
+  "service" : "library-worker",
+  "profile" : "library",
+  "coordinator" : "java",
+  "files" : [ "loan.pure" ],
+  "roots" : [ {
+    "smType" : "loan",
+    "rootClass" : "library::Loan",
+    "table" : "loans",
+    "deephavenTable" : "library_loans_latest",
+    "initial" : "REQUESTED",
+    "terminal" : [ "CANCELLED", "RETURNED", "LOST" ],
+    "events" : [ "borrow", "cancel", "renew", "return", "lose" ],
+    "sampleKey" : "LOAN-1001",
+    "happyPath" : "samples/flows/loan-happy-path.json"
+  } ],
+  "deephavenTables" : [ "library_loans_latest", "library_latest", "library_state_distribution", "library_completions_per_minute" ],
+  "generator" : "./generate-concert-ecosystem",
+  "sampleHashes" : {
+    "showcases/library/samples/loan/borrow.json" : "5cb785151f530f18325ee34748a0b2bd632a3cf8b5e90149ba47621a7e60817a",
+    "showcases/library/samples/loan/cancel.json" : "08b42a592e0d82df3b2407ffc2577bf58d4f15a3788749865cfa5024eae6205f",
+    "showcases/library/samples/loan/renew.json" : "37e70ac91ef8287eb6278531e1af374ac27b9b62d27f39ce7ebdd15665d4d7d4",
+    "showcases/library/samples/loan/return.json" : "9adb12c8ce470112d676b9a111cd00961e7f8d90deb1de0f00ab0b772599c910",
+    "showcases/library/samples/loan/lose.json" : "43fa107f1ffb502650b4ed3f8e15abc747eab44e703155ad47aee9342c6cfa5f",
+    "showcases/library/samples/flows/loan-happy-path.json" : "58483f4df18f3cd1200358149521c74e5aa3db1de5477b2b01cf39f0224b44bf"
+  },
+  "generatedFiles" : [ "showcases/library/src/main/pure/loan.pure", "showcases/library/src/main/pure/concert/concert.pure", "showcases/library/src/main/java/io/concert/eco/library/LibraryModels.java", "showcases/library/src/main/java/io/concert/eco/library/LoanSpec.java", "showcases/library/src/main/java/io/concert/eco/library/LibraryMachines.java", "showcases/library/src/main/java/io/concert/eco/library/LibraryWorkerMain.java", "showcases/library/src/main/resources/META-INF/services/io.concert.sdk.MachineCatalog", "showcases/library/src/test/java/io/concert/eco/library/LibraryGeneratedTest.java", "showcases/library/src/main/java/io/concert/eco/library/LibraryEvents.java", "showcases/library/build.gradle.kts", "showcases/library/compose.yml", "showcases/library/send", "showcases/library/send-flow", "showcases/library/README.md", "infra/deephaven/app.d/ecosystems/library.py" ]
+}

@@ -1,0 +1,76 @@
+==> building :library
+==> docker compose -f docker-compose.yml -f showcases/library/compose.yml up -d --build   (STORE_KIND=postgres COMPOSE_PROFILES=postgres,apps,library)
+ Container concert-temporal-temporal-db-1 Running 
+ Container concert-temporal-dsql-1 Running 
+ Container concert-temporal-temporal-ui-1 Running 
+ Container concert-temporal-temporal-1 Running 
+ Volume concert-temporal_dashboard-data Creating 
+ Volume concert-temporal_dashboard-data Creating 
+ Container concert-temporal-localstack-1 Recreate 
+ Volume concert-temporal_dashboard-data Created 
+ Volume concert-temporal_dashboard-data Created 
+ Container concert-temporal-localstack-1 Recreated 
+ Container concert-temporal-dashboard-1 Creating 
+ Container concert-temporal-samples-coordinator-1 Creating 
+ Container concert-temporal-library-coordinator-1 Creating 
+ Container concert-temporal-samples-coordinator-1 Created 
+ Container concert-temporal-worker-1 Creating 
+ Container concert-temporal-library-coordinator-1 Created 
+ Container concert-temporal-library-worker-1 Creating 
+ Container concert-temporal-dashboard-1 Created 
+ Container concert-temporal-library-worker-1 Created 
+ Container concert-temporal-worker-1 Created 
+ Container concert-temporal-temporal-db-1 Waiting 
+ Container concert-temporal-localstack-1 Starting 
+ Container concert-temporal-localstack-1 Started 
+ Container concert-temporal-temporal-db-1 Healthy 
+ Container concert-temporal-temporal-1 Waiting 
+ Container concert-temporal-temporal-1 Healthy 
+ Container concert-temporal-temporal-init-1 Starting 
+ Container concert-temporal-temporal-init-1 Started 
+ Container concert-temporal-localstack-1 Waiting 
+ Container concert-temporal-temporal-init-1 Waiting 
+ Container concert-temporal-temporal-init-1 Waiting 
+ Container concert-temporal-localstack-1 Waiting 
+ Container concert-temporal-localstack-1 Waiting 
+ Container concert-temporal-temporal-init-1 Waiting 
+ Container concert-temporal-localstack-1 Healthy 
+ Container concert-temporal-localstack-1 Healthy 
+ Container concert-temporal-localstack-1 Healthy 
+ Container concert-temporal-temporal-init-1 Exited 
+ Container concert-temporal-library-coordinator-1 Starting 
+ Container concert-temporal-temporal-init-1 Exited 
+ Container concert-temporal-dashboard-1 Starting 
+ Container concert-temporal-temporal-init-1 Exited 
+ Container concert-temporal-samples-coordinator-1 Starting 
+ Container concert-temporal-library-coordinator-1 Started 
+ Container concert-temporal-localstack-1 Waiting 
+ Container concert-temporal-temporal-init-1 Waiting 
+ Container concert-temporal-dashboard-1 Started 
+ Container concert-temporal-temporal-init-1 Exited 
+ Container concert-temporal-localstack-1 Healthy 
+ Container concert-temporal-library-worker-1 Starting 
+ Container concert-temporal-samples-coordinator-1 Started 
+ Container concert-temporal-temporal-init-1 Waiting 
+ Container concert-temporal-localstack-1 Waiting 
+ Container concert-temporal-temporal-init-1 Exited 
+ Container concert-temporal-localstack-1 Healthy 
+ Container concert-temporal-worker-1 Starting 
+ Container concert-temporal-library-worker-1 Started 
+ Container concert-temporal-worker-1 Started 
+==> health
+    waiting for dashboard ... ok
+    waiting for library-worker  ok
+
+=== ecosystem library deployed (store: postgres) ===
+
+UIs
+  Temporal UI       http://localhost:8080/namespaces/default/workflows?query=WorkflowId+STARTS_WITH+%22loan%3A%22
+  Dashboard          http://localhost:8088   (Analytics tab: http://localhost:8088/#analytics)
+    entity page     http://localhost:8088/#entity/loan:LOAN-1001   (after its happy path)
+
+Send events
+  ./showcases/library/send list
+  ./showcases/library/send loan borrow LOAN-1001   [showcases/library/samples/loan/borrow.json]
+  ./showcases/library/send-flow all                         # every happy path
+  ./showcases/library/send-flow showcases/library/samples/flows/loan-happy-path.json
