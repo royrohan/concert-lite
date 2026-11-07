@@ -19,14 +19,28 @@ final class ProjectFiles {
     private static final Set<String> DH_SYSTEM = Set.of("EntityId", "SmType", "State", "Version", "CreatedAt", "CompletedAt",
             "LatencyMs", "CreatedAtText", "CompletedAtText");
 
+    /** The coordinator implementations a flow can run on ({@code --coordinator}). */
+    static final List<String> COORDINATORS = List.of("java", "rust");
+
     private final Ecosystem eco;
     private final JavaSources java;
     private final ResolvedModel model;
+    /** {@code java} (platform/orchestration) or {@code rust} (platform/coordinator-rs). */
+    private final String coordinator;
 
     ProjectFiles(Ecosystem eco, JavaSources java) {
+        this(eco, java, "java");
+    }
+
+    ProjectFiles(Ecosystem eco, JavaSources java, String coordinator) {
         this.eco = eco;
         this.java = java;
         this.model = eco.model();
+        this.coordinator = coordinator;
+    }
+
+    String coordinator() {
+        return coordinator;
     }
 
     String moduleDir() {
@@ -168,6 +182,12 @@ final class ProjectFiles {
                       TRACE_SAMPLE: ${TRACE_SAMPLE:-1.0}
                       AWS_REGION: us-east-1
                       CONCERT_FLOW: %1$s
+                      # Temporal / worker tuning (the dashboard's Performance presets set these)
+                      WORKFLOW_TASK_TIMEOUT_MS: ${WORKFLOW_TASK_TIMEOUT_MS:-2000}
+                      WORKER_WF_SLOTS: ${WORKER_WF_SLOTS:-1000}
+                      WORKER_LA_SLOTS: ${WORKER_LA_SLOTS:-2000}
+                      ORCH_WF_POLLERS_MAX: ${ORCH_WF_POLLERS_MAX:-64}
+                      INGEST_PARALLEL_GROUPS: ${INGEST_PARALLEL_GROUPS:-256}
                 """.formatted(n);
         String env = """
                     depends_on:
@@ -191,11 +211,19 @@ final class ProjectFiles {
                     image: concert-temporal/%1$s-worker
                 """.formatted(n, moduleDir());
         StringBuilder services = new StringBuilder();
-        services.append("  # the flow's coordinator: its own Kinesis stream concert-").append(n)
-                .append(", ingest and locks (task queue orchestration-").append(n).append(")\n  ")
-                .append(n).append("-coordinator:\n    profiles: [").append(n).append("]\n").append("""
+        String image = coordinator.equals("rust")
+                ? """
+                    build: { context: ., target: coordinator-rs }
+                    image: concert-temporal/coordinator-rs
+                """
+                : """
                     build: { context: ., target: "${COORDINATOR_TARGET:-coordinator}" }
                     image: concert-temporal/${COORDINATOR_TARGET:-coordinator}
+                """;
+        services.append("  # the flow's coordinator").append(coordinator.equals("rust") ? " (Rust, platform/coordinator-rs)" : "")
+                .append(": its own Kinesis stream concert-").append(n)
+                .append(", ingest and locks (task queue orchestration-").append(n).append(")\n  ")
+                .append(n).append("-coordinator:\n    profiles: [").append(n).append("]\n").append(image).append("""
                     depends_on:
                       temporal-init: { condition: service_completed_successfully }
                       localstack: { condition: service_healthy }
@@ -504,6 +532,7 @@ final class ProjectFiles {
             o.put("eventService", eco.name() + "-event-worker");
         }
         o.put("profile", eco.name());
+        o.put("coordinator", coordinator);
         ArrayNode files = o.putArray("files");
         eco.files().forEach(files::add);
         ArrayNode roots = o.putArray("roots");

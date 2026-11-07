@@ -45,6 +45,10 @@ Scaling (`--scale samples-coordinator=3`) works the same way.
 
 Chaos test with Rust coordinators and Java workers: `RUST_COORDINATOR=1 scripts/chaos.sh`.
 
+A flow can also run on it on its own: `showcases/trading-gen-rs` (generated with `--coordinator rust`) is trading-gen's
+machines on the Rust coordinator, side by side with trading-gen on the Java one. The dashboard's **Performance** tab
+runs either with the same configuration, load and chaos, for a like-for-like comparison.
+
 ## Switching an existing deployment
 
 The two implementations share every external interface, but they cannot replay each other's workflow

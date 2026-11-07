@@ -85,6 +85,31 @@ class GeneratorTest {
     }
 
     @Test
+    void rustCoordinatorIsRecordedAndKeptOnRegeneration() throws IOException {
+        Ecosystem eco = Ecosystem.load(models, "things", "io.concert.eco.things");
+        new Generator(repo, eco, false, "rust").generate(models);
+        String compose = Files.readString(repo.resolve("showcases/things/compose.yml"));
+        assertTrue(compose.contains("build: { context: ., target: coordinator-rs }"), compose);
+        assertTrue(compose.contains("image: concert-temporal/coordinator-rs"), compose);
+        assertTrue(compose.contains("WORKER_WF_SLOTS: ${WORKER_WF_SLOTS:-1000}"), compose);
+        JsonNode manifest = SampleGenerator.JSON.readTree(Files.readString(repo.resolve("showcases/things/ecosystem.json")));
+        assertEquals("rust", manifest.path("coordinator").asText());
+
+        generate(false); // no --coordinator: keeps the previous choice
+        assertTrue(Files.readString(repo.resolve("showcases/things/compose.yml")).contains("target: coordinator-rs"));
+
+        new Generator(repo, eco, false, "java").generate(models);
+        String java = Files.readString(repo.resolve("showcases/things/compose.yml"));
+        assertTrue(java.contains("target: \"${COORDINATOR_TARGET:-coordinator}\""), java);
+    }
+
+    @Test
+    void unknownCoordinatorIsRefused() {
+        Ecosystem eco = Ecosystem.load(models, "things", "io.concert.eco.things");
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () -> new Generator(repo, eco, false, "go"));
+    }
+
+    @Test
     void rerunKeepsEditedStubsAndChangesNothingElse() throws IOException {
         generate(false);
         Files.writeString(stub(), Files.readString(stub()).replace("// TODO OPEN -finish-> DONE", "// done by me"));

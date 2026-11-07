@@ -17,7 +17,7 @@ import java.util.List;
  * {@code ./deploy-concert-ecosystem}).
  *
  * <pre>
- * generate &lt;models-dir&gt; --name &lt;name&gt; [--package io.concert.eco.&lt;name&gt;] [--force] [--repo DIR]
+ * generate &lt;models-dir&gt; --name &lt;name&gt; [--package io.concert.eco.&lt;name&gt;] [--coordinator java|rust] [--force] [--repo DIR]
  * check    &lt;models-dir&gt; [--name &lt;name&gt;]                 validate only
  * summary  &lt;name&gt; [--store S] [--no-analytics] [--repo DIR]   what deploy prints at the end
  * </pre>
@@ -38,6 +38,7 @@ public final class EcosystemCli {
         List<String> positional = new ArrayList<>();
         String name = null;
         String pkg = null;
+        String coordinator = null;
         String store = "postgres";
         boolean force = false;
         boolean analytics = true;
@@ -47,6 +48,7 @@ public final class EcosystemCli {
                 case "--name" -> name = args[++i];
                 case "--package" -> pkg = args[++i];
                 case "--force" -> force = true;
+                case "--coordinator" -> coordinator = args[++i];
                 case "--repo" -> repo = Path.of(args[++i]).toAbsolutePath().normalize();
                 case "--store" -> store = args[++i];
                 case "--no-analytics" -> analytics = false;
@@ -77,7 +79,7 @@ public final class EcosystemCli {
                         System.out.println("ok: " + describe(eco));
                         yield 0;
                     }
-                    Generator.Report r = new Generator(repo, eco, force).generate(dir);
+                    Generator.Report r = new Generator(repo, eco, force, coordinator).generate(dir);
                     r.warnings().stream().filter(w -> !eco.warnings().contains(w)).forEach(System.err::println);
                     System.out.println("ecosystem " + n + " -> showcases/" + n + " (" + describe(eco) + ")");
                     System.out.print(r.summary());
@@ -121,7 +123,7 @@ public final class EcosystemCli {
 
     private static int usage() {
         System.err.println("""
-                usage: generate <models-dir> --name <name> [--package io.concert.eco.<name>] [--force]
+                usage: generate <models-dir> --name <name> [--package io.concert.eco.<name>] [--coordinator java|rust] [--force]
                        check <models-dir> [--name <name>]
                        summary <name> [--store postgres|dynamo|spanner] [--no-analytics]""");
         return 2;

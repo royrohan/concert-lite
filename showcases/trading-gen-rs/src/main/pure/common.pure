@@ -1,0 +1,41 @@
+###Pure
+// Shared vocabulary of the trading showcase. Enums only, so any machine's file set can list this file
+// without changing its generated code. Sector, AssetClass and Currency are mirrored by the Java enums
+// in marketdata-sim (io.concert.marketdata), which publishes the reference data; a test keeps them equal.
+
+Enum trading::common::Currency
+{
+  USD, EUR, GBP, JPY, CHF, CAD
+}
+
+Enum trading::common::AssetClass
+{
+  EQUITY, ETF
+}
+
+Enum trading::common::Sector
+{
+  TECHNOLOGY, COMMUNICATION, CONSUMER_DISCRETIONARY, CONSUMER_STAPLES, FINANCIALS, HEALTHCARE,
+  ENERGY, INDUSTRIALS, UTILITIES, MATERIALS, REAL_ESTATE, BROAD_MARKET
+}
+
+Enum trading::common::Side
+{
+  BUY, SELL, SELL_SHORT
+}
+
+Enum trading::common::OrderType
+{
+  MARKET, LIMIT
+}
+
+Enum trading::common::TimeInForce
+{
+  DAY, IOC, GTC
+}
+
+// ADD = passive (rested on the book, maker fee or rebate); REMOVE = aggressive (crossed the spread, taker fee).
+Enum trading::common::Liquidity
+{
+  ADD, REMOVE
+}

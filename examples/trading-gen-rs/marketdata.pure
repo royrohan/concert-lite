@@ -1,0 +1,57 @@
+###Pure
+// Market data, published by marketdata-sim straight to Kafka (no concert): md.ticks and md.bars.1m.
+// Quote is the price model's top of book; Tick is one md.ticks record (a quote update plus an optional
+// trade: lastSize = 0 means no trade, last then repeats the previous trade price).
+
+Class trading::marketdata::Quote
+[
+  crossedNever: $this.bid < $this.ask
+]
+{
+  symbol: String[1];
+  ts: DateTime[1];
+  bid: Decimal[1];
+  bidSize: Integer[1];
+  ask: Decimal[1];
+  askSize: Integer[1];
+  // (bid + ask) / 2, exact.
+  mid: Decimal[1];
+}
+
+Class trading::marketdata::Tick
+{
+  symbol: String[1];
+  ts: DateTime[1];
+  // ts as epoch millis, convenient for Deephaven and as-of joins.
+  tsMillis: Integer[1];
+  // Per-symbol sequence number, from 1.
+  seq: Integer[1];
+  bid: Decimal[1];
+  bidSize: Integer[1];
+  ask: Decimal[1];
+  askSize: Integer[1];
+  mid: Decimal[1];
+  last: Decimal[1];
+  lastSize: Integer[1] = 0;
+  // Cumulative traded shares of the symbol since the simulator started.
+  volume: Integer[1];
+  // MIC of the trade; absent on a quote-only tick.
+  tradeVenue: String[0..1];
+}
+
+// One minute of one symbol. OHLC are trade prices, or mids for a minute without trades.
+Class trading::marketdata::Bar
+{
+  symbol: String[1];
+  start: DateTime[1];
+  end: DateTime[1];
+  open: Decimal[1];
+  high: Decimal[1];
+  low: Decimal[1];
+  close: Decimal[1];
+  volume: Integer[1];
+  // Absent when there were no trades.
+  vwap: Decimal[0..1];
+  trades: Integer[1];
+  ticks: Integer[1];
+}
