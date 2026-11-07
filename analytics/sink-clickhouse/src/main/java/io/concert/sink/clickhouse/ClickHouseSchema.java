@@ -3,7 +3,6 @@ package io.concert.sink.clickhouse;
 import io.concert.sink.ColumnSpec;
 import io.concert.sink.ColumnType;
 import io.concert.sink.SchemaSpec;
-import io.concert.sink.SnapshotCodec;
 import io.concert.sink.TableSpec;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -15,7 +14,7 @@ import java.util.stream.Collectors;
  * The ClickHouse objects for completed entities, generated from a {@link SchemaSpec}:
  *
  * <pre>
- * entity-snapshots (Kafka) ─▶ entity_snapshots_queue  (ENGINE = Kafka, group sink-clickhouse, JSONEachRow,
+ * entity-snapshots, snapshots.<flow> (Kafka) ─▶ entity_snapshots_queue  (ENGINE = Kafka, group sink-clickhouse, JSONEachRow,
  *                                 │                     model read as a raw JSON string, error mode 'stream')
  *                                 ├─ mv_entity_snapshots ─▶ entity_snapshots  ReplacingMergeTree(entity_version)
  *                                 │                            ├─ mv_orders    WHERE sm_type = 'order'    ─▶ orders
@@ -51,10 +50,17 @@ public final class ClickHouseSchema {
     public static final String SAMPLES = "_concert_samples";
     public static final String DEFAULT_GROUP = "sink-clickhouse";
 
+    /**
+     * The queue's topics: a librdkafka regex (leading {@code ^}) over the shared topic and every flow's
+     * {@code snapshots.<flow>} ({@code io.concert.common.Flows}), so a new flow needs no re-provisioning; ClickHouse
+     * refreshes topic metadata every 10 s (infra/clickhouse/config.d/concert.xml).
+     */
+    public static final String SNAPSHOT_TOPICS = "^(entity-snapshots|snapshots[.].+)$";
+
     /** @param brokers the broker list as ClickHouse reaches it ({@code kafka:9092} in compose) */
     public record Config(String brokers, String topic, String group) {
         public static Config defaults(String brokers) {
-            return new Config(brokers, SnapshotCodec.TOPIC, DEFAULT_GROUP);
+            return new Config(brokers, SNAPSHOT_TOPICS, DEFAULT_GROUP);
         }
     }
 

@@ -71,7 +71,8 @@ final class FlowMetrics {
     private final String sinkDuckDb;
     private final String deephavenInternal;
     private final KinesisTail tail;
-    private final String topic = Env.get("SNAPSHOT_TOPIC", "entity-snapshots");
+    /** A machine flow's flow (ecosystem): its stream, topic and orchestration queue ({@link io.concert.common.Flows}). */
+    private volatile java.util.function.Function<String, String> ecosystemOf = id -> "";
     private final double sample = Math.max(0.0001, Math.min(1, Double.parseDouble(Env.get("TRACE_SAMPLE", "1.0"))));
     private final Map<String, Flow> flows;
     private final Map<String, Deque<long[]>> counters = new HashMap<>();
@@ -90,6 +91,19 @@ final class FlowMetrics {
         this.tail = tail;
         this.events = events;
         this.flows = catalog(MachineCatalog.load(), eventTypes);
+    }
+
+    void ecosystems(java.util.function.Function<String, String> ecosystemOf) {
+        this.ecosystemOf = ecosystemOf;
+    }
+
+    private String eco(String machineFlow) {
+        String e = ecosystemOf.apply(machineFlow);
+        return e == null ? "" : e;
+    }
+
+    private String topicOf(String machineFlow) {
+        return io.concert.common.Flows.snapshotTopic(eco(machineFlow));
     }
 
     // ---------------------------------------------------------------- catalog
@@ -364,8 +378,9 @@ final class FlowMetrics {
 
         long dispatched = scaled(a.count(TraceRow.Stage.RECEIVED));
         Map<String, Object> kinesis = new LinkedHashMap<>();
-        kinesis.put("stream", pub.get("stream"));
-        kinesis.put("shards", pub.get("shards"));
+        String stream = io.concert.common.Flows.stream(eco(id));
+        kinesis.put("stream", stream);
+        kinesis.put("shards", ((Map<?, ?>) pub.getOrDefault("shardsByStream", Map.of())).get(stream));
         kinesis.put("perSec", perSec(published, pubCovered));
         kinesis.put("transitP50", percentile(a.kinesis, 0.5));
         kinesis.put("transitP95", percentile(a.kinesis, 0.95));
@@ -380,7 +395,8 @@ final class FlowMetrics {
         coord.put("lockWaits", scaled(a.count(TraceRow.Stage.LOCK_WAIT)));
         coord.put("lockWaitP95", percentile(a.lockWait, 0.95));
         coord.put("dedupeP50", percentile(a.dedupe, 0.5));
-        coord.put("pollers", pollers(TaskQueues.ORCHESTRATION));
+        coord.put("taskQueue", io.concert.common.Flows.orchestrationQueue(eco(id)));
+        coord.put("pollers", pollers(io.concert.common.Flows.orchestrationQueue(eco(id))));
         coord.put("series", scaled(a.receivedSeries));
         out.put("coordinator", coord);
 
@@ -404,10 +420,10 @@ final class FlowMetrics {
 
         // Kafka + stores
         Map<String, Object> snap = clickHouseFlow(f, windowSec);
-        out.put("kafka", kafka(windowSec, snap));
+        out.put("kafka", kafka(windowSec, snap, topicOf(id)));
         Map<String, Object> stores = new LinkedHashMap<>();
         stores.put("duckdb", duckDb(f, windowSec));
-        stores.put("deephaven", deephaven());
+        stores.put("deephaven", deephaven(topicOf(id)));
         stores.put("clickhouse", snap);
         out.put("stores", stores);
 
@@ -559,12 +575,12 @@ final class FlowMetrics {
         });
     }
 
-    private Map<String, Object> kafka(int windowSec, Map<String, Object> snap) {
+    private Map<String, Object> kafka(int windowSec, Map<String, Object> snap, String topic) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("topic", topic);
-        long end = cached("kafka:end", 1000, () -> pipeline.endOffsets(topic));
+        long end = cached("kafka:end:" + topic, 1000, () -> pipeline.endOffsets(topic));
         if (end < 0) {
-            out.put("error", "Kafka not reachable (start with --analytics)");
+            out.put("error", "topic " + topic + " not readable: Kafka is down or the flow was never started");
             return out;
         }
         out.put("records", end);
@@ -675,11 +691,11 @@ final class FlowMetrics {
         return out;
     }
 
-    private Map<String, Object> deephaven() {
+    private Map<String, Object> deephaven(String topic) {
         Map<String, Object> out = new LinkedHashMap<>();
         boolean up = cached("deephaven:up", 5000, () -> pipeline.reachable(deephavenInternal + "/ide/"));
         out.put("reachable", up);
-        long end = cached("kafka:end", 1000, () -> pipeline.endOffsets(topic));
+        long end = cached("kafka:end:" + topic, 1000, () -> pipeline.endOffsets(topic));
         if (end >= 0) {
             out.put("volume", end);
         }
@@ -765,9 +781,11 @@ final class FlowMetrics {
         Thread.ofVirtual().name("flow-sampler").start(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    long end = pipeline.endOffsets(topic);
-                    if (end >= 0) {
-                        rate("kafka:" + topic, end, 60);
+                    for (String topic : flows.keySet().stream().map(this::topicOf).distinct().toList()) {
+                        long end = pipeline.endOffsets(topic);
+                        if (end >= 0) {
+                            rate("kafka:" + topic, end, 60);
+                        }
                     }
                     long applied = getJson(sinkDuckDb + "/health").path("target").path("appliedEntities").asLong(-1);
                     if (applied >= 0) {

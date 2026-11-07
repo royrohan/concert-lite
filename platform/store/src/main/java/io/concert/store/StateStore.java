@@ -67,6 +67,17 @@ public interface StateStore extends AutoCloseable {
     }
 
     /**
+     * Deletes a flow's runtime rows (the trace UI's Delete flow): the {@code sm_state} rows of its smTypes (entities,
+     * event lifecycle and keyed-state types), the trace rows of workflows whose id starts with one of the prefixes, and
+     * the shard checkpoints of its stream. Dedupe rows are not attributable to a flow and expire with their TTL.
+     *
+     * @return rows deleted
+     */
+    default long purgeFlow(java.util.Set<String> smTypes, List<String> workflowIdPrefixes, String stream) {
+        throw new UnsupportedOperationException(kind() + " store does not support purging a flow");
+    }
+
+    /**
      * Deletes dedupe rows older than the cutoff and returns how many. Stores with native expiry
      * (DynamoDB TTL) may return 0 and let the database do it.
      */

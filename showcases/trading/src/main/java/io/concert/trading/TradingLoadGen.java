@@ -29,7 +29,7 @@ import software.amazon.awssdk.services.kinesis.model.PutRecordsResponse;
  * the {@code md.ticks} quotes of a {@code marketdata-sim} running with the same seed and vol multiplier.
  * The partition key is the event's first sorted lock key, as in the {@code tools} load generator, and
  * a batch holds at most one record per partition key while batches are sent one after another, so
- * per-key publish order is unambiguous. Env: INGEST_STREAM (default {@code concert-events}),
+ * per-key publish order is unambiguous. Env: INGEST_STREAM (default {@code concert-trading}, the trading flow's stream),
  * KINESIS_ENDPOINT, AWS_REGION; {@code --orders}, {@code --rate}, {@code --seed} and {@code --vol-mult}
  * fall back to ORDERS, RATE, SEED and VOL_MULT (the compose service; SEED / VOL_MULT as for
  * {@code marketdata-sim}).
@@ -73,7 +73,7 @@ public final class TradingLoadGen {
         if (dryRun) {
             dryRun(gen, Integer.parseInt(o.getOrDefault("show", "40")));
         } else {
-            publish(gen, config, Env.get("INGEST_STREAM", "concert-events"));
+            publish(gen, config, Env.get("INGEST_STREAM", io.concert.common.Flows.stream("trading")));
         }
     }
 

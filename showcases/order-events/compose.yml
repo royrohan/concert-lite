@@ -6,6 +6,27 @@
 # The sinks add MODELS_DIR_ORDER_EVENTS / SINK_ROOTS_ORDER_EVENTS to their MODELS_DIR / SINK_ROOTS, so several ecosystem
 # overrides can be combined (-f ... -f ...).
 services:
+  # the flow's coordinator: its own Kinesis stream concert-order-events, ingest and locks (task queue orchestration-order-events)
+  order-events-coordinator:
+    profiles: [order-events]
+    build: { context: ., target: coordinator }
+    image: concert-temporal/coordinator
+    depends_on:
+      temporal-init: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+    environment:
+      STORE_KIND: ${STORE_KIND:-postgres}
+      TEMPORAL_ADDRESS: temporal:7233
+      KINESIS_ENDPOINT: http://localstack:4566
+      STORE_JDBC_URL: jdbc:postgresql://dsql:5432/concert
+      DYNAMO_ENDPOINT: http://localstack:4566
+      SPANNER_EMULATOR_HOST: spanner:9010
+      TRACE_SAMPLE: ${TRACE_SAMPLE:-1.0}
+      AWS_REGION: us-east-1
+      CONCERT_FLOW: order-events
+      STORE_INIT_SCHEMA: "false"
+    restart: unless-stopped
+
   # event-style handlers (task queues ev-inventory, ev-orders), same image
   order-events-event-worker:
     profiles: [order-events]
@@ -18,7 +39,7 @@ services:
     depends_on:
       temporal-init: { condition: service_completed_successfully }
       localstack: { condition: service_healthy }
-      coordinator: { condition: service_started }
+      order-events-coordinator: { condition: service_started }
     environment:
       STORE_KIND: ${STORE_KIND:-postgres}
       TEMPORAL_ADDRESS: temporal:7233
@@ -28,6 +49,7 @@ services:
       SPANNER_EMULATOR_HOST: spanner:9010
       TRACE_SAMPLE: ${TRACE_SAMPLE:-1.0}
       AWS_REGION: us-east-1
+      CONCERT_FLOW: order-events
       KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP-kafka:9092}
       SINK_DUCKDB_URL: http://sink-duckdb:8090
       STORE_INIT_SCHEMA: "false"

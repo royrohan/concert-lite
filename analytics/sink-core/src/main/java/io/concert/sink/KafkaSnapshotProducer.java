@@ -30,6 +30,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 public final class KafkaSnapshotProducer implements AutoCloseable {
 
     private final String topic;
+    private final String bootstrap;
     private final Map<String, Object> config;
     private final Function<String, String> schemaHashes;
     private volatile KafkaProducer<String, byte[]> producer;
@@ -41,6 +42,7 @@ public final class KafkaSnapshotProducer implements AutoCloseable {
     public KafkaSnapshotProducer(String bootstrap, String topic, Function<String, String> schemaHashes,
             Map<String, Object> overrides) {
         this.topic = topic;
+        this.bootstrap = bootstrap;
         this.schemaHashes = schemaHashes;
         Properties p = new Properties();
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
@@ -89,6 +91,9 @@ public final class KafkaSnapshotProducer implements AutoCloseable {
             synchronized (this) {
                 p = producer;
                 if (p == null) {
+                    if (!topic.equals(SnapshotCodec.TOPIC)) {
+                        SnapshotTopics.ensure(bootstrap, topic); // a flow's topic (auto-creation is off)
+                    }
                     p = new KafkaProducer<>(config, new StringSerializer(), new ByteArraySerializer());
                     producer = p;
                 }

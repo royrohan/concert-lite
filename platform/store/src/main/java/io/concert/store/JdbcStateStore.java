@@ -432,6 +432,38 @@ public final class JdbcStateStore implements StateStore {
         return jsonb() ? "data" : "data::json";
     }
 
+    @Override
+    public long purgeFlow(Set<String> smTypes, List<String> workflowIdPrefixes, String stream) {
+        long total = 0;
+        // batched by primary key: DSQL caps the rows one transaction may touch
+        for (String t : smTypes) {
+            total += deleteBatched("DELETE FROM sm_state WHERE workflow_id IN "
+                    + "(SELECT workflow_id FROM sm_state WHERE sm_type = ? LIMIT 2500)", t);
+        }
+        for (String p : workflowIdPrefixes) {
+            total += deleteBatched("DELETE FROM event_trace WHERE trace_id IN "
+                    + "(SELECT trace_id FROM event_trace WHERE workflow_id LIKE ? LIMIT 2500)", likePrefix(p));
+        }
+        total += deleteBatched("DELETE FROM shard_checkpoint WHERE stream = ?", stream);
+        return total;
+    }
+
+    private long deleteBatched(String sql, String arg) {
+        long total = 0;
+        while (true) {
+            int n = OccRetry.run(() -> {
+                try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+                    ps.setString(1, arg);
+                    return ps.executeUpdate();
+                }
+            });
+            total += n;
+            if (n == 0 || !sql.contains("LIMIT")) {
+                return total;
+            }
+        }
+    }
+
     private static String likePrefix(String prefix) {
         return prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%";
     }

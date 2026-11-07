@@ -13,8 +13,9 @@ public final class WorkflowIds {
         return entityKey(smType, instanceKey);
     }
 
+    /** Lock workflow of a key in this process's flow: {@code lock:<key>}, or {@code lock:<flow>:<key>} ({@link Flows}). */
     public static String lock(String lockKey) {
-        return "lock:" + lockKey;
+        return Flows.lockWorkflowId(Flows.CURRENT, lockKey);
     }
 
     public static String event(String eventId) {

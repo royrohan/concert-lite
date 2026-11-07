@@ -5,6 +5,7 @@ import io.concert.common.Json;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -16,7 +17,8 @@ import software.amazon.awssdk.services.kinesis.model.Shard;
 import software.amazon.awssdk.services.kinesis.model.ShardIteratorType;
 
 /**
- * The publisher side of the flow view: tails the ingest stream from LATEST (independently of the
+ * The publisher side of the flow view: tails every flow's ingest stream ({@code concert-<flow>}, re-listed with the
+ * shards, so a flow started later is picked up) from LATEST (independently of the
  * coordinator, which checkpoints its own position) and counts records per flow into one-second
  * buckets by the time this tail read them, so "published/s" is what producers put on the stream, not
  * what the coordinator has read. Read time rather than {@code ApproximateArrivalTimestamp}: polling
@@ -29,8 +31,10 @@ final class KinesisTail implements AutoCloseable {
     static final int HISTORY_SEC = 3600;
 
     private final KinesisClient kinesis;
-    private final String stream;
+    private final String prefix;
+    /** Per {@code stream/shardId}: the next iterator. */
     private final Map<String, String> iterators = new ConcurrentHashMap<>();
+    private volatile List<String> streams = List.of();
     /** Per flow: [epochSecond, count] buckets, oldest first. */
     private final Map<String, Deque<long[]>> buckets = new HashMap<>();
     private final Map<String, Long> millisBehind = new TreeMap<>();
@@ -39,13 +43,15 @@ final class KinesisTail implements AutoCloseable {
     private volatile long startedAt;
     private volatile boolean closed;
 
-    KinesisTail(KinesisClient kinesis, String stream) {
+    /** @param prefix stream-name prefix of the streams to tail ({@link io.concert.common.Flows#STREAM_PREFIX}) */
+    KinesisTail(KinesisClient kinesis, String prefix) {
         this.kinesis = kinesis;
-        this.stream = stream;
+        this.prefix = prefix;
     }
 
-    String stream() {
-        return stream;
+    /** The streams tailed, as last listed. */
+    List<String> streams() {
+        return streams;
     }
 
     /** The flow id of an ingest record: the entity smType, or {@code ev:<domain>} for event-style events. */
@@ -77,7 +83,7 @@ final class KinesisTail implements AutoCloseable {
                 }
                 error = null;
             } catch (RuntimeException e) {
-                error = "Kinesis stream " + stream + " not readable: " + e.getMessage();
+                error = "Kinesis streams " + prefix + "* not readable: " + e.getMessage();
                 iterators.clear();
                 listedAt = 0;
             }
@@ -90,18 +96,38 @@ final class KinesisTail implements AutoCloseable {
     }
 
     private void listShards() {
-        for (Shard s : kinesis.listShards(r -> r.streamName(stream)).shards()) {
-            boolean open = s.sequenceNumberRange().endingSequenceNumber() == null;
-            if (open && !iterators.containsKey(s.shardId())) {
-                iterators.put(s.shardId(), kinesis.getShardIterator(r -> r.streamName(stream).shardId(s.shardId())
-                        .shardIteratorType(ShardIteratorType.LATEST)).shardIterator());
+        List<String> now = io.concert.orchestration.KinesisStreams.list(kinesis, prefix);
+        streams = now;
+        iterators.keySet().removeIf(k -> !now.contains(k.substring(0, k.lastIndexOf('/')))); // deleted flows
+        for (String stream : now) {
+            List<Shard> shards;
+            try {
+                shards = kinesis.listShards(r -> r.streamName(stream)).shards();
+            } catch (software.amazon.awssdk.services.kinesis.model.ResourceInUseException
+                    | software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException e) {
+                continue; // being created or deleted
+            }
+            for (Shard s : shards) {
+                boolean open = s.sequenceNumberRange().endingSequenceNumber() == null;
+                String key = stream + "/" + s.shardId();
+                if (open && !iterators.containsKey(key)) {
+                    iterators.put(key, kinesis.getShardIterator(r -> r.streamName(stream).shardId(s.shardId())
+                            .shardIteratorType(ShardIteratorType.LATEST)).shardIterator());
+                }
             }
         }
     }
 
     private void poll(String shard) {
         String it = iterators.get(shard);
-        GetRecordsResponse resp = kinesis.getRecords(r -> r.shardIterator(it).limit(10_000));
+        GetRecordsResponse resp;
+        try {
+            resp = kinesis.getRecords(r -> r.shardIterator(it).limit(10_000));
+        } catch (software.amazon.awssdk.services.kinesis.model.ResourceNotFoundException
+                | software.amazon.awssdk.services.kinesis.model.ExpiredIteratorException e) {
+            iterators.remove(shard); // stream deleted (Delete flow) or iterator expired: re-listed in 30 s
+            return;
+        }
         long sec = System.currentTimeMillis() / 1000;
         synchronized (this) {
             for (Record rec : resp.records()) {
@@ -146,7 +172,8 @@ final class KinesisTail implements AutoCloseable {
         long nowSec = System.currentTimeMillis() / 1000;
         long from = nowSec - windowSec;
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("stream", stream);
+        out.put("stream", prefix + "*");
+        out.put("streams", streams);
         out.put("windowSec", windowSec);
         out.put("coveredSec", Math.max(1, Math.min(windowSec, (System.currentTimeMillis() - startedAt) / 1000)));
         Map<String, Long> byFlow = new TreeMap<>();
@@ -170,6 +197,9 @@ final class KinesisTail implements AutoCloseable {
             });
             out.put("millisBehindLatest", millisBehind.values().stream().mapToLong(Long::longValue).max().orElse(0));
             out.put("shards", iterators.size());
+            Map<String, Integer> perStream = new TreeMap<>();
+            iterators.keySet().forEach(k -> perStream.merge(k.substring(0, k.lastIndexOf('/')), 1, Integer::sum));
+            out.put("shardsByStream", perStream);
         }
         out.put("byFlow", byFlow);
         out.put("series", series);

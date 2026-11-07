@@ -142,6 +142,28 @@ public abstract class StateStoreContract {
         assertEquals(2, store().scanStates("ledger:" + p).size());
     }
 
+    @Test
+    void purgesAFlowsRowsOnly() {
+        String type = p.replace("-", "_") + "flowtype";
+        String wf = type + ":K1";
+        store().upsertState(new SmStateRow(wf, type, "OPEN", null, 1, "e1", now()),
+                new TraceRow(p + "pe", now(), Stage.TRANSITION, wf, null, "NEW -> OPEN"));
+        store().upsertState(row("ledger:" + p + "keep", "OPEN", 1), null);
+        store().saveCheckpoint("concert-" + p + "flow", "shard-0", "42");
+        long n;
+        try {
+            n = store().purgeFlow(java.util.Set.of(type), List.of(type + ":"), "concert-" + p + "flow");
+        } catch (UnsupportedOperationException e) {
+            org.junit.jupiter.api.Assumptions.abort(e.getMessage());
+            return;
+        }
+        assertTrue(n >= 3, "deleted " + n);
+        assertTrue(store().loadState(wf).isEmpty());
+        assertTrue(store().traceForEvent(p + "pe").isEmpty());
+        assertTrue(store().loadCheckpoint("concert-" + p + "flow", "shard-0").isEmpty());
+        assertTrue(store().loadState("ledger:" + p + "keep").isPresent());
+    }
+
     // ---------------------------------------------------------------- JSON data
 
     private static final String ORDER_JSON = """

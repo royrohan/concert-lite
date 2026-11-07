@@ -3,7 +3,6 @@ package io.concert.sink.clickhouse;
 import io.concert.model.pure.ResolvedModel;
 import io.concert.sink.SchemaMapper;
 import io.concert.sink.SchemaSpec;
-import io.concert.sink.SnapshotCodec;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -19,7 +18,7 @@ import org.slf4j.LoggerFactory;
  * <pre>
  * CLICKHOUSE_URL          http://localhost:8123   CLICKHOUSE_USER / CLICKHOUSE_PASSWORD  concert / concert
  * KAFKA_BROKERS           kafka:9092 (as ClickHouse reaches Kafka)
- * SNAPSHOT_TOPIC          entity-snapshots        CLICKHOUSE_GROUP   sink-clickhouse
+ * SNAPSHOT_TOPIC          every snapshot topic    CLICKHOUSE_GROUP   sink-clickhouse
  * MODELS_DIR              /models (comma-separated dirs allowed)  SINK_ROOTS  order:demo::order::Order,...
  * MODELS_DIR_*, SINK_ROOTS_*   appended to MODELS_DIR / SINK_ROOTS (generated ecosystems' compose.yml)
  * MARKETDATA_MODELS_DIR   /models-trading (trading-model's .pure files); empty or missing: no market data
@@ -49,7 +48,7 @@ public final class ClickHouseProvisionerMain {
                         env("SINK_ROOTS", SchemaMapper.DEFAULT_ROOTS))));
         List<Ddl> ddl = new ArrayList<>(ClickHouseSchema.common());
         ddl.addAll(ClickHouseSchema.entities(schema, new ClickHouseSchema.Config(brokers,
-                env("SNAPSHOT_TOPIC", SnapshotCodec.TOPIC), env("CLICKHOUSE_GROUP", ClickHouseSchema.DEFAULT_GROUP))));
+                env("SNAPSHOT_TOPIC", ClickHouseSchema.SNAPSHOT_TOPICS), env("CLICKHOUSE_GROUP", ClickHouseSchema.DEFAULT_GROUP))));
         String md = env("MARKETDATA_MODELS_DIR", "/models-trading");
         boolean marketData = !md.isEmpty() && Files.isDirectory(Path.of(md));
         if (marketData) {

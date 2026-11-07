@@ -41,7 +41,7 @@ final class LoadGen {
         int keys = Integer.parseInt(o.getOrDefault("keys", "200"));
         int accounts = Integer.parseInt(o.getOrDefault("accounts", "20"));
         Path out = Path.of(o.getOrDefault("out", "build/chaos/" + runId + ".json"));
-        String stream = Env.get("INGEST_STREAM", "concert-events");
+        String stream = io.concert.common.Flows.stream();
         boolean eventStyle = "event".equals(o.getOrDefault("style", "entity"));
         int chainEvery = Integer.parseInt(o.getOrDefault("chain-every", "5"));
 

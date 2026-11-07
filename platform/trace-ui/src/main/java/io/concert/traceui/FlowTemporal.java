@@ -1,5 +1,6 @@
 package io.concert.traceui;
 
+import io.concert.common.Flows;
 import io.concert.common.WorkflowIds;
 import io.concert.common.api.KeyLockWorkflow;
 import io.concert.common.api.LockSnapshot;
@@ -47,12 +48,10 @@ final class FlowTemporal {
 
     private final WorkflowClient client;
     private final String temporalUi;
-    private final String stream;
 
-    FlowTemporal(WorkflowClient client, String temporalUi, String stream) {
+    FlowTemporal(WorkflowClient client, String temporalUi) {
         this.client = client;
         this.temporalUi = temporalUi;
-        this.stream = stream;
     }
 
     private WorkflowServiceGrpc.WorkflowServiceBlockingStub stub() {
@@ -68,46 +67,48 @@ final class FlowTemporal {
     /**
      * The view, cached for 4 s per flow: Temporal rate-limits visibility calls per namespace (10/s by default), and
      * several open pages refreshing would otherwise trip it.
+     *
+     * @param eco the flow (ecosystem) of the machine flow: its orchestration queue, stream and lock ids ({@link Flows})
      */
-    Map<String, Object> view(FlowMetrics.Flow flow, Collection<String> lockKeys, String coordinatorQueue) {
+    Map<String, Object> view(FlowMetrics.Flow flow, Collection<String> lockKeys, String eco) {
         Object[] hit = cache.get(flow.id());
         if (hit != null && System.currentTimeMillis() - (long) hit[0] < 4000) {
             @SuppressWarnings("unchecked")
             Map<String, Object> v = (Map<String, Object>) hit[1];
             return v;
         }
-        Map<String, Object> v = load(flow, lockKeys, coordinatorQueue);
+        Map<String, Object> v = load(flow, lockKeys, eco);
         cache.put(flow.id(), new Object[] {System.currentTimeMillis(), v});
         return v;
     }
 
-    private Map<String, Object> load(FlowMetrics.Flow flow, Collection<String> lockKeys, String coordinatorQueue) {
+    private Map<String, Object> load(FlowMetrics.Flow flow, Collection<String> lockKeys, String eco) {
         Map<String, Object> out = new LinkedHashMap<>();
         boolean event = "event".equals(flow.style());
         String smType = event ? flow.id().substring(3) : flow.id();
         String base = "WorkflowType='" + (event ? "EventProcessorWorkflow" : "EntityWorkflow") + "' AND SmType='" + smType + "'";
         out.put("query", base);
         out.put("temporalUi", temporalUi + "/namespaces/" + ns() + "/workflows?query=" + URLEncoder.encode(base, StandardCharsets.UTF_8));
-        out.put("locks", locks(lockKeys));
+        out.put("locks", locks(lockKeys, eco));
         out.put("openLocks", count("WorkflowType='KeyLockWorkflow' AND ExecutionStatus='Running'"));
         out.put("workflows", byStatus(base));
         out.put("running", running(base + " AND ExecutionStatus='Running'", 25));
         out.put("failed", running(base + " AND ExecutionStatus IN ('Failed','Terminated','TimedOut')", 10));
         List<Map<String, Object>> queues = new ArrayList<>();
-        queues.add(queue(coordinatorQueue));
+        queues.add(queue(Flows.orchestrationQueue(eco)));
         queues.add(queue(flow.taskQueue()));
         out.put("taskQueues", queues);
-        out.put("ingest", ingest());
+        out.put("ingest", ingest(Flows.stream(eco)));
         return out;
     }
 
     /** Live state of each lock key (in parallel, 3 s budget); keys with nothing held or waiting are counted as free. */
-    List<Map<String, Object>> locks(Collection<String> keys) {
+    List<Map<String, Object>> locks(Collection<String> keys, String eco) {
         List<Map<String, Object>> out = new ArrayList<>();
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             Map<String, Future<LockSnapshot>> futures = new LinkedHashMap<>();
             keys.stream().limit(60).forEach(k -> futures.put(k, pool.submit(
-                    () -> client.newWorkflowStub(KeyLockWorkflow.class, WorkflowIds.lock(k)).snapshot())));
+                    () -> client.newWorkflowStub(KeyLockWorkflow.class, Flows.lockWorkflowId(eco, k)).snapshot())));
             long deadline = System.currentTimeMillis() + 3000;
             for (var e : futures.entrySet()) {
                 Map<String, Object> row = new LinkedHashMap<>();
@@ -130,7 +131,7 @@ final class FlowTemporal {
                     Thread.currentThread().interrupt();
                     break;
                 }
-                row.put("temporalUi", temporalUi + "/namespaces/" + ns() + "/workflows/" + WorkflowIds.lock(e.getKey()));
+                row.put("temporalUi", temporalUi + "/namespaces/" + ns() + "/workflows/" + Flows.lockWorkflowId(eco, e.getKey()));
                 out.add(row);
             }
         }
@@ -207,8 +208,8 @@ final class FlowTemporal {
         return out;
     }
 
-    /** The ingest supervisor of the stream and its shard consumers. */
-    Map<String, Object> ingest() {
+    /** The ingest supervisor of a flow's stream and its shard consumers. */
+    Map<String, Object> ingest(String stream) {
         Map<String, Object> out = new LinkedHashMap<>();
         String id = WorkflowIds.ingest(stream);
         out.put("workflowId", id);

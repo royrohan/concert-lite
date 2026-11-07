@@ -2,7 +2,6 @@ package io.concert.sink.duckdb;
 
 import io.concert.sink.SchemaMapper;
 import io.concert.sink.SchemaSpec;
-import io.concert.sink.SnapshotCodec;
 import io.concert.sink.SnapshotConsumerLoop;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -15,7 +14,7 @@ import org.slf4j.LoggerFactory;
  * The DuckDB sink: consumes {@code entity-snapshots} into a DuckDB file and serves read-only SQL.
  *
  * <pre>
- * KAFKA_BOOTSTRAP  localhost:29092          SNAPSHOT_TOPIC  entity-snapshots
+ * KAFKA_BOOTSTRAP  localhost:29092          SNAPSHOT_TOPIC  every snapshot topic (entity-snapshots, snapshots.<flow>; "re:<regex>" or one name)
  * SINK_GROUP_ID    sink-duckdb              DUCKDB_PATH     /data/concert.duckdb
  * MODELS_DIR       /models (the .pure files; several dirs comma-separated, e.g. /models,/models-trading)
  * SINK_ROOTS       order:demo::order::Order,...  (smType:pure::Class; root table = plural(snake(smType)))
@@ -46,7 +45,7 @@ public final class DuckDbSinkMain {
         db.ensureSchema(schema);
 
         SnapshotConsumerLoop loop = new SnapshotConsumerLoop(new SnapshotConsumerLoop.Config(
-                env("KAFKA_BOOTSTRAP", "localhost:29092"), env("SNAPSHOT_TOPIC", SnapshotCodec.TOPIC),
+                env("KAFKA_BOOTSTRAP", "localhost:29092"), env("SNAPSHOT_TOPIC", io.concert.sink.SnapshotTopics.ALL),
                 env("SINK_GROUP_ID", "sink-duckdb"), Duration.ofMillis(500), Duration.ofSeconds(30), Map.of(),
                 env("SINK_DLQ_TOPIC", SnapshotConsumerLoop.DEFAULT_DLQ),
                 Integer.parseInt(env("SINK_MAX_ATTEMPTS", "3"))), db);

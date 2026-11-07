@@ -141,5 +141,14 @@ public final class InMemoryStateStore implements StateStore {
     }
 
     @Override
+    public long purgeFlow(Set<String> smTypes, List<String> workflowIdPrefixes, String stream) {
+        int before = states.size() + traces.size() + checkpoints.size();
+        states.values().removeIf(r -> smTypes.contains(r.smType()));
+        traces.removeIf(t -> t.workflowId() != null && workflowIdPrefixes.stream().anyMatch(t.workflowId()::startsWith));
+        checkpoints.keySet().removeIf(k -> k.startsWith(stream + "/"));
+        return before - (states.size() + traces.size() + checkpoints.size());
+    }
+
+    @Override
     public void close() {}
 }

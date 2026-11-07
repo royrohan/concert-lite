@@ -145,15 +145,18 @@ services:
 
   # ---------------------------------------------------------------- apps (profile "apps")
 
-  coordinator:
+  # Each flow (ecosystem) has its own coordinator, Kinesis stream concert-<flow>, orchestration-<flow> task queue and
+  # Kafka topic snapshots.<flow> (CONCERT_FLOW, io.concert.common.Flows), so flows never overlap. The trace UI's flow
+  # page starts / stops / deletes a flow's coordinator and workers. Scale out: --scale samples-coordinator=3
+  samples-coordinator:
     profiles: [apps]
     build: { context: ., target: coordinator }
     image: concert-temporal/coordinator
     depends_on: *app-deps
     environment:
       <<: *app-env
+      CONCERT_FLOW: samples
     restart: unless-stopped
-    # scale out: docker compose up -d --scale coordinator=3
 
   worker:
     profiles: [apps]
@@ -161,13 +164,24 @@ services:
     image: concert-temporal/worker
     depends_on:
       <<: *app-deps
-      coordinator: { condition: service_started }
+      samples-coordinator: { condition: service_started }
     environment:
       <<: *app-env
+      CONCERT_FLOW: samples
       SM_TYPE: ${SM_TYPE:-order,payment,shipment,ledger}
       # event-style demo domain (showcases/sample-workers .../events/DemoEvents): EVENT_DOMAINS=demo to enable
       EVENT_DOMAINS: ${EVENT_DOMAINS:-}
       STORE_INIT_SCHEMA: "false"
+    restart: unless-stopped
+
+  trading-coordinator:
+    profiles: [trading]
+    build: { context: ., target: coordinator }
+    image: concert-temporal/coordinator
+    depends_on: *app-deps
+    environment:
+      <<: *app-env
+      CONCERT_FLOW: trading
     restart: unless-stopped
 
   # Trading showcase workers: the four trading state machines in one process (showcases/trading/README.md).
@@ -177,16 +191,17 @@ services:
     image: concert-temporal/trading-worker
     depends_on:
       <<: *app-deps
-      coordinator: { condition: service_started }
+      trading-coordinator: { condition: service_started }
     environment:
       <<: *app-env
+      CONCERT_FLOW: trading
       STORE_INIT_SCHEMA: "false"
       # heap 50% of the cap: Temporal's gRPC/netty buffers and four workers' thread pools live off-heap
       JAVA_OPTS: -XX:+UseZGC -XX:+UseCompactObjectHeaders -XX:MaxRAMPercentage=50
     deploy: { resources: { limits: { memory: 1536m } } }
     restart: unless-stopped
 
-  # One-shot: realistic order flow to Kinesis (concert-events). Same seed and vol multiplier as
+  # One-shot: realistic order flow to Kinesis (concert-trading, the trading flow's stream). Same seed and vol multiplier as
   # marketdata-sim, and events are stamped and sent on the wall clock, so every fill sits on the bid/ask
   # that md.ticks shows at the fill's timestamp. scripts/trading-load.sh [orders] [rate] runs it.
   trading-loadgen:
@@ -210,12 +225,17 @@ services:
     profiles: [apps]
     build: { context: ., target: trace-ui }
     image: concert-temporal/trace-ui
-    depends_on:
-      <<: *app-deps
-      coordinator: { condition: service_started }
+    depends_on: *app-deps
     ports: ["8088:8088"]
+    # Start / Stop / Delete flow and the shared-services switch run docker compose (FlowOps): the host's Docker socket
+    # (root on the host: local development only) and the repo at its host path, so bind mounts resolve the same.
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:${PWD}:ro
     environment:
       <<: *app-env
+      CONCERT_REPO: ${PWD}
       TEMPORAL_UI_URL: http://localhost:8080
       SINK_DUCKDB_URL: http://sink-duckdb:8090
       CLICKHOUSE_URL: http://clickhouse:8123

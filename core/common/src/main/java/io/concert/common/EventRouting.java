@@ -51,7 +51,7 @@ public final class EventRouting {
         for (int attempt = 1; ; attempt++) {
             KeyLockWorkflow lock = client.newWorkflowStub(KeyLockWorkflow.class, WorkflowOptions.newBuilder()
                     .setWorkflowId(WorkflowIds.lock(lockKey))
-                    .setTaskQueue(TaskQueues.ORCHESTRATION)
+                    .setTaskQueue(TaskQueues.orchestration())
                     .setWorkflowTaskTimeout(Failover.workflowTaskTimeout())
                     .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
                     .setTypedSearchAttributes(SearchAttrs.forLock(lockKey))

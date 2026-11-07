@@ -4,6 +4,7 @@ package io.concert.eco.order_events;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.concert.common.Env;
 import io.concert.common.EventEnvelope;
+import io.concert.common.Flows;
 import io.concert.common.Json;
 import io.concert.model.runtime.ModelJson;
 import io.concert.model.runtime.ModelObject;
@@ -26,7 +27,7 @@ import software.amazon.awssdk.services.kinesis.KinesisClient;
 
 /**
  * Sends events of ecosystem {@code order-events} to Kinesis ({@code INGEST_STREAM}, default
- * {@code concert-events}; {@code KINESIS_ENDPOINT}, e.g. {@code http://localhost:4566}), addressed and locked as
+ * the flow's stream {@code concert-order-events}; {@code KINESIS_ENDPOINT}, e.g. {@code http://localhost:4566}), addressed and locked as
  * the Pure annotations declare: lock keys are rendered from the payload, the partition key is the first sorted
  * lock key. Payloads are checked against their model class before sending.
  *
@@ -39,6 +40,9 @@ import software.amazon.awssdk.services.kinesis.KinesisClient;
  */
 public final class OrderEventsEvents {
     private OrderEventsEvents() {}
+
+    /** The flow (ecosystem) whose stream this sends to ({@link Flows}). */
+    static final String FLOW = "order-events";
 
     public static void main(String[] args) throws Exception {
         try {
@@ -205,7 +209,7 @@ public final class OrderEventsEvents {
     }
 
     private static void publish(KinesisClient kinesis, EventEnvelope e) {
-        String stream = Env.get("INGEST_STREAM", "concert-events");
+        String stream = Env.get("INGEST_STREAM", Flows.stream(FLOW));
         String partitionKey = e.effectiveLockKeys().getFirst();
         kinesis.putRecord(b -> b.streamName(stream).partitionKey(partitionKey).data(SdkBytes.fromUtf8String(Json.write(e))));
         if (e.isEventStyle()) {

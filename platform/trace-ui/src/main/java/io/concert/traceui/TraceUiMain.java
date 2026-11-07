@@ -3,9 +3,9 @@ package io.concert.traceui;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.concert.common.Env;
+import io.concert.common.Flows;
 import io.concert.common.Json;
 import io.concert.common.TemporalClients;
-import io.concert.common.WorkflowIds;
 import io.concert.common.api.EntitySnapshot;
 import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.KeyLockWorkflow;
@@ -26,6 +26,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +50,8 @@ import org.slf4j.LoggerFactory;
  * POST /api/model/query    {"query": "<Pure lambda>", "stores": "duckdb,clickhouse"} -> per store {sql, columns, rows, ...}
  *                          (legend-lite plans the SQL, LEGEND_LITE_URL; concert runs it read-only)
  * GET  /api/model/store    the generated Legend store layer (Database / Mapping / Connection / Runtime)
+ * GET  /api/model/diagrams per machine: state diagram (event + payload class), transition classes, Pure model;
+ *                          event catalogs' flow and model diagrams (Model tab Diagrams, Legend Studio's Diagrams panel)
  * GET /api/marketdata/status · POST /api/marketdata/start?rate= · POST /api/marketdata/stop   marketdata-sim control
  * GET /api/recent                 latest finished / dropped events
  * GET /api/events/{eventId}       timeline of one event
@@ -72,6 +75,8 @@ import org.slf4j.LoggerFactory;
 public final class TraceUiMain {
     private static final Logger log = LoggerFactory.getLogger(TraceUiMain.class);
 
+    private final FlowRegistry registry;
+    private final FlowOps ops;
     private final StateStore store;
     private final WorkflowClient client;
     private final String temporalUi = Env.get("TEMPORAL_UI_URL", "http://localhost:8080");
@@ -114,6 +119,9 @@ public final class TraceUiMain {
     /** Mermaid class diagram of each typed machine's Pure model, by smType. */
     static final Map<String, String> MODEL_DIAGRAMS = modelDiagrams();
 
+    /** State, transition-class and model diagrams of every machine and event catalog ({@link MachineDiagrams}). */
+    static final Map<String, Object> DIAGRAMS = MachineDiagrams.all();
+
     private static Map<String, String> modelDiagrams() {
         Map<String, String> m = new LinkedHashMap<>();
         MACHINES.forEach((type, machine) -> {
@@ -134,12 +142,36 @@ public final class TraceUiMain {
         this.client = client;
         this.reconcile = new ReconcileRunner(client, MACHINES);
         this.events = new EventsApi(client, store);
-        String stream = Env.get("INGEST_STREAM", "concert-events");
+        this.registry = FlowRegistry.load(repo());
         this.flows = new FlowMetrics(store, client, pipeline, clickHouse, http, sinkDuckDb, deephavenInternal,
-                new KinesisTail(io.concert.orchestration.KinesisClients.fromEnv(), stream), events.types(), events);
-        this.generator = new FlowGenerator(io.concert.orchestration.KinesisClients.fromEnv(), stream);
-        this.temporal = new FlowTemporal(client, temporalUi, stream);
+                new KinesisTail(io.concert.orchestration.KinesisClients.fromEnv(), Flows.STREAM_PREFIX), events.types(), events);
+        this.flows.ecosystems(id -> {
+            FlowRegistry.Flow f = registry.ofMachineFlow(id);
+            return f == null ? "" : f.id();
+        });
+        this.generator = new FlowGenerator(io.concert.orchestration.KinesisClients.fromEnv(), registry::streamOf);
+        this.temporal = new FlowTemporal(client, temporalUi);
+        this.ops = new FlowOps(registry, new DockerCompose(repo(), registry.composeFiles()),
+                io.concert.orchestration.KinesisClients.fromEnv(), client, store, generator);
         this.model = new ModelQuery(Env.get("LEGEND_LITE_URL", "http://legend-lite:8095"), sinkDuckDb, clickHouse, http);
+    }
+
+    /**
+     * The repo: {@code CONCERT_REPO} (compose mounts it there, at its host path), else the nearest directory up from
+     * the working directory that has a settings.gradle.kts (running from a checkout).
+     */
+    static java.nio.file.Path repo() {
+        String env = Env.get("CONCERT_REPO", "");
+        if (!env.isEmpty()) {
+            return java.nio.file.Path.of(env);
+        }
+        java.nio.file.Path p = java.nio.file.Path.of("").toAbsolutePath();
+        for (java.nio.file.Path q = p; q != null; q = q.getParent()) {
+            if (java.nio.file.Files.isRegularFile(q.resolve("settings.gradle.kts"))) {
+                return q;
+            }
+        }
+        return p;
     }
 
     public static void main(String[] args) throws IOException {
@@ -156,6 +188,7 @@ public final class TraceUiMain {
         HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
         server.createContext("/api/flows", this::flows);
+        server.createContext("/api/control/", this::control);
         server.createContext("/api/marketdata/", this::marketData);
         server.createContext("/api/model/", this::model);
         server.createContext("/api/recent", ex -> json(ex, Map.of("events", store.recentEvents(50))));
@@ -215,12 +248,23 @@ public final class TraceUiMain {
     Map<String, Object> lock(String lockKey) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("lockKey", lockKey);
-        try {
-            out.put("live", client.newWorkflowStub(KeyLockWorkflow.class, WorkflowIds.lock(lockKey)).snapshot());
-        } catch (RuntimeException idle) {
-            out.put("live", null); // no open lock workflow: the key is free
+        out.put("live", null); // no open lock workflow in any flow: the key is free
+        // each flow has its own lock workflows (lock:<flow>:<key>): show the first flow where the key is open
+        List<String> ecos = new ArrayList<>(registry.all().stream().map(FlowRegistry.Flow::id).toList());
+        ecos.add("");
+        String id = Flows.lockWorkflowId(ecos.getFirst(), lockKey);
+        for (String eco : ecos) {
+            String wf = Flows.lockWorkflowId(eco, lockKey);
+            try {
+                out.put("live", client.newWorkflowStub(KeyLockWorkflow.class, wf).snapshot());
+                out.put("flow", eco);
+                id = wf;
+                break;
+            } catch (RuntimeException idle) {
+                // not open in this flow
+            }
         }
-        out.put("temporalUi", temporalUi + "/namespaces/default/workflows/" + WorkflowIds.lock(lockKey));
+        out.put("temporalUi", temporalUi + "/namespaces/default/workflows/" + id);
         return out;
     }
 
@@ -364,7 +408,10 @@ public final class TraceUiMain {
                             Integer.parseInt(q.getOrDefault("duration", "60")), Boolean.parseBoolean(q.getOrDefault("errors", "false"))));
                 }
                 case "generate/stop" -> json(ex, generator.stop(id));
-                case "temporal" -> json(ex, temporal.view(flows.flow(id), flows.lockKeys(id, window), io.concert.common.TaskQueues.ORCHESTRATION));
+                case "temporal" -> {
+                    FlowRegistry.Flow eco = registry.ofMachineFlow(id);
+                    json(ex, temporal.view(flows.flow(id), flows.lockKeys(id, window), eco == null ? "" : eco.id()));
+                }
                 case "failures" -> json(ex, flows.failures(id, window));
                 case "meta" -> json(ex, flows.meta(id));
                 default -> json(ex, 404, Map.of("error", "unknown flow action " + action));
@@ -374,6 +421,53 @@ public final class TraceUiMain {
         } catch (RuntimeException e) {
             log.warn("flow metrics failed", e);
             json(ex, 500, Map.of("error", String.valueOf(e.getMessage())));
+        }
+    }
+
+    /**
+     * Flow operations and the shared services:
+     * <pre>
+     * GET  /api/control/flows                every flow (ecosystem): machines, containers, state, stream / topic / queues, job
+     * GET  /api/control/flows/{id}           one flow, with its stream's status
+     * POST /api/control/flows/{id}/start|stop|delete    background job (FlowOps); its log is in the flow's "job"
+     * GET  /api/control/shared               Kinesis, Kafka, DuckDB, ClickHouse, legend-lite (+ Studio) and their states
+     * POST /api/control/shared/start|stop    one switch for all of them
+     * </pre>
+     */
+    private void control(HttpExchange ex) throws IOException {
+        String[] p = tail(ex, "/api/control/").split("/");
+        boolean post = ex.getRequestMethod().equals("POST");
+        try {
+            if (p[0].equals("shared")) {
+                if (p.length == 1) {
+                    json(ex, ops.shared());
+                } else if (post && (p[1].equals("start") || p[1].equals("stop"))) {
+                    json(ex, ops.shared(p[1].equals("start")));
+                } else {
+                    json(ex, 404, Map.of("error", "POST /api/control/shared/start|stop"));
+                }
+                return;
+            }
+            if (!p[0].equals("flows")) {
+                json(ex, 404, Map.of("error", "unknown control " + p[0]));
+                return;
+            }
+            if (p.length == 1 || p[1].isEmpty()) {
+                json(ex, ops.flows());
+            } else if (p.length == 2) {
+                json(ex, ops.flow(p[1]));
+            } else if (!post) {
+                json(ex, 405, Map.of("error", "POST /api/control/flows/" + p[1] + "/" + p[2]));
+            } else {
+                json(ex, switch (p[2]) {
+                    case "start" -> ops.start(p[1]);
+                    case "stop" -> ops.stop(p[1]);
+                    case "delete" -> ops.delete(p[1]);
+                    default -> throw new IllegalArgumentException("unknown flow operation " + p[2]);
+                });
+            }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            json(ex, 409, Map.of("error", String.valueOf(e.getMessage())));
         }
     }
 
@@ -409,6 +503,7 @@ public final class TraceUiMain {
                     }
                     json(ex, model.run(q, body.path("stores").asText("duckdb,clickhouse"), body.path("variant").asText(null)));
                 }
+                case "diagrams" -> json(ex, DIAGRAMS);
                 case "store" -> {
                     byte[] b = model.store().getBytes(StandardCharsets.UTF_8);
                     ex.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");

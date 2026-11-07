@@ -93,7 +93,7 @@ class ClickHouseSchemaTest {
     void queueReadsTheModelAsRawJsonAndStreamsErrors() {
         String q = ((Ddl.Queue) byName.get("entity_snapshots_queue")).create();
         assertTrue(q.contains("model Nullable(String)"));
-        assertTrue(q.contains("kafka_topic_list = 'entity-snapshots', kafka_group_name = 'sink-clickhouse'"), q);
+        assertTrue(q.contains("kafka_topic_list = '^(entity-snapshots|snapshots[.].+)$', kafka_group_name = 'sink-clickhouse'"), q);
         assertTrue(q.contains("kafka_handle_error_mode = 'stream'") && q.contains("input_format_json_read_objects_as_strings = 1"), q);
         Ddl.MaterializedView err = (Ddl.MaterializedView) byName.get("mv_entity_snapshots_queue_errors");
         assertEquals("kafka_errors", err.target());

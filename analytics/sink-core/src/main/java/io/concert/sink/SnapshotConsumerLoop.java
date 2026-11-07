@@ -156,6 +156,8 @@ public final class SnapshotConsumerLoop implements Runnable, AutoCloseable {
         p.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         p.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 500);
+        // a pattern subscription (SnapshotTopics.ALL) sees a new flow's topic within this long
+        p.put(ConsumerConfig.METADATA_MAX_AGE_CONFIG, 10_000);
         p.putAll(config.overrides());
         KafkaConsumer<String, byte[]> created = null;
         for (long wait = 1000; running && created == null; wait = Math.min(wait * 2, config.maxBackoff().toMillis())) {
@@ -181,7 +183,11 @@ public final class SnapshotConsumerLoop implements Runnable, AutoCloseable {
             if (!running) {
                 return;
             }
-            c.subscribe(List.of(config.topic()), new Rebalance(c));
+            if (config.topic().startsWith(SnapshotTopics.REGEX)) {
+                c.subscribe(java.util.regex.Pattern.compile(config.topic().substring(SnapshotTopics.REGEX.length())), new Rebalance(c));
+            } else {
+                c.subscribe(List.of(config.topic()), new Rebalance(c));
+            }
             long backoffMs = 0;
             while (running) {
                 if (pending == null) {

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 /** How the flow view's generator makes events per flow (no Kinesis: the events, not their publishing). */
 class FlowGeneratorTest {
-    private final FlowGenerator gen = new FlowGenerator(null, "test-stream");
+    private final FlowGenerator gen = new FlowGenerator(null, f -> "test-stream");
 
     @Test
     void strategyPerFlow() {

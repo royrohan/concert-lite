@@ -49,7 +49,7 @@ public final class OrchestrationWorker implements AutoCloseable {
         this.dispatcher = new IngestDispatcher(store, traces, dispatch, s.directSmTypes(), s.maxParallelGroups());
 
         this.factory = WorkerFactory.newInstance(client, WorkerTuning.factoryOptions());
-        Worker worker = factory.newWorker(TaskQueues.ORCHESTRATION,
+        Worker worker = factory.newWorker(TaskQueues.orchestration(),
                 WorkerTuning.workerOptions(s.workflowPollers(), s.activityPollers()).build());
         worker.registerWorkflowImplementationTypes(
                 KeyLockWorkflowImpl.class, IngestSupervisorWorkflowImpl.class);
@@ -67,7 +67,7 @@ public final class OrchestrationWorker implements AutoCloseable {
     public void ensureIngest(IngestConfig config) {
         IngestSupervisorWorkflow wf = client.newWorkflowStub(IngestSupervisorWorkflow.class, WorkflowOptions.newBuilder()
                 .setWorkflowId(WorkflowIds.ingest(config.stream()))
-                .setTaskQueue(TaskQueues.ORCHESTRATION)
+                .setTaskQueue(TaskQueues.orchestration())
                 .setWorkflowTaskTimeout(Failover.workflowTaskTimeout())
                 .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
                 .build());

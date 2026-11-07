@@ -61,7 +61,8 @@ final class FlowGenerator implements AutoCloseable {
     private static final Set<String> TRADING = Set.of("trading_order", "trading_execution", "trading_fill", "trading_allocation");
 
     private final KinesisClient kinesis;
-    private final String stream;
+    /** A flow page's flow (smType or {@code ev:<domain>}) to its flow's ingest stream ({@code concert-<flow>}). */
+    private final java.util.function.Function<String, String> streamOf;
     private final Map<String, Run> runs = new ConcurrentHashMap<>();
     private final Map<String, MachineCatalog.Machine> machines = new HashMap<>();
     private final Map<String, Map<String, List<String>>> entityLocks = new HashMap<>();
@@ -71,9 +72,9 @@ final class FlowGenerator implements AutoCloseable {
     /** One sample flow file: its name, whether it's an error case, and its events. */
     record Sample(String path, String name, boolean error, List<JsonNode> events) {}
 
-    FlowGenerator(KinesisClient kinesis, String stream) {
+    FlowGenerator(KinesisClient kinesis, java.util.function.Function<String, String> streamOf) {
         this.kinesis = kinesis;
-        this.stream = stream;
+        this.streamOf = streamOf;
         for (MachineCatalog c : MachineCatalog.load()) {
             Map<String, Map<String, List<String>>> locks = locksOf(c);
             for (MachineCatalog.Machine m : c.machines()) {
@@ -373,6 +374,7 @@ final class FlowGenerator implements AutoCloseable {
                         .data(SdkBytes.fromUtf8String(Json.write(stamped))).build());
             }
             try {
+                String stream = streamOf.apply(flowId);
                 PutRecordsResponse r = kinesis.putRecords(b -> b.streamName(stream).records(entries));
                 int bad = r.failedRecordCount() == null ? 0 : r.failedRecordCount();
                 sent += entries.size() - bad;

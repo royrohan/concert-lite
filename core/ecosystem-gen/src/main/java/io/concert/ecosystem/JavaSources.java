@@ -419,7 +419,7 @@ final class JavaSources {
         boolean sm = eco.hasMachines();
         boolean ev = eco.hasEvents();
         TreeSet<String> imports = new TreeSet<>(List.of("com.fasterxml.jackson.databind.JsonNode", "io.concert.common.Env",
-                "io.concert.common.EventEnvelope", "io.concert.common.Json", "io.concert.model.runtime.ModelJson",
+                "io.concert.common.EventEnvelope", "io.concert.common.Flows", "io.concert.common.Json", "io.concert.model.runtime.ModelJson",
                 "io.concert.model.runtime.ModelObject", "io.concert.orchestration.KinesisClients", "io.concert.sdk.LockTemplates",
                 "java.io.IOException", "java.nio.charset.StandardCharsets", "java.nio.file.Files", "java.nio.file.Path",
                 "java.util.ArrayList", "java.util.List", "java.util.UUID", "software.amazon.awssdk.core.SdkBytes",
@@ -435,7 +435,7 @@ final class JavaSources {
         sb.append("package ").append(pkg()).append(";\n\n");
         imports.forEach(i -> sb.append("import ").append(i).append(";\n"));
         sb.append("\n/**\n * Sends events of ecosystem {@code ").append(eco.name()).append("} to Kinesis ({@code INGEST_STREAM}, default\n"
-                + " * {@code concert-events}; {@code KINESIS_ENDPOINT}, e.g. {@code http://localhost:4566}), addressed and locked as\n"
+                + " * the flow's stream {@code concert-").append(eco.name()).append("}; {@code KINESIS_ENDPOINT}, e.g. {@code http://localhost:4566}), addressed and locked as\n"
                 + " * the Pure annotations declare: lock keys are rendered from the payload, the partition key is the first sorted\n"
                 + " * lock key. Payloads are checked against their model class before sending.\n *\n * <pre>\n");
         if (sm) {
@@ -457,6 +457,7 @@ final class JavaSources {
         }
         sb.append("\n * list\n * </pre>\n */\n");
         sb.append("public final class ").append(cls).append(" {\n    private ").append(cls).append("() {}\n\n");
+        sb.append("    /** The flow (ecosystem) whose stream this sends to ({@link Flows}). */\n    static final String FLOW = \"").append(eco.name()).append("\";\n\n");
         sb.append("""
                     public static void main(String[] args) throws Exception {
                         try {
@@ -683,7 +684,7 @@ final class JavaSources {
         }
         sb.append("""
                     private static void publish(KinesisClient kinesis, EventEnvelope e) {
-                        String stream = Env.get("INGEST_STREAM", "concert-events");
+                        String stream = Env.get("INGEST_STREAM", Flows.stream(FLOW));
                         String partitionKey = e.effectiveLockKeys().getFirst();
                         kinesis.putRecord(b -> b.streamName(stream).partitionKey(partitionKey).data(SdkBytes.fromUtf8String(Json.write(e))));
                         if (e.isEventStyle()) {

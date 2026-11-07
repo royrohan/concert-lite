@@ -29,6 +29,10 @@ ENTRYPOINT ["/app/bin/sample-workers"]
 
 FROM runtime AS trace-ui
 COPY --from=build /src/platform/trace-ui/build/install/trace-ui /app
+# docker CLI with the compose and buildx plugins: Start / Stop / Delete flow and the shared-services switch run
+# docker compose against the host's Docker socket (compose mounts it; local development only)
+COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker:28-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 EXPOSE 8088
 ENTRYPOINT ["/app/bin/trace-ui"]
 

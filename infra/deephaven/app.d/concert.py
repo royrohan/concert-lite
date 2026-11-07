@@ -31,6 +31,25 @@ TYPES = {"string": dht.string, "long": dht.int64, "double": dht.double, "bool": 
 
 
 SNAPSHOT_TOPIC = "entity-snapshots"
+# Each flow publishes to its own snapshots.<flow> (io.concert.common.Flows). consume("entity-snapshots", ...) reads
+# the shared topic and every flow topic that exists when this script runs, merged; the trace UI restarts Deephaven
+# when Start flow creates a new topic.
+SNAPSHOT_TOPIC_PATTERN = r"^(entity-snapshots|snapshots[.].+)$"
+
+
+def snapshot_topics():
+    import re
+    import jpy
+    admin_type = jpy.get_type("org.apache.kafka.clients.admin.AdminClient")
+    props = jpy.get_type("java.util.Properties")()
+    props.setProperty("bootstrap.servers", KAFKA["bootstrap.servers"])
+    admin = admin_type.create(props)
+    try:
+        names = admin.listTopics().names().get(15, jpy.get_type("java.util.concurrent.TimeUnit").SECONDS)
+        found = sorted(str(n) for n in names.toArray() if re.match(SNAPSHOT_TOPIC_PATTERN, str(n)))
+    finally:
+        admin.close()
+    return found or [SNAPSHOT_TOPIC]
 
 
 @functools.lru_cache(maxsize=16384)
@@ -84,6 +103,9 @@ def snap_bool(text: str, path: str) -> Optional[bool]:
     return value if isinstance(value, bool) else None
 
 
+_SNAPSHOT_TOPICS = snapshot_topics()
+print("concert: snapshot topics", _SNAPSHOT_TOPICS)
+
 _SNAPSHOT_READERS = {dht.string: "snap_str", dht.int64: "snap_long", dht.double: "snap_double", dht.bool_: "snap_bool"}
 
 
@@ -97,8 +119,10 @@ def consume(topic, columns, mapping, table_type):
     fields = {column: field for field, column in mapping.items()}
     formulas = [f"{column} = {_SNAPSHOT_READERS[kind]}(SnapshotJson, `{fields.get(column, column)}`)"
                 for column, kind in columns.items()]
-    raw = kc.consume(KAFKA, topic, offsets=kc.ALL_PARTITIONS_SEEK_TO_BEGINNING, key_spec=kc.KeyValueSpec.IGNORE,
-                     value_spec=kc.simple_spec("SnapshotJson", dht.string), table_type=table_type)
+    from deephaven import merge
+    raw = merge([kc.consume(KAFKA, t, offsets=kc.ALL_PARTITIONS_SEEK_TO_BEGINNING, key_spec=kc.KeyValueSpec.IGNORE,
+                            value_spec=kc.simple_spec("SnapshotJson", dht.string), table_type=table_type)
+                 for t in _SNAPSHOT_TOPICS])
     return raw.where("snap_ok(SnapshotJson)").update(formulas).drop_columns(["SnapshotJson"])
 
 

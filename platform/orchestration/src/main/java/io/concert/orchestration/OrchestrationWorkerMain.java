@@ -2,6 +2,8 @@ package io.concert.orchestration;
 
 import io.concert.common.Env;
 import io.concert.common.Failover;
+import io.concert.common.Flows;
+import io.concert.common.TaskQueues;
 import io.concert.common.TemporalClients;
 import io.concert.common.api.IngestConfig;
 import io.concert.store.StateStore;
@@ -17,10 +19,13 @@ import org.slf4j.LoggerFactory;
  * Environment:
  * <pre>
  * TEMPORAL_ADDRESS=localhost:7233   TEMPORAL_NAMESPACE=default
- * KINESIS_ENDPOINT=http://localhost:4566   INGEST_STREAM=concert-events   INGEST_POSITION=TRIM_HORIZON
+ * KINESIS_ENDPOINT=http://localhost:4566   INGEST_STREAM=concert-<flow>   INGEST_POSITION=TRIM_HORIZON
  * STORE_JDBC_URL=jdbc:postgresql://localhost:5433/concert   (STORE_KIND=dsql for Aurora DSQL)
  * DIRECT_SM_TYPES=            comma list of types that may bypass locks (no shared keys!)
  * DEDUPE_TTL_HOURS=24
+ * INGEST_CREATE_STREAM=      create the stream if missing (default: true under CONCERT_FLOW), KINESIS_SHARDS=2
+ * CONCERT_FLOW=              the flow (ecosystem) this coordinator serves: stream concert-<flow>, task queue
+ *                             orchestration-<flow>, lock ids lock:<flow>:<key> (io.concert.common.Flows)
  * </pre>
  */
 public final class OrchestrationWorkerMain {
@@ -37,9 +42,16 @@ public final class OrchestrationWorkerMain {
                 Env.getLong("INGEST_CHECKPOINT_MS", 500),
                 Env.getInt("ORCH_WF_POLLERS_MAX", 64),
                 Env.getInt("ORCH_ACTIVITY_POLLERS_MAX", 8));
-        OrchestrationWorker worker = new OrchestrationWorker(TemporalClients.fromEnv(), store, KinesisClients.fromEnv(), settings).start();
+        String stream = Flows.stream();
+        var kinesis = KinesisClients.fromEnv();
+        if (Env.getBool("INGEST_CREATE_STREAM", !Flows.CURRENT.isEmpty())) {
+            // a flow's stream is the flow's own: its coordinator creates it if Start flow (trace UI) did not
+            if (KinesisStreams.ensure(kinesis, stream, Env.getInt("KINESIS_SHARDS", 2), 120_000)) {
+                log.info("created stream {}", stream);
+            }
+        }
+        OrchestrationWorker worker = new OrchestrationWorker(TemporalClients.fromEnv(), store, kinesis, settings).start();
 
-        String stream = Env.get("INGEST_STREAM", "concert-events");
         if (Env.getBool("INGEST_AUTOSTART", true)) {
             worker.ensureIngest(new IngestConfig(stream, Env.get("INGEST_POSITION", "TRIM_HORIZON"),
                     Env.getInt("INGEST_SHARD_LIST_SEC", 30), Env.getInt("INGEST_RUN_MINUTES", 30), List.of(),
@@ -67,7 +79,8 @@ public final class OrchestrationWorkerMain {
             worker.close();
             store.close();
         }));
-        log.info("orchestration worker up (stream={}, direct types={})", stream, direct);
+        log.info("orchestration worker up (flow={}, stream={}, queue={}, direct types={})", Flows.CURRENT, stream,
+                TaskQueues.orchestration(), direct);
         Thread.currentThread().join();
     }
 }

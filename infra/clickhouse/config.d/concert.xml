@@ -30,5 +30,7 @@
     <!-- librdkafka buffers per Kafka-engine consumer: 64 MiB by default, 6 queues here. -->
     <kafka>
         <queued_max_messages_kbytes>16384</queued_max_messages_kbytes>
+        <!-- the snapshot queue subscribes by regex: a new flow's snapshots.<flow> topic is seen within 10 s -->
+        <topic_metadata_refresh_interval_ms>10000</topic_metadata_refresh_interval_ms>
     </kafka>
 </clickhouse>

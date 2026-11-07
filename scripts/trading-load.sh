@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fire trading order flow into the running stack (trading showcase):
 #   scripts/trading-load.sh [orders=100] [rate=50] [extra TradingLoadGen args, e.g. --symbols 10 --concurrency 40]
-# Runs the one-shot trading-loadgen container (profile trading-load): events go to Kinesis concert-events,
+# Runs the one-shot trading-loadgen container (profile trading-load): events go to Kinesis concert-trading (the trading flow's stream),
 # the coordinator routes them to the trading worker (scripts/up.sh <store> --analytics --trading). Seed and
 # vol multiplier match marketdata-sim (TRADING_SEED / TRADING_VOL_MULT, default 42 / 4), and events are
 # stamped on the wall clock, so fills line up with md.ticks.

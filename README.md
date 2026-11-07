@@ -20,11 +20,11 @@ its schedule. There is no bespoke lease, peer or outbox protocol: failover, retr
 ## Architecture
 
 ```
- producers ─▶ Kinesis concert-events
+ producers ─▶ Kinesis concert-<flow>            (one stream, coordinator, task queue and topic per flow)
                 │  ShardConsumer activity (1 per shard, heartbeating; checkpoint in heartbeat + StateStore)
                 │  batch dedupe in the StateStore (INSERT … ON CONFLICT DO NOTHING / conditional put)
                 ▼
- ┌──────────────────── Temporal (task queue "orchestration") ────────────────────┐
+ ┌──────────────── Temporal (task queue "orchestration-<flow>") ─────────────────┐
  │ KeyLockWorkflow lock:<K0> ─forward─▶ lock:<K1> ─ … ─▶ last key: UpdateWithStart │   FIFO per key, keys in
  │                                                    the entity's handle(event)  │   global sorted order
  └────────────────────────────────────────────────────────────────┬──────────────┘
@@ -43,6 +43,31 @@ its schedule. There is no bespoke lease, peer or outbox protocol: failover, retr
                                                                           ▲
                                 trace UI :8088 (entities, locks, Analytics tab: SQL consoles, pipeline strip)
 ```
+
+## Flows: start, stop, delete
+
+A **flow** is an ecosystem: `samples`, `trading` and every generated ecosystem (`insurance`, `trading-gen`,
+`order-events`, ...). The trace UI (http://localhost:8088) opens on the registered flows. A flow's page has:
+
+* **Start**: brings up Kinesis (LocalStack) and Kafka if they're down. Then it creates the flow's stream
+  `concert-<flow>` and topic `snapshots.<flow>`, and starts its coordinator and workers. Images that don't exist yet
+  are built, so the first start takes a few minutes.
+* **Stop**: stops its data generators and containers. The stream, topic, workflows and rows stay.
+* **Delete flow**: removes its containers. It also terminates its running workflows and reconcile schedules, deletes
+  its stream and topic, and purges its `sm_state`, trace and checkpoint rows. Analytics tables are kept, and Start
+  recreates the flow empty.
+* A left pane leads to its machines (pipeline, data generator, coordinator, worker), its **Models** (Pure queries over
+  its classes), **Diagrams** (per machine: states, transition classes, Pure model) and the **Flow diagram** (every
+  state machine as declared in Pure).
+
+Flows never overlap. Each has its own Kinesis stream (shards), Kafka topic (partitions), coordinator, orchestration
+task queue, worker task queues and lock workflows (`lock:<flow>:<key>`), all set by `CONCERT_FLOW`
+(`io.concert.common.Flows`). The sinks follow every flow's topic: DuckDB and ClickHouse subscribe by pattern, and
+Deephaven reads the topics that exist when it starts (Start restarts it for a new topic).
+
+The landing page has one switch for the **shared services**: Kinesis, Kafka, DuckDB, ClickHouse and legend-lite (with
+Legend Studio). To drive compose, the trace UI container gets the host's Docker socket and the repo mounted at its host
+path. That is root on the host, so it's for local development only.
 
 ## Quickstart
 
@@ -589,7 +614,8 @@ redo more (idempotent) work when a process merely pauses.
 |---|---|---|
 | `TEMPORAL_ADDRESS` / `TEMPORAL_NAMESPACE` | `localhost:7233` / `default` | |
 | `KINESIS_ENDPOINT` | — | LocalStack: `http://localhost:4566`; unset for AWS |
-| `INGEST_STREAM` / `INGEST_POSITION` | `concert-events` / `TRIM_HORIZON` | |
+| `CONCERT_FLOW` | — | the flow (ecosystem) of a coordinator / worker: stream `concert-<flow>`, topic `snapshots.<flow>`, queue `orchestration-<flow>`, lock ids `lock:<flow>:<key>`; unset = the legacy shared names |
+| `INGEST_STREAM` / `INGEST_POSITION` | `concert-<flow>` / `TRIM_HORIZON` | |
 | `STORE_KIND` | `postgres` | `postgres`, `dsql`, `dynamo`, `spanner` |
 | `STORE_JDBC_URL` / `STORE_USER` / `STORE_PASSWORD` | `jdbc:postgresql://localhost:5433/concert` | postgres, dsql |
 | `DYNAMO_ENDPOINT` / `DYNAMO_TABLE_PREFIX`, `SPANNER_EMULATOR_HOST` / `SPANNER_PROJECT` / `_INSTANCE` / `_DATABASE` | | dynamo, spanner; `STORE_INIT_SCHEMA=true` creates tables |

@@ -121,6 +121,22 @@ public final class SpannerStateStore implements StateStore {
     }
 
     @Override
+    public long purgeFlow(java.util.Set<String> smTypes, List<String> workflowIdPrefixes, String stream) {
+        long total = 0;
+        for (String t : smTypes) {
+            total += db.executePartitionedUpdate(Statement.newBuilder("DELETE FROM sm_state WHERE sm_type = @t")
+                    .bind("t").to(t).build());
+        }
+        for (String p : workflowIdPrefixes) {
+            total += db.executePartitionedUpdate(Statement.newBuilder(
+                    "DELETE FROM event_trace WHERE STARTS_WITH(workflow_id, @p)").bind("p").to(p).build());
+        }
+        total += db.executePartitionedUpdate(Statement.newBuilder("DELETE FROM shard_checkpoint WHERE stream = @s")
+                .bind("s").to(stream).build());
+        return total;
+    }
+
+    @Override
     public Map<String, Long> processedStatusCounts(String eventIdPrefix) {
         Map<String, Long> out = new TreeMap<>();
         query(Statement.newBuilder("SELECT status, COUNT(*) FROM processed_event WHERE STARTS_WITH(event_id, @p) GROUP BY status")

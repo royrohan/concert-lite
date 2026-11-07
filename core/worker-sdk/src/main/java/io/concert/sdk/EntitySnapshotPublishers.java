@@ -1,8 +1,8 @@
 package io.concert.sdk;
 
 import io.concert.common.Env;
+import io.concert.common.Flows;
 import io.concert.sink.KafkaSnapshotProducer;
-import io.concert.sink.SnapshotCodec;
 import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,9 +25,10 @@ final class EntitySnapshotPublishers {
                 log.info("KAFKA_BOOTSTRAP not set: entity snapshots are logged, not delivered");
                 shared = LOGGING;
             } else {
-                KafkaSnapshotProducer producer = new KafkaSnapshotProducer(bootstrap, schemaHashes);
+                String topic = Flows.snapshotTopic();
+                KafkaSnapshotProducer producer = new KafkaSnapshotProducer(bootstrap, topic, schemaHashes, java.util.Map.of());
                 Runtime.getRuntime().addShutdownHook(new Thread(producer::close, "snapshot-producer-close"));
-                log.info("entity snapshots go to Kafka {} topic {}", bootstrap, SnapshotCodec.TOPIC);
+                log.info("entity snapshots go to Kafka {} topic {}", bootstrap, topic);
                 shared = new EntitySnapshotPublisher.Kafka(producer);
             }
         }
