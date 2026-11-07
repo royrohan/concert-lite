@@ -38,6 +38,32 @@
   .mtile.wide > .mtile { border: 0; padding: 0; }
   .mtile .tile-value small { font-size: 12px; color: var(--muted); font-weight: 400; }
   @media (max-width: 1000px) { .mtiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .mw-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .mw-head .subtabs { margin: 0 0 0 auto; }
+  .mw-sec { margin-top: 14px; }
+  .mw-sec h4 { margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .mw-sec h4 .spacer { flex: 1; }
+  .mtiles.live { grid-template-columns: repeat(5, minmax(110px, 1fr)); }
+  .cwgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+  .cwchart { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 6px; position: relative; }
+  .cwchart .hd { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+  .cwchart .hd b { font-weight: 600; } .cwchart .hd span { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cwchart svg { display: block; width: 100%; height: 72px; overflow: visible; }
+  .cwchart svg .grid { stroke: var(--line); stroke-width: 1; }
+  .cwchart svg .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  .cwchart svg .area { fill: var(--accent); opacity: .08; }
+  .cwchart svg .cross { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .cwchart .ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cwchart .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                  padding: 3px 8px; font-size: 12px; white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,.12); transform: translate(-50%, -100%); }
+  .logbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0 8px; }
+  .logbar input { min-width: 220px; } .logbar select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); }
+  .logbar label { display: inline-flex; gap: 4px; align-items: center; font-size: 13px; color: var(--muted); }
+  .logbar label input { min-width: 0; flex: none; }
+  .logs { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+  .logs table { margin: 0; } .logs td { padding: 3px 8px; font: 12px/1.45 ui-monospace, monospace; border-bottom: 1px solid var(--line); }
+  .logs td.msg { white-space: pre-wrap; word-break: break-word; } .logs td.ts, .logs td.st { white-space: nowrap; color: var(--muted); }
+  .logs tr.lv-error td.msg { color: var(--bad); } .logs tr.lv-warn td.msg { color: var(--warn); }
   button.danger { background: none; border: 1px solid var(--bad); color: var(--bad); padding: 5px 12px; border-radius: 6px; cursor: pointer; }
   button.danger:disabled, button.ghost:disabled { opacity: .5; cursor: default; }
   pre.joblog { max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
@@ -764,7 +790,7 @@ const jobLog = j => j ? `<details ${jobRunning(j) || j.state === 'FAILED' ? 'ope
     ${j.endedAt ? '· ' + ago(j.endedAt) : ''}</summary><pre class="joblog">${esc(j.log.join('\n'))}</pre></details>` : '';
 
 async function sharedOp(op) {
-  if (op === 'stop' && !confirm('Stop Kinesis, Kafka, DuckDB, ClickHouse and legend-lite? Every running flow stops ingesting and publishing until they are back.')) return;
+  if (op === 'stop' && !confirm('Stop Kinesis + CloudWatch (LocalStack), Kafka, DuckDB, ClickHouse and legend-lite? Every running flow stops ingesting and publishing until they are back.')) return;
   const d = await apiJson('/api/control/shared/' + op, { method: 'POST' });
   if (d.error) alert(d.error);
   showFlows();
@@ -781,8 +807,9 @@ function sharedPanel(sh) {
   return `<div class="panel"><div class="ops"><b>Shared services</b>${st}<div class="svcs">${sh.services.map(pill).join('')}</div>
       <span class="spacer" style="flex:1"></span>${btn}</div>
     ${sh.docker ? `<div class="note">${status('bad', 'No Docker control')} ${esc(sh.docker)}</div>` : ''}
+    ${sh.services.filter(x => x.note).map(x => `<div class="note">${status('warn', x.label)} ${esc(x.note)}</div>`).join('')}
     ${jobLog(sh.job)}
-    <div class="note">Used by every flow. Starting a flow also brings up Kinesis and Kafka if they're down.</div></div>`;
+    <div class="note">Used by every flow. CloudWatch (metrics + logs) runs in LocalStack next to Kinesis. Starting a flow also brings up Kinesis and Kafka if they're down.</div></div>`;
 }
 
 async function showFlows() {
@@ -1045,36 +1072,222 @@ function renderFlow(d) {
   const nodes = pipelineNodes(d);
 
   const eco = ecoOfMachine(f.id);
-  out.innerHTML = `<div id="flow-root"><div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span>
+  // The machine widget is built once per machine page and survives the 3 s refresh (its Logs filter keeps focus and
+  // its CloudWatch tabs reload on their own timers): only the sections around it are rebuilt.
+  const top = `<div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span>
       ${eco ? `<a onclick="go('flow','${esc(eco.id)}')">${esc(eco.label)}</a><span class="sep">›</span>` : ''}
       <h2 class="mono">${esc(f.label)}</h2><span class="badge">${esc(f.style)}</span><span class="spacer"></span>
       ${d.studio ? `<a href="${esc(d.studio.url)}" target="_blank" title="Opens ${esc(d.studio.project)} (concert's models plus the generated Legend store layer) read-only in Legend Studio Lite, which runs in your browser; the first time it publishes the project there">Legend Studio ↗</a>` : ''}
       ${windowPicker(`showFlow('${esc(f.id)}')`)}</div>
     ${generatorPanel(d)}
-    ${machineWidget(d)}
-    <div class="panel"><div class="flowmap">${nodes}</div>
+`;
+  const bottom = `    <div class="panel"><div class="flowmap">${nodes}</div>
       <div class="note">Last ${fmt(d.coveredSec)} s${d.truncated ? ' (trace read capped: newest rows only)' : ''}${d.traceSample < 1 ? ` · trace sampling ${d.traceSample}: counts scaled` : ''}.
         Click Coordinator, Worker, Legend lite or Deephaven to open it for this flow; the others show details below. Legend lite runs one Legend query on both DuckDB and ClickHouse. Kafka is this flow's own topic (${esc(kf.topic || '')}); ClickHouse latency is completed → ingested.</div></div>
-    <div class="drill">${drill(d)}</div></div>`;
+    <div class="drill">${drill(d)}</div>`;
+  const mw = document.getElementById('mw-root');
+  if (mw && mw.dataset.flow === f.id && document.getElementById('flow-root')) {
+    document.getElementById('flow-top').innerHTML = top;
+    document.getElementById('flow-bottom').innerHTML = bottom;
+    updateMachineWidget(d);
+    return;
+  }
+  out.innerHTML = `<div id="flow-root"><div id="flow-top">${top}</div>
+    <div id="mw-root" data-flow="${esc(f.id)}">${machineWidget(d)}</div><div id="flow-bottom">${bottom}</div></div>`;
+  updateMachineWidget(d);
+  mwShow(mwTab, true);
 }
 
-/** The state machine widget: instances completed (initial -> terminal) per second, their lifetime, and per-event latency. */
+/**
+ * The state machine widget, three tabs:
+ *  - State machine: completions (initial -> terminal) per second, events processed / failed / rejected in the window;
+ *  - Metrics: lifetimes and event latency from the trace (live), and the CloudWatch metrics the dashboard publishes;
+ *  - Logs: the flow's CloudWatch Logs group (one stream per container), filterable.
+ */
+let mwTab = localStorage.getItem('mwTab') || 'sm';
+const MW_TABS = [['sm', 'State machine'], ['metrics', 'Metrics'], ['logs', 'Logs']];
 function machineWidget(d) {
-  const m = d.machine; if (!m) return '';
+  const m = d.machine; if (!m) return '<div id="mw-slot-empty"></div>';
+  const id = d.flow.id;
+  return `<div class="panel" id="mw" data-flow="${esc(id)}">
+    <div class="mw-head"><b>State machine</b><span class="mono muted">${esc(m.initial || '?')} → ${esc((m.terminal || []).join(' | ') || '?')}</span>
+      <div class="subtabs" role="tablist">${MW_TABS.map(([k, l]) => `<button role="tab" data-tab="${k}" onclick="mwShow('${k}')">${l}</button>`).join('')}</div></div>
+    <div data-pane="sm"><div id="mw-sm"></div></div>
+    <div data-pane="metrics" hidden>
+      <div class="mw-sec"><h4>Live <span style="text-transform:none;font-weight:400">· from the event trace, last <span id="mw-covered"></span> s</span></h4><div id="mw-live"></div></div>
+      <div class="mw-sec"><h4>CloudWatch <span id="mw-cw-meta" class="mono" style="text-transform:none;font-weight:400"></span><span class="spacer"></span>
+        <span class="seg" id="mw-cw-win" role="group" aria-label="CloudWatch window">${CW_WINDOWS.map(([s_, l]) =>
+          `<button data-w="${s_}" onclick="cwWindow=${s_};localStorage.setItem('cwWindow',${s_});loadCwMetrics()">${l}</button>`).join('')}</span></h4>
+        <div id="mw-cw"><div class="muted">Loading CloudWatch metrics…</div></div></div></div>
+    <div data-pane="logs" hidden>
+      <div class="logbar">
+        <input id="lg-filter" placeholder="filter pattern: ERROR · ?WARN ?ERROR · &quot;lock wait&quot;" value="${esc(logForm.filter)}"
+          onkeydown="if(event.key==='Enter')loadCwLogs()" aria-label="CloudWatch Logs filter pattern">
+        <select id="lg-stream" onchange="loadCwLogs()" aria-label="log stream"><option value="">all streams</option></select>
+        <select id="lg-window" onchange="loadCwLogs()" aria-label="logs window">${[[300, '5 min'], [900, '15 min'], [3600, '1 h'], [21600, '6 h'], [86400, '24 h']]
+          .map(([v, l]) => `<option value="${v}" ${v == logForm.window ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <button class="ghost" onclick="loadCwLogs()">Search</button>
+        <label title="refresh every 5 s"><input type="checkbox" id="lg-tail" ${logForm.tail ? 'checked' : ''} onchange="logForm.tail=this.checked;saveLogForm();loadCwLogs()"> tail</label></div>
+      <div id="mw-logs-meta" class="note" style="margin:0 0 6px"></div>
+      <div id="mw-logs"><div class="muted">Loading logs…</div></div></div></div>`;
+}
+
+const mwTile = (label, value, sub) => `<div class="mtile"><div class="tile-label">${label}</div><div class="tile-value">${value}</div>${sub ? `<div class="muted" style="font-size:11.5px">${sub}</div>` : ''}</div>`;
+const msv = v => v === null || v === undefined ? '–' : fmt(Math.round(v)) + '<small> ms</small>';
+
+/** The State machine tab's tiles: completions, processed, failed, rejected, lock waits, workers. */
+function smTilesHtml(d, tabs = true) {
+  const m = d.machine, w = d.worker;
   const step = Math.max(1, d.coveredSec / 30);
-  const tile = (label, value, sub) => `<div class="mtile"><div class="tile-label">${label}</div><div class="tile-value">${value}</div>${sub ? `<div class="muted" style="font-size:11.5px">${sub}</div>` : ''}</div>`;
-  const msv = v => v === null || v === undefined ? '–' : fmt(Math.round(v)) + '<small> ms</small>';
-  return `<div class="panel"><div class="ops"><b>State machine</b><span class="mono muted">${esc(m.initial || '?')} → ${esc((m.terminal || []).join(' | ') || '?')}</span></div>
-    <div class="mtiles">
-      <div class="mtile wide">${tile('Completions (new → terminal)', rate(m.completedPerSec), fmt(m.completed) + ' in the last ' + fmt(d.coveredSec) + ' s')}${spark(m.completedSeries, step, 'completed')}</div>
-      ${tile('Instance lifetime p50', msv(m.lifetimeP50), m.lifetimeSamples ? fmt(m.lifetimeSamples) + (m.lifetimeSamples === 1 ? ' instance' : ' instances') + ' started and finished in the window' : 'no instance started and finished in the window')}
-      ${tile('Instance lifetime p95', msv(m.lifetimeP95), '')}
-      ${tile('Event latency p50', msv(m.latencyP50), fmt(m.latencySamples) + ' events')}
-      ${tile('Event latency p95', msv(m.latencyP95), '')}
-      ${tile('Event latency p99', msv(m.latencyP99), '')}
+  const failed = w.errored || 0, rejected = w.rejected || 0;
+  const ecoId = ecoOfMachine(d.flow.id);
+  return `<div class="mtiles">
+      <div class="mtile wide">${mwTile('Completions (new → terminal)', rate(m.completedPerSec), fmt(m.completed) + ' in the last ' + fmt(d.coveredSec) + ' s')}${spark(m.completedSeries, step, 'completed')}</div>
+      ${mwTile('Events processed', rate(w.perSec), fmt(w.processed) + ' in the window')}
+      ${mwTile('Failed', `<span class="${failed ? 'FAILED' : ''}">${fmt(failed)}</span>`, failed ? `<a onclick="go('flow','${esc(d.flow.id)}/worker')">open failed events</a>` : 'failed, blocked or parked')}
+      ${mwTile('Rejected', fmt(rejected), 'invalid for the state')}
+      ${mwTile('Lock waits', fmt(d.coordinator.lockWaits), 'events queued behind a key')}
+      ${mwTile('Workers', w.pollers === 0 ? status('bad', 'none') : fmt(w.pollers), esc(w.taskQueue || ''))}
+    </div>
+    ${tabs ? `<div class="note">Lifetimes, latency percentiles and their history are on Metrics; container logs of ${esc(ecoId ? ecoId.label : 'this flow')} on Logs.${d.traceSample < 1 ? ' Counts scaled for trace sampling.' : ''}</div>` : ''}`;
+}
+
+/** Lifetimes and event latency from the trace (the Metrics tab's live tiles). */
+function liveTilesHtml(d) {
+  const m = d.machine;
+  return `<div class="mtiles live">
+      ${mwTile('Instance lifetime p50', msv(m.lifetimeP50), m.lifetimeSamples ? fmt(m.lifetimeSamples) + (m.lifetimeSamples === 1 ? ' instance' : ' instances') + ' started and finished in the window' : 'no instance started and finished in the window')}
+      ${mwTile('Instance lifetime p95', msv(m.lifetimeP95), '')}
+      ${mwTile('Event latency p50', msv(m.latencyP50), fmt(m.latencySamples) + ' events')}
+      ${mwTile('Event latency p95', msv(m.latencyP95), '')}
+      ${mwTile('Event latency p99', msv(m.latencyP99), '')}
     </div>
     <div class="note">Event latency: one event, from the coordinator reading it off Kinesis to its transition being persisted (lock waits included).
-      Lifetime: the instance's first transition out of ${esc(m.initial || 'the initial state')} to its terminal one.${d.traceSample < 1 ? ' Counts scaled for trace sampling.' : ''}</div></div>`;
+      Lifetime: the instance's first transition out of ${esc(m.initial || 'the initial state')} to its terminal one.</div>`;
+}
+
+/** Refreshes the trace-derived parts (every 3 s with the page); CloudWatch parts have their own loaders. */
+function updateMachineWidget(d) {
+  if (!d.machine || !document.getElementById('mw')) return;
+  document.getElementById('mw-sm').innerHTML = smTilesHtml(d);
+  document.getElementById('mw-covered').textContent = fmt(d.coveredSec);
+  document.getElementById('mw-live').innerHTML = liveTilesHtml(d);
+}
+
+/** A static machine summary (no tabs) for pages that re-render whole, like the Performance run page. */
+function machineSummary(d) {
+  const m = d.machine; if (!m) return '';
+  return `<div class="panel"><div class="mw-head"><b>State machine</b><span class="mono muted">${esc(m.initial || '?')} → ${esc((m.terminal || []).join(' | ') || '?')}</span></div>
+    <div class="mw-sec">${smTilesHtml(d, false)}</div><div class="mw-sec">${liveTilesHtml(d)}</div></div>`;
+}
+
+let mwTimer = null;
+function mwShow(tab, initial) {
+  mwTab = tab; localStorage.setItem('mwTab', tab);
+  const root = document.getElementById('mw'); if (!root) return;
+  root.querySelectorAll('[data-tab]').forEach(b => { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', on); });
+  root.querySelectorAll('[data-pane]').forEach(p => p.hidden = p.dataset.pane !== tab);
+  clearTimeout(mwTimer);
+  if (tab === 'metrics') loadCwMetrics(); else if (tab === 'logs') loadCwLogs();
+}
+/** Keeps reloading the active CloudWatch tab while its machine page is open. */
+function mwSchedule(fn, ms) {
+  clearTimeout(mwTimer);
+  const id = document.getElementById('mw')?.dataset.flow;
+  mwTimer = setTimeout(() => { const el = document.getElementById('mw'); if (el && el.dataset.flow === id && !el.querySelector(`[data-pane="${mwTab}"]`).hidden) fn(); }, ms);
+}
+
+// ---- Metrics tab: CloudWatch
+const CW_WINDOWS = [[900, '15m'], [3600, '1h'], [10800, '3h'], [86400, '24h']];
+let cwWindow = Number(localStorage.getItem('cwWindow')) || 900, cwCharts = [];
+async function loadCwMetrics() {
+  const root = document.getElementById('mw'); if (!root) return;
+  const id = root.dataset.flow;
+  root.querySelectorAll('#mw-cw-win button').forEach(b => b.classList.toggle('on', Number(b.dataset.w) === cwWindow));
+  const d = await apiJson(`/api/cloudwatch/metrics/${encodeURIComponent(id)}?window=${cwWindow}`);
+  const el = document.getElementById('mw-cw');
+  if (!el || document.getElementById('mw')?.dataset.flow !== id) return;
+  document.getElementById('mw-cw-meta').textContent = d.namespace ? `· ${d.namespace} · ${(d.dimensions || []).join(', ')} · ${d.period} s period` : '';
+  if (d.error && !d.charts) { el.innerHTML = `<div class="FAILED">${esc(d.error)}</div>`; mwSchedule(loadCwMetrics, 15000); return; }
+  const now = Date.now(), start = now - cwWindow * 1000, period = d.period * 1000;
+  cwCharts = d.charts.map(c => {
+    let pts = c.points.map(([t, v]) => [t, v]);
+    if (c.unit === 'Count') { // a count with no datum in a period was zero (only active machines publish)
+      const by = new Map(pts.map(([t, v]) => [Math.floor(t / period), v]));
+      pts = []; for (let b = Math.ceil(start / period); b * period <= now; b++) pts.push([b * period, by.get(b) || 0]);
+    }
+    return { ...c, pts, start, end: now, period: d.period };
+  });
+  const any = d.charts.some(c => c.points.length);
+  const why = d.error ? `<div class="FAILED note">${esc(d.error)}</div>` : d.publishError ? `<div class="FAILED note">publishing: ${esc(d.publishError)}</div>` : '';
+  el.innerHTML = why + `<div class="cwgrid">${cwCharts.map((c, i) => cwChart(c, i)).join('')}</div>
+    <div class="note">${any ? '' : '<b>No datapoints yet.</b> '}The dashboard publishes every ${fmt(d.publishSec)} s for each machine with events in the interval
+      ${d.lastPublished ? `(last ${ago(d.lastPublished)})` : d.publishing ? '(not yet since it started)' : '(publishing is off: CLOUDWATCH_PUBLISH=false)'}.
+      Counts are sums per ${d.period} s; latencies are per-interval percentiles (p50 averaged, p95 / p99 the maximum).</div>`;
+  mwSchedule(loadCwMetrics, 15000);
+}
+const cwFmt = (c, v) => v === null || v === undefined ? '–' : c.unit === 'Milliseconds' ? ms(v) : fmt(Math.round(v * 10) / 10);
+function cwChart(c, i) {
+  const vals = c.pts.map(p => p[1]), last = c.pts.length ? c.pts[c.pts.length - 1][1] : null;
+  const head = `<div class="hd"><b>${esc(c.label)}</b><span>${c.unit === 'Count' ? 'sum ' + cwFmt(c, vals.reduce((a, b) => a + b, 0)) : 'latest ' + cwFmt(c, last)}</span></div>`;
+  const span = c.end - c.start, W = 300, H = 72;
+  if (!c.pts.length || (c.unit === 'Count' && !vals.some(v => v > 0) && !c.points.length)) {
+    return `<div class="cwchart">${head}<svg viewBox="0 0 ${W} ${H}" aria-hidden="true"><line class="grid" x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}"/></svg>
+      <div class="ax"><span>${cwTime(c.start)}</span><span>no data</span><span>now</span></div></div>`;
+  }
+  const peak = Math.max(...vals), max = peak || 1;
+  const x = t => ((t - c.start) / span) * W, y = v => H - 2 - (v / max) * (H - 6);
+  const d = c.pts.map((p, j) => (j ? 'L' : 'M') + x(p[0]).toFixed(1) + ' ' + y(p[1]).toFixed(1)).join(' ');
+  const area = d + ` L${x(c.pts[c.pts.length - 1][0]).toFixed(1)} ${H - 1} L${x(c.pts[0][0]).toFixed(1)} ${H - 1} Z`;
+  const dot = c.pts.length === 1 ? `<circle cx="${x(c.pts[0][0])}" cy="${y(c.pts[0][1])}" r="4" fill="var(--accent)"/>` : '';
+  return `<div class="cwchart" onmousemove="cwHover(event,${i})" onmouseleave="cwHover(null,${i})">${head}
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(c.label)}: peak ${cwFmt(c, peak)}, latest ${cwFmt(c, last)}">
+      <line class="grid" x1="0" x2="${W}" y1="${H - 1}" y2="${H - 1}"/><line class="grid" x1="0" x2="${W}" y1="${y(max)}" y2="${y(max)}" stroke-dasharray="2 3"/>
+      <path class="area" d="${area}"/><path class="line" d="${d}"/>${dot}<line class="cross" id="cwx${i}" y1="0" y2="${H}" visibility="hidden"/></svg>
+    <div class="ax"><span>${cwTime(c.start)}</span><span>peak ${cwFmt(c, peak)}</span><span>now</span></div><div class="tip" id="cwt${i}" hidden></div></div>`;
+}
+const cwTime = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+function cwHover(ev, i) {
+  const c = cwCharts[i], tip = document.getElementById('cwt' + i), cross = document.getElementById('cwx' + i);
+  if (!tip || !cross) return;
+  if (!ev || !c.pts.length) { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); return; }
+  const svg = ev.currentTarget.querySelector('svg'), r = svg.getBoundingClientRect();
+  const t = c.start + ((ev.clientX - r.left) / r.width) * (c.end - c.start);
+  let best = c.pts[0]; for (const p of c.pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+  const px = ((best[0] - c.start) / (c.end - c.start)) * 300;
+  cross.setAttribute('x1', px); cross.setAttribute('x2', px); cross.setAttribute('visibility', 'visible');
+  tip.hidden = false; tip.style.left = (svg.offsetLeft + (px / 300) * r.width) + 'px'; tip.style.top = svg.offsetTop + 'px';
+  tip.innerHTML = `<b>${cwFmt(c, best[1])}</b> <span class="muted">${new Date(best[0]).toLocaleTimeString()}</span>`;
+}
+
+// ---- Logs tab: CloudWatch Logs
+let logForm = (() => { try { return { filter: '', window: 900, tail: true, ...JSON.parse(localStorage.getItem('logForm') || '{}') }; } catch { return { filter: '', window: 900, tail: true }; } })();
+function saveLogForm() { try { localStorage.setItem('logForm', JSON.stringify(logForm)); } catch {} }
+async function loadCwLogs() {
+  const root = document.getElementById('mw'); if (!root) return;
+  const id = root.dataset.flow, sel = document.getElementById('lg-stream');
+  logForm.filter = document.getElementById('lg-filter').value; logForm.window = Number(document.getElementById('lg-window').value); saveLogForm();
+  const q = new URLSearchParams({ window: logForm.window, filter: logForm.filter, streams: sel.value, limit: 300 });
+  const d = await apiJson(`/api/cloudwatch/logs/${encodeURIComponent(id)}?${q}`);
+  const el = document.getElementById('mw-logs');
+  if (!el || document.getElementById('mw')?.dataset.flow !== id) return;
+  const streams = [...new Set([...(d.streams || [])])];
+  if (sel.options.length - 1 !== streams.length) {
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">all streams</option>' + streams.map(s_ => `<option ${s_ === cur ? 'selected' : ''}>${esc(s_)}</option>`).join('');
+  }
+  document.getElementById('mw-logs-meta').innerHTML = `log group <span class="mono">${esc(d.group || '')}</span>
+    ${d.events ? `· ${fmt(d.events.length)} events${d.truncated ? ' (newest only)' : ''}` : ''}
+    ${d.lastShipped ? `· shipped ${ago(d.lastShipped)}` : d.shipping === false ? '· shipping is off (no Docker control or CLOUDWATCH_LOGS_SHIP=false)' : ''}
+    ${d.shipError ? `· <span class="FAILED">shipping: ${esc(d.shipError)}</span>` : ''}`;
+  if (d.error) el.innerHTML = `<div class="FAILED">${esc(d.error)}</div>`;
+  else if (!d.events.length) el.innerHTML = `<div class="muted">${esc(d.note || (logForm.filter ? 'Nothing matches the filter in this window.' : 'No log events in this window.'))}</div>`;
+  else {
+    const lv = m => /\b(ERROR|FATAL|Exception)\b/.test(m) ? 'lv-error' : /\bWARN(ING)?\b/.test(m) ? 'lv-warn' : '';
+    el.innerHTML = `<div class="logs"><table>${d.events.map(e => `<tr class="${lv(e.message)}"><td class="ts">${new Date(e.ts).toLocaleTimeString([], { hour12: false })}.${String(e.ts % 1000).padStart(3, '0')}</td>
+      <td class="st">${esc(e.stream)}</td><td class="msg">${esc(e.message)}</td></tr>`).join('')}</table></div>`;
+  }
+  if (logForm.tail) mwSchedule(loadCwLogs, 5000);
 }
 
 const traceRows = rows => rows.length ? `<table><tr><th>time</th><th>event</th><th>stage</th><th>entity</th><th>detail</th></tr>
@@ -1105,7 +1318,7 @@ function drill(d) {
 
 // ---------------------------------------------------------------- Generate data flow (on the flow page)
 
-let genForm = JSON.parse(localStorage.getItem('genForm') || '{"rate":2,"duration":60,"errors":false}');
+let genForm = { rate: 2, duration: 60, errors: false, noLocks: false, ...JSON.parse(localStorage.getItem('genForm') || '{}') };
 function generatorPanel(d) {
   const g = d.generator || {}, r = g.run, f = d.flow;
   if (!g.available) return `<div class="panel muted">No test data generator for ${esc(f.label)}: it has no sample flows and no state machine to walk.</div>`;
@@ -1117,7 +1330,7 @@ function generatorPanel(d) {
     const pct = Math.min(100, Math.round(r.elapsedSec * 100 / r.durationSec));
     return `<div class="panel"><div class="genbar"><b>Generating</b>${status('ok', 'Running')}
         <div class="progress" title="${r.elapsedSec}s of ${r.durationSec}s"><div style="width:${pct}%"></div></div>
-        <span>${fmt(r.elapsedSec)} / ${fmt(r.durationSec)} s · ${fmt(r.instances)} instances · ${fmt(r.sent)} events sent${r.errors ? ` · ${fmt(r.injected)} failures injected` : ''}${r.failed ? ` · <span class="FAILED">${fmt(r.failed)} put failures</span>` : ''}</span>
+        <span>${fmt(r.elapsedSec)} / ${fmt(r.durationSec)} s · ${fmt(r.instances)} instances · ${fmt(r.sent)} events sent${r.noLocks ? ' · non-lock' : ''}${r.errors ? ` · ${fmt(r.injected)} failures injected` : ''}${r.failed ? ` · <span class="FAILED">${fmt(r.failed)} put failures</span>` : ''}</span>
         <span class="spacer" style="flex:1"></span><button class="ghost" onclick="genStop('${esc(f.id)}')">Stop</button></div>
       ${r.lastError ? `<div class="FAILED note">${esc(r.lastError)}</div>` : ''}
       <div class="note">run <span class="mono">${esc(r.runId)}</span> · ${how}</div></div>`;
@@ -1128,6 +1341,7 @@ function generatorPanel(d) {
       <label>rate <input type="number" id="gen-rate" min="0.1" max="200" step="0.5" value="${genForm.rate}"> instances/s</label>
       <label>for <select id="gen-duration">${opt(30, genForm.duration, '30 s')}${opt(60, genForm.duration, '1 min')}${opt(300, genForm.duration, '5 min')}${opt(900, genForm.duration, '15 min')}${opt(3600, genForm.duration, '1 h')}</select></label>
       <label title="${esc((g.errorSamples || []).join(', ') || 'invalid transitions')}"><input type="checkbox" id="gen-errors" ${genForm.errors ? 'checked' : ''}> inject failures</label>
+      <label title="Publish without the events' declared lock keys (account, order, sku, ...): each event locks only its own instance, so no two instances ever wait on each other. Events the machines emit down a chain keep their keys."><input type="checkbox" id="gen-nolocks" ${genForm.noLocks ? 'checked' : ''}> non-lock events</label>
       ${r && !r.running ? `<span class="muted">last run: ${fmt(r.instances)} instances, ${fmt(r.sent)} events in ${fmt(r.elapsedSec)} s</span>` : ''}</div>
     ${noTemporal ? `<div class="note">${status('bad', 'Temporal unreachable')} the dashboard can't reach Temporal, so nothing would dispatch generated events: generating is off until it's back.</div>` : ''}
     ${noWorker ? `<div class="note">${status('bad', 'No worker')} nothing polls <span class="mono">${esc(d.worker.taskQueue)}</span>, so generating is off:
@@ -1137,9 +1351,9 @@ function generatorPanel(d) {
 }
 async function genStart(id) {
   genForm = { rate: Number(document.getElementById('gen-rate').value) || 2, duration: Number(document.getElementById('gen-duration').value),
-              errors: document.getElementById('gen-errors').checked };
+              errors: document.getElementById('gen-errors').checked, noLocks: document.getElementById('gen-nolocks').checked };
   localStorage.setItem('genForm', JSON.stringify(genForm));
-  const d = await apiJson(`/api/flows/${encodeURIComponent(id)}/generate?rate=${genForm.rate}&duration=${genForm.duration}&errors=${genForm.errors}`, { method: 'POST' });
+  const d = await apiJson(`/api/flows/${encodeURIComponent(id)}/generate?rate=${genForm.rate}&duration=${genForm.duration}&errors=${genForm.errors}&noLocks=${genForm.noLocks}`, { method: 'POST' });
   if (d.error) alert(d.error);
   showFlow(id);
 }
@@ -1735,7 +1949,7 @@ function perfMetrics(d, p) {
   if (!d) return '<div class="panel muted">Loading metrics…</div>';
   if (d.error) return `<div class="panel FAILED">${esc(d.error)}</div>`;
   const stopped = (p.analytics || []).filter(a => a.state !== 'running').map(a => a.service);
-  return `${machineWidget(d)}<div class="panel"><div class="flowmap">${pipelineNodes(d)}</div>
+  return `${machineSummary(d)}<div class="panel"><div class="flowmap">${pipelineNodes(d)}</div>
       <div class="note">${esc(d.flow.label)}, last ${fmt(d.coveredSec)} s${d.truncated ? ' (trace read capped: newest rows only)' : ''}${d.traceSample < 1 ? ` · trace sampling ${d.traceSample}: counts scaled` : ''}.
         The same view as the machine's flow page: <a onclick="go('flow','${esc(d.flow.id)}')">open it</a> for its coordinator, worker and failures.
         ${stopped.length ? `Stores show down while the analytics services are stopped (${esc(stopped.join(', '))}): this run measures Kinesis → coordinator → worker.` : ''}</div></div>`;

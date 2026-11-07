@@ -105,7 +105,7 @@ impl Dispatcher {
         if e.is_event_style() && e.scheduled_at_millis > now {
             // Future-dated: its processor keeps it on a durable timer, holding no locks until due.
             self.router.schedule(&e).await?;
-        } else if !e.is_event_style() && e.is_single_key() && self.direct_sm_types.contains(&e.sm_type) {
+        } else if !e.is_event_style() && e.is_single_key() && (e.is_direct() || self.direct_sm_types.contains(&e.sm_type)) {
             self.dispatch_direct(e).await?;
         } else {
             // Single- and multi-key alike: enqueue on the first sorted key; the lock chain does the rest.

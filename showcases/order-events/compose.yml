@@ -32,6 +32,7 @@ services:
       INGEST_PARALLEL_GROUPS: ${INGEST_PARALLEL_GROUPS:-256}
       DIRECT_SM_TYPES: ${DIRECT_SM_TYPES:-}
       STORE_INIT_SCHEMA: "false"
+      INGEST_IDLE_POLL_MS: ${INGEST_IDLE_POLL_MS:-200}   # idle shard poll; 20 for latency benchmarks
     restart: unless-stopped
 
   # event-style handlers (task queues ev-inventory, ev-orders), same image

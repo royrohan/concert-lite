@@ -167,11 +167,12 @@ public final class SchemaMapper {
     /**
      * Parses and resolves every {@code *.pure} file of every directory in {@code dirs} (non-recursive) as one model.
      *
-     * <p>A file is skipped when every element it declares is already declared by an earlier directory <b>with the same
-     * shape</b> (properties with their types and multiplicities, association ends, supertypes, enum values; stereotypes,
-     * tagged values, defaults and constraints aside). That is the case of a generated ecosystem whose models are a copy
-     * of a core model plus concert annotations (trading-gen's {@code trading::} packages): its roots then map onto the
-     * core classes instead of failing as duplicates. Any other duplicate still fails resolution, as before.
+     * <p>An element already declared by an earlier directory <b>with the same shape</b> (properties with their types and
+     * multiplicities, association ends, supertypes, enum values; stereotypes, tagged values, defaults and constraints
+     * aside) is dropped, and a file left with nothing new is skipped. That is the case of a generated ecosystem whose
+     * models are a copy of a core model plus concert annotations and machines of its own (trading-gen's
+     * {@code trading::} packages with its {@code Trade} machine): its copied roots map onto the core classes and its
+     * new elements are kept. A duplicate with a different shape still fails resolution.
      */
     public static LoadedModels load(List<Path> dirs) {
         Map<String, String> shapes = new HashMap<>();
@@ -193,15 +194,24 @@ public final class SchemaMapper {
             }
             Map<String, String> dirShapes = shapesOf(parsed.values());
             for (var f : parsed.entrySet()) {
-                List<String> declared = declared(f.getValue());
-                boolean redundant = dirShapes != null && !shapes.isEmpty() && !declared.isEmpty()
-                        && declared.stream().allMatch(n -> shapes.containsKey(n) && shapes.get(n).equals(dirShapes.get(n)));
-                if (redundant) {
+                PureModel m = f.getValue();
+                List<String> declared = declared(m);
+                java.util.function.Predicate<String> same = n -> dirShapes != null && shapes.containsKey(n)
+                        && shapes.get(n).equals(dirShapes.get(n));
+                if (!declared.isEmpty() && declared.stream().allMatch(same)) {
                     skipped.add(f.getKey());
-                } else {
-                    used.add(f.getKey());
-                    models.add(f.getValue());
+                    continue;
                 }
+                if (declared.stream().anyMatch(same)) { // keep what is new, drop what an earlier directory already declares
+                    m = new PureModel(
+                            m.classes().stream().filter(c -> !same.test(c.qualifiedName())).toList(),
+                            m.enums().stream().filter(e -> !same.test(e.qualifiedName())).toList(),
+                            m.associations().stream().filter(a -> !same.test(a.qualifiedName())).toList(),
+                            m.profiles().stream().filter(pr -> !same.test(pr.name())).toList(),
+                            m.functions(), m.imports());
+                }
+                used.add(f.getKey());
+                models.add(m);
             }
             if (dirShapes != null) {
                 dirShapes.forEach(shapes::putIfAbsent);

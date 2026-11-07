@@ -20,6 +20,7 @@ aws-bom = { module = "software.amazon.awssdk:bom", version.ref = "awssdk" }
 aws-kinesis = { module = "software.amazon.awssdk:kinesis" }
 aws-netty = { module = "software.amazon.awssdk:netty-nio-client" }
 aws-dynamodb = { module = "software.amazon.awssdk:dynamodb" }
+aws-cloudwatchlogs = { module = "software.amazon.awssdk:cloudwatchlogs" }
 aws-apache = { module = "software.amazon.awssdk:apache5-client" }
 gcloud-bom = { module = "com.google.cloud:libraries-bom", version.ref = "gcloud-bom" }
 gcloud-spanner = { module = "com.google.cloud:google-cloud-spanner" }

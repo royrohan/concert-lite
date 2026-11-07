@@ -181,6 +181,8 @@ final class FlowMetrics {
         long completed;
         /** Instance lifetimes (first transition out of the initial state to the terminal one), both in the window. */
         final List<Long> lifetime = new ArrayList<>();
+        /** When each {@link #lifetime} ended (its terminal transition), same order. */
+        final List<Long> lifetimeEnd = new ArrayList<>();
         /** Rows come newest first: an instance's completion time, until its start (older) is seen. */
         final Map<String, Long> completedAt = new HashMap<>();
         long rejectedDone;
@@ -289,6 +291,7 @@ final class FlowMetrics {
             Long done = a.completedAt.remove(r.workflowId());
             if (done != null) {
                 a.lifetime.add(done - r.tsMillis());
+                a.lifetimeEnd.add(done);
             }
         }
     }
@@ -334,6 +337,61 @@ final class FlowMetrics {
             out[i] = scaled(series[i]);
         }
         return out;
+    }
+
+    // ---------------------------------------------------------------- CloudWatch samples
+
+    /**
+     * One machine flow's numbers for one publish interval ({@link CloudWatchMetrics}): counts (trace-sampling scaled)
+     * and millisecond percentiles; a percentile is absent when nothing was measured.
+     */
+    record MachineSample(String machine, Map<String, Long> counts, Map<String, Long> millis) {}
+
+    /**
+     * Samples of every machine flow with trace rows in the last {@code intervalSec}. Instance lifetimes come from a
+     * {@code lifetimeLookbackSec} window (an instance must start and finish inside it) but count only when they ended
+     * in the interval, so each lifetime is published once.
+     */
+    List<MachineSample> samples(int intervalSec, int lifetimeLookbackSec) {
+        Window w = window(intervalSec, null);
+        Window life = window(Math.max(intervalSec, lifetimeLookbackSec), null);
+        long since = System.currentTimeMillis() - intervalSec * 1000L;
+        List<MachineSample> out = new ArrayList<>();
+        w.aggs().forEach((machine, a) -> {
+            Map<String, Long> counts = new LinkedHashMap<>();
+            counts.put("EventsDispatched", scaled(a.count(TraceRow.Stage.RECEIVED)));
+            counts.put("EventsProcessed", scaled(a.count(TraceRow.Stage.DONE)));
+            counts.put("EventsFailed", scaled(a.errorCount()));
+            counts.put("EventsRejected", scaled(a.count(TraceRow.Stage.REJECTED)));
+            counts.put("DuplicatesDropped", scaled(a.count(TraceRow.Stage.DROPPED)));
+            counts.put("LockWaits", scaled(a.count(TraceRow.Stage.LOCK_WAIT)));
+            counts.put("Completions", scaled(a.completed));
+            Map<String, Long> millis = new LinkedHashMap<>();
+            putIf(millis, "EventLatencyP50", percentile(a.e2e, 0.5));
+            putIf(millis, "EventLatencyP95", percentile(a.e2e, 0.95));
+            putIf(millis, "EventLatencyP99", percentile(a.e2e, 0.99));
+            putIf(millis, "KinesisTransitP95", percentile(a.kinesis, 0.95));
+            putIf(millis, "LockWaitP95", percentile(a.lockWait, 0.95));
+            Agg l = life.aggs().get(machine);
+            if (l != null) {
+                List<Long> recent = new ArrayList<>();
+                for (int i = 0; i < l.lifetime.size(); i++) {
+                    if (l.lifetimeEnd.get(i) >= since) {
+                        recent.add(l.lifetime.get(i));
+                    }
+                }
+                putIf(millis, "InstanceLifetimeP50", percentile(recent, 0.5));
+                putIf(millis, "InstanceLifetimeP95", percentile(recent, 0.95));
+            }
+            out.add(new MachineSample(machine, counts, millis));
+        });
+        return out;
+    }
+
+    private static void putIf(Map<String, Long> m, String k, Long v) {
+        if (v != null) {
+            m.put(k, v);
+        }
     }
 
     // ---------------------------------------------------------------- landing page

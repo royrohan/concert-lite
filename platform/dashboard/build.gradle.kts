@@ -21,6 +21,10 @@ dependencies {
     implementation(libs.aws.kinesis)
     // Performance page: past runs, their samples and timelines in a DuckDB file (PerfStore, PERF_DB)
     implementation(libs.duckdb.jdbc)
+    // CloudWatch: per-machine metrics published every 30 s, flow container logs shipped to CloudWatch Logs
+    // (metrics over CloudWatch's Query protocol, SigV4-signed by http-auth-aws: see CloudWatchApi)
+    implementation("software.amazon.awssdk:http-auth-aws")
+    implementation(libs.aws.cloudwatchlogs)
     // STORE_KIND=dynamo|spanner backends, discovered via ServiceLoader
     runtimeOnly(project(":store-dynamo"))
     runtimeOnly(project(":store-spanner"))

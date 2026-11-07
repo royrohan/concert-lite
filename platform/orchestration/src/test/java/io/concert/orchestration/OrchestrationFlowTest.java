@@ -131,6 +131,40 @@ class OrchestrationFlowTest {
         assertEquals(n - 1, ledgerData("L1").get("last").asLong());
     }
 
+    /** {@code direct} events skip the entity lock (no KeyLockWorkflow, no lock waits) and still apply in shard order. */
+    @Test
+    void directEventsBypassTheLockInOrder() throws Exception {
+        int n = 100;
+        for (int b = 0; b < n; b += 25) {
+            List<EventEnvelope> batch = new ArrayList<>();
+            for (int i = b; i < b + 25; i++) {
+                batch.add(append("d-" + i, "LD", i, List.of()).withDirect(true));
+            }
+            dispatcher.dispatchBatch(batch);
+        }
+        await(Duration.ofSeconds(60), () -> ledgerData("LD").get("count").asLong() == n);
+        assertEquals(0, ledgerData("LD").get("ooo").asLong());
+        assertEquals(n - 1, ledgerData("LD").get("last").asLong());
+        var notFound = org.junit.jupiter.api.Assertions.assertThrows(io.grpc.StatusRuntimeException.class,
+                () -> client.getWorkflowServiceStubs().blockingStub().describeWorkflowExecution(
+                        io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest.newBuilder()
+                                .setNamespace(client.getOptions().getNamespace())
+                                .setExecution(io.temporal.api.common.v1.WorkflowExecution.newBuilder()
+                                        .setWorkflowId(WorkflowIds.lock(WorkflowIds.entityKey("ledger", "LD"))))
+                                .build()),
+                "no lock workflow for direct events");
+        assertEquals(io.grpc.Status.Code.NOT_FOUND, notFound.getStatus().getCode());
+        // control: the same lookup finds the lock of a normal event
+        dispatcher.dispatchBatch(List.of(append("n-1", "LN", 0, List.of())));
+        await(Duration.ofSeconds(30), () -> ledgerData("LN").get("count").asLong() == 1);
+        client.getWorkflowServiceStubs().blockingStub().describeWorkflowExecution(
+                io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest.newBuilder()
+                        .setNamespace(client.getOptions().getNamespace())
+                        .setExecution(io.temporal.api.common.v1.WorkflowExecution.newBuilder()
+                                .setWorkflowId(WorkflowIds.lock(WorkflowIds.entityKey("ledger", "LN"))))
+                        .build());
+    }
+
     @Test
     void duplicatesAreDroppedUsingTheStore() throws Exception {
         EventEnvelope e = append("dup-1", "L2", 1, List.of());

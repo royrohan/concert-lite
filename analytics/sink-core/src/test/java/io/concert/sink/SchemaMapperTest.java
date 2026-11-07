@@ -203,12 +203,15 @@ class SchemaMapperTest {
         Path core = Path.of(System.getProperty("concert.tradingModelsDir"));
         Path gen = core.resolveSibling("../../../../showcases/trading-gen/src/main/pure").normalize();
         SchemaMapper.LoadedModels loaded = SchemaMapper.load(List.of(core, gen));
-        assertEquals(5, loaded.skipped().size(), "every trading-gen file duplicates the core trading model: " + loaded.skipped());
-        assertTrue(loaded.files().stream().allMatch(f -> f.startsWith(core)));
+        assertTrue(loaded.skipped().stream().allMatch(f -> f.startsWith(gen)), "only trading-gen copies are skipped: " + loaded.skipped());
+        assertTrue(loaded.skipped().size() >= 3, "refdata, marketdata, ... duplicate the core trading model: " + loaded.skipped());
+        // order.pure and commands.pure also declare trading-gen's own Trade machine: those elements are kept
+        assertTrue(loaded.model().findClass("trading::order::Trade").isPresent());
         SchemaSpec spec = new SchemaMapper(loaded.model()).map(SchemaMapper.parseRoots(
-                "trading_order:trading::order::Order,gen_trading_order:trading::order::Order"));
+                "trading_order:trading::order::Order,gen_trading_order:trading::order::Order,gen_trading_system:trading::order::Trade"));
         assertTrue(spec.rootFor("gen_trading_order").isPresent());
         assertEquals("gen_trading_orders", spec.rootFor("gen_trading_order").orElseThrow().name());
+        assertTrue(spec.rootFor("gen_trading_system").isPresent());
     }
 
     /** A duplicate with a different shape is still an error. */
@@ -219,8 +222,11 @@ class SchemaMapperTest {
         java.nio.file.Files.writeString(a.resolve("m.pure"), "Class x::A { id: String[1]; }");
         java.nio.file.Files.writeString(b.resolve("m.pure"), "Class x::A { id: Integer[1]; }");
         org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> SchemaMapper.load(List.of(a, b)));
-        java.nio.file.Files.writeString(b.resolve("m.pure"), "Class <<x::P.t>> x::A { id: String[1]; }\nProfile x::P { stereotypes: [t]; }");
+        java.nio.file.Files.writeString(b.resolve("m.pure"), "Class x::A { id: Integer[1]; }\nClass x::B { id: String[1]; }");
         org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class, () -> SchemaMapper.load(List.of(a, b)),
-                "a file that also declares something new isn't redundant");
+                "declaring something new doesn't excuse a conflicting duplicate");
+        java.nio.file.Files.writeString(b.resolve("m.pure"), "Class x::A { id: String[1]; }\nClass x::B { a: x::A[1]; }");
+        SchemaMapper.LoadedModels merged = SchemaMapper.load(List.of(a, b));
+        assertTrue(merged.model().findClass("x::B").isPresent(), "the new element is kept, the identical one dropped");
     }
 }

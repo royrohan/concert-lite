@@ -44,6 +44,8 @@ final class FlowOps {
     /** The shared services the main page switches, as {label, service}; one-shot provisioners follow their store. */
     static final List<String[]> SHARED = List.of(
             new String[] {"Kinesis", "localstack"},
+            // CloudWatch metrics + Logs run in the same LocalStack; its pill reads LocalStack's health (see shared())
+            new String[] {"CloudWatch", "localstack"},
             new String[] {"Kafka", "kafka"},
             new String[] {"DuckDB", "sink-duckdb"},
             new String[] {"ClickHouse", "clickhouse"},
@@ -90,6 +92,8 @@ final class FlowOps {
     private final String kafka = Env.get("KAFKA_BOOTSTRAP", "");
     private final Map<String, Job> jobs = new ConcurrentHashMap<>();
     private volatile Object[] containersCache;
+    /** LocalStack's CloudWatch services: {@code {cloudwatch, logs}} states ({@link CloudWatchMetrics#status}). */
+    private volatile java.util.function.Supplier<Map<String, String>> cloudWatchStatus = Map::of;
 
     FlowOps(FlowRegistry registry, DockerCompose compose, KinesisClient kinesis, WorkflowClient client, StateStore store,
             FlowGenerator generator) {
@@ -163,6 +167,10 @@ final class FlowOps {
         return m;
     }
 
+    void cloudWatchStatus(java.util.function.Supplier<Map<String, String>> status) {
+        this.cloudWatchStatus = status;
+    }
+
     /** The shared services with their containers' states; {@code state} up / partial / down. */
     Map<String, Object> shared() {
         Map<String, Map<String, String>> containers = containersOrEmpty();
@@ -171,12 +179,29 @@ final class FlowOps {
         for (String[] s : SHARED) {
             Map<String, String> c = containers.get(s[1]);
             boolean running = c != null && "running".equals(c.get("state"));
+            String health = c == null ? "" : c.get("health");
+            String note = null;
+            if (running && s[0].equals("CloudWatch")) {
+                Map<String, String> cw = cloudWatchStatus.get();
+                String metrics = cw.getOrDefault("cloudwatch", ""), logs = cw.getOrDefault("logs", "");
+                if (metrics.equals("disabled") || logs.equals("disabled")) {
+                    health = "unhealthy";
+                    note = "LocalStack runs without CloudWatch (an older container): recreate it from the repo with "
+                            + "`docker compose up -d localstack` (Kinesis streams are recreated empty by the coordinators)";
+                } else if (metrics.equals("unreachable")) {
+                    health = "unhealthy";
+                    note = "LocalStack's health endpoint does not answer";
+                }
+            }
             up += running ? 1 : 0;
             Map<String, Object> x = new LinkedHashMap<>();
             x.put("label", s[0]);
             x.put("service", s[1]);
             x.put("state", c == null ? "absent" : c.get("state"));
-            x.put("health", c == null ? "" : c.get("health"));
+            x.put("health", health);
+            if (note != null) {
+                x.put("note", note);
+            }
             services.add(x);
         }
         Map<String, Object> m = new LinkedHashMap<>();
@@ -322,7 +347,7 @@ final class FlowOps {
     /** Starts (or stops) every shared service. */
     Map<String, Object> shared(boolean up) {
         return submit("shared", up ? "start" : "stop", job -> {
-            List<String> services = new ArrayList<>(SHARED.stream().map(s -> s[1]).toList());
+            List<String> services = new ArrayList<>(SHARED.stream().map(s -> s[1]).distinct().toList());
             if (up) {
                 services.addAll(SHARED_ONE_SHOT);
                 List<String> args = new ArrayList<>(List.of("up", "-d", "--no-recreate"));

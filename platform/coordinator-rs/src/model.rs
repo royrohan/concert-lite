@@ -221,6 +221,12 @@ impl EventEnvelope {
         self.effective_lock_keys().len() == 1
     }
 
+    /// `"direct": true` (entity style, single key): update the entity workflow directly instead of queuing on its
+    /// entity lock, like `DIRECT_SM_TYPES` for one event. Kept in `extra`, so it round-trips unchanged.
+    pub fn is_direct(&self) -> bool {
+        matches!(self.extra.get("direct"), Some(Value::Bool(true)))
+    }
+
     /// The workflow trace rows point at: the entity, or the processor for event style.
     pub fn trace_workflow_id(&self) -> String {
         if self.is_event_style() {
@@ -565,6 +571,16 @@ mod tests {
         assert_eq!(e.style, "entity");
         assert_eq!(e.trace_workflow_id(), "order:7");
         assert!(!e.is_single_key());
+    }
+
+    #[test]
+    fn direct_flag_is_read_and_kept() {
+        let e = env(r#"{"eventId":"d1","smType":"order","instanceKey":"7","eventType":"pay","direct":true}"#);
+        assert!(e.is_direct());
+        assert!(e.is_single_key());
+        assert!(serde_json::to_string(&e).unwrap().contains("\"direct\":true"));
+        let plain = env(r#"{"eventId":"d2","smType":"order","instanceKey":"7","eventType":"pay"}"#);
+        assert!(!plain.is_direct());
     }
 
     #[test]

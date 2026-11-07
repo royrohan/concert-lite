@@ -120,7 +120,7 @@ public final class IngestDispatcher implements AutoCloseable {
         if (e.isEventStyle() && e.scheduledAtMillis() > now) {
             // Future-dated: the processor keeps it on a durable timer, holding no locks until it is due.
             dispatch.scheduleEvent(e);
-        } else if (!e.isEventStyle() && e.isSingleKey() && directSmTypes.contains(e.smType())) {
+        } else if (!e.isEventStyle() && e.isSingleKey() && (e.direct() || directSmTypes.contains(e.smType()))) {
             dispatch.dispatchDirect(e); // ordering is fixed once ACCEPTED; completion is traced async
         } else {
             // Single- and multi-key alike: enqueue on the first sorted key; the lock chain does the rest.

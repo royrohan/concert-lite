@@ -231,6 +231,7 @@ final class ProjectFiles {
                     environment:
                 """).append(common).append("""
                       STORE_INIT_SCHEMA: "false"
+                      INGEST_IDLE_POLL_MS: ${INGEST_IDLE_POLL_MS:-200}   # idle shard poll; 20 for latency benchmarks
                     restart: unless-stopped
 
                 """);
