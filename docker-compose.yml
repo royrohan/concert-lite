@@ -2,7 +2,7 @@
 #   postgres -> "dsql" service (Postgres 16 standing in for Aurora DSQL), profile "postgres"
 #   dynamo   -> DynamoDB inside the localstack service (always running)
 #   spanner  -> Cloud Spanner emulator, profile "spanner"
-# Profile "apps" also runs coordinator, workers and trace UI as containers.
+# Profile "apps" also runs coordinator, workers and dashboard as containers.
 # Profile "analytics" runs Kafka (entity-snapshots + market-data topics), the DuckDB sink, ClickHouse (+ its
 # one-shot provisioner), Deephaven and the market-data simulator; profile "kafka-ui" adds Redpanda Console.
 # Profile "trading" runs the trading worker (trading_order / _execution / _fill / _allocation machines);
@@ -14,7 +14,7 @@
 #   scripts/up.sh spanner          # = STORE_KIND=spanner COMPOSE_PROFILES=spanner,apps docker compose up -d --build
 #   docker compose up -d           # infrastructure only, per .env (apps run from Gradle / scripts)
 #
-#   Temporal UI: http://localhost:8080   Trace UI: http://localhost:8088   Temporal gRPC: localhost:7233
+#   Temporal UI: http://localhost:8080   Dashboard: http://localhost:8088   Temporal gRPC: localhost:7233
 #   LocalStack:  http://localhost:4566   Postgres: localhost:5433 (concert/concert)   Spanner: localhost:9010
 #   Kafka:       localhost:29092 (host)  kafka:9092 (containers)   DuckDB sink: http://localhost:8090
 #   ClickHouse:  http://localhost:8123 (Play UI /play; users concert/concert, readonly/readonly)  native :9000
@@ -146,7 +146,7 @@ services:
   # ---------------------------------------------------------------- apps (profile "apps")
 
   # Each flow (ecosystem) has its own coordinator, Kinesis stream concert-<flow>, orchestration-<flow> task queue and
-  # Kafka topic snapshots.<flow> (CONCERT_FLOW, io.concert.common.Flows), so flows never overlap. The trace UI's flow
+  # Kafka topic snapshots.<flow> (CONCERT_FLOW, io.concert.common.Flows), so flows never overlap. The dashboard's flow
   # page starts / stops / deletes a flow's coordinator and workers. Scale out: --scale samples-coordinator=3
   samples-coordinator:
     profiles: [apps]
@@ -221,10 +221,10 @@ services:
     deploy: { resources: { limits: { memory: 384m } } }
     restart: "no"
 
-  trace-ui:
+  dashboard:
     profiles: [apps]
-    build: { context: ., target: trace-ui }
-    image: concert-temporal/trace-ui
+    build: { context: ., target: dashboard }
+    image: concert-temporal/dashboard
     depends_on: *app-deps
     ports: ["8088:8088"]
     # Start / Stop / Delete flow and the shared-services switch run docker compose (FlowOps): the host's Docker socket
@@ -363,7 +363,7 @@ services:
     environment:
       KAFKA_BOOTSTRAP: kafka:9092
       TICK_RATE: ${MD_TICK_RATE:-200}
-      # Control endpoint (trace UI › flow › Deephaven: start / stop / rate). MD_AUTOSTART=false starts paused.
+      # Control endpoint (dashboard › flow › Deephaven: start / stop / rate). MD_AUTOSTART=false starts paused.
       CONTROL_PORT: 8091
       AUTOSTART: ${MD_AUTOSTART:-true}
       SEED: ${TRADING_SEED:-42}
@@ -391,7 +391,7 @@ services:
     restart: unless-stopped
 
   # Model query planner: legend-lite (github.com/neema2/legend-lite) pinned to one commit and built from source
-  # (infra/legend-lite/Dockerfile; the first build takes a while). The trace UI sends it the concert models plus the
+  # (infra/legend-lite/Dockerfile; the first build takes a while). The dashboard sends it the concert models plus the
   # Legend store layer generated from the sinks' schema and gets SQL back; concert runs that SQL on DuckDB /
   # ClickHouse itself. Host port 8095 (8080 is the Temporal UI).
   legend-lite:
@@ -402,7 +402,7 @@ services:
       args: { LEGEND_LITE_REF: "${LEGEND_LITE_REF:-42b43f3cc82d478fc2f70d18682407b27e978efa}" }
     image: concert-temporal/legend-lite
     # Loopback-only on the host: legend-lite runs a model's connection setup, so it must not face the network. Inside
-    # compose it listens on all interfaces (LEGEND_LITE_BIND) for the trace UI; browsers never call it (no Origin).
+    # compose it listens on all interfaces (LEGEND_LITE_BIND) for the dashboard; browsers never call it (no Origin).
     ports: ["127.0.0.1:8095:8095"]
     environment:
       LEGEND_LITE_BIND: 0.0.0.0
@@ -412,7 +412,7 @@ services:
 
   # Legend Studio Lite (level 0) from the same pinned build: a static site whose compiler and SDLC run in the browser
   # (projects live in that browser's storage). "Load demo projects" publishes concert's current models plus the
-  # generated store layer (its projects/ are proxied to the trace UI). http://localhost:8200; loopback only.
+  # generated store layer (its projects/ are proxied to the dashboard). http://localhost:8200; loopback only.
   legend-studio:
     profiles: [analytics]
     build:

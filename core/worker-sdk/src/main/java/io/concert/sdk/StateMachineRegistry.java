@@ -3,7 +3,7 @@ package io.concert.sdk;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** smType -> spec, so tools like the trace UI can draw diagrams without running a worker. */
+/** smType -> spec, so tools like the dashboard can draw diagrams without running a worker. */
 public final class StateMachineRegistry {
     private StateMachineRegistry() {}
 

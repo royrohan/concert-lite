@@ -160,10 +160,10 @@ without a payload it sends `samples/events/<EventType>.json`. Flow files mix bot
 
 ## How it plugs into the platform
 
-- **Trace UI**: modules provide their machines through the `io.concert.sdk.MachineCatalog` SPI and their event
+- **Dashboard**: modules provide their machines through the `io.concert.sdk.MachineCatalog` SPI and their event
   types through `io.concert.sdk.events.EventCatalog` (Events tab: types, flow diagrams, payload models; event pages);
-  the trace UI build adds every project with an `ecosystem.json` as a runtime dependency, so a new ecosystem
-  needs no trace UI edit (rebuild the image: `deploy` does).
+  the dashboard build adds every project with an `ecosystem.json` as a runtime dependency, so a new ecosystem
+  needs no dashboard edit (rebuild the image: `deploy` does).
 - **Worker image**: the generic `showcase-worker` Dockerfile target, parameterised by `MODULE` / `MODULE_DIR`;
   the event worker service (`<name>-event-worker`) runs the same image with entrypoint `bin/ecosystem-event-worker`
   (`<NAME>_EVENT_DOMAINS` restricts the domains).

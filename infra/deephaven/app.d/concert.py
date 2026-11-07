@@ -32,7 +32,7 @@ TYPES = {"string": dht.string, "long": dht.int64, "double": dht.double, "bool": 
 
 SNAPSHOT_TOPIC = "entity-snapshots"
 # Each flow publishes to its own snapshots.<flow> (io.concert.common.Flows). consume("entity-snapshots", ...) reads
-# the shared topic and every flow topic that exists when this script runs, merged; the trace UI restarts Deephaven
+# the shared topic and every flow topic that exists when this script runs, merged; the dashboard restarts Deephaven
 # when Start flow creates a new topic.
 SNAPSHOT_TOPIC_PATTERN = r"^(entity-snapshots|snapshots[.].+)$"
 

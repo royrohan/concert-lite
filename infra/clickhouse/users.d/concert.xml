@@ -1,7 +1,7 @@
 <!--
   Users (local dev only, plain-text passwords):
     concert / concert    admin, used by the sink-clickhouse provisioner (DDL)
-    readonly / readonly  the trace UI's SQL console and the Play UI: read-only, bounded queries
+    readonly / readonly  the dashboard's SQL console and the Play UI: read-only, bounded queries
   The image's "default" user stays passwordless and local to the container (healthcheck).
 -->
 <clickhouse>

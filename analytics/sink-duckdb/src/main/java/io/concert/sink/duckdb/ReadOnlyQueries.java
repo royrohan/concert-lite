@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
- * Ad-hoc SQL for the trace UI, read-only. DuckDB has no read-only connection to a database that is
+ * Ad-hoc SQL for the dashboard, read-only. DuckDB has no read-only connection to a database that is
  * open for writing in the same process, so:
  *
  * <ul>

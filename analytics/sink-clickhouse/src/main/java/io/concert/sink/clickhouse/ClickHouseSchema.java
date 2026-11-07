@@ -87,7 +87,7 @@ public final class ClickHouseSchema {
                         new Ddl.Column("title", "String"),
                         new Ddl.Column("sql", "String")),
                         "ENGINE = MergeTree\nORDER BY ord",
-                        "concert samples: example queries for the trace UI, rewritten by the provisioner"));
+                        "concert samples: example queries for the dashboard, rewritten by the provisioner"));
     }
 
     /** The Kafka queue, the raw snapshot table and the per-root tables, views and materialized views. */

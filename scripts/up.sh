@@ -41,9 +41,9 @@ export COMPOSE_PROFILES=${db_profile:+$db_profile,}apps$analytics$trading
 echo "STORE_KIND=$STORE_KIND COMPOSE_PROFILES=$COMPOSE_PROFILES"
 docker compose up -d --build ${args[@]+"${args[@]}"}
 echo
-echo "Temporal UI http://localhost:8080   Trace UI http://localhost:8088   (store: $STORE_KIND)"
+echo "Temporal UI http://localhost:8080   Dashboard http://localhost:8088   (store: $STORE_KIND)"
 if [ -n "$analytics" ]; then
-  echo "Analytics (trace UI -> Analytics): DuckDB sink http://localhost:8090   ClickHouse http://localhost:8123/play"
+  echo "Analytics (dashboard -> Analytics): DuckDB sink http://localhost:8090   ClickHouse http://localhost:8123/play"
   echo "  Deephaven http://localhost:10000/ide/?psk=${DEEPHAVEN_PSK:-concert}   Kafka localhost:29092"
   echo "  Redpanda Console (optional): COMPOSE_PROFILES=kafka-ui docker compose up -d redpanda-console -> http://localhost:8081"
 fi

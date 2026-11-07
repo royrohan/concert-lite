@@ -28,7 +28,7 @@ public interface StateStore extends AutoCloseable {
 
     void markDispatched(Collection<String> eventIds);
 
-    /** For tests and the trace UI. */
+    /** For tests and the dashboard. */
     Optional<String> processedStatus(String eventId);
 
     Optional<String> loadCheckpoint(String stream, String shardId);
@@ -54,12 +54,12 @@ public interface StateStore extends AutoCloseable {
 
     List<TraceRow> traceForWorkflow(String workflowId, int limit);
 
-    /** Latest terminal trace rows (DONE, DROPPED, FAILED, REJECTED), newest first; for the trace UI. */
+    /** Latest terminal trace rows (DONE, DROPPED, FAILED, REJECTED), newest first; for the dashboard. */
     List<TraceRow> recentEvents(int limit);
 
     /**
      * Trace rows of every stage at or after {@code sinceMillis}, newest first, at most {@code limit}; the
-     * trace UI's flow metrics aggregate them per flow. The default serves only terminal rows (from
+     * dashboard's flow metrics aggregate them per flow. The default serves only terminal rows (from
      * {@link #recentEvents}), for stores that index nothing else by time.
      */
     default List<TraceRow> tracesSince(long sinceMillis, int limit) {
@@ -67,7 +67,7 @@ public interface StateStore extends AutoCloseable {
     }
 
     /**
-     * Deletes a flow's runtime rows (the trace UI's Delete flow): the {@code sm_state} rows of its smTypes (entities,
+     * Deletes a flow's runtime rows (the dashboard's Delete flow): the {@code sm_state} rows of its smTypes (entities,
      * event lifecycle and keyed-state types), the trace rows of workflows whose id starts with one of the prefixes, and
      * the shard checkpoints of its stream. Dedupe rows are not attributable to a flow and expire with their TTL.
      *

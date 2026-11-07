@@ -272,7 +272,7 @@ public final class TradingFlows {
         return Collections.unmodifiableSet(s);
     }
 
-    /** All flows as Mermaid diagrams, one fenced block per smType (for READMEs and the trace UI). */
+    /** All flows as Mermaid diagrams, one fenced block per smType (for READMEs and the dashboard). */
     public static String toMermaid() {
         StringBuilder sb = new StringBuilder();
         for (Flow f : ALL) {

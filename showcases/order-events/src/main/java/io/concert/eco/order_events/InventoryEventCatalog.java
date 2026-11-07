@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * Event types of domain {@code inventory} (task queue {@code ev-inventory}), declared with {@code concert::event} in the
- * Pure models; discovered through the {@link EventCatalog} SPI (workers, event sender, trace UI).
+ * Pure models; discovered through the {@link EventCatalog} SPI (workers, event sender, dashboard).
  *
  * <pre>
  *   ReserveInventoryEvent  locks sku:{sku}  onError NON_BLOCKING  attempts 3

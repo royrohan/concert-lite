@@ -73,7 +73,7 @@ Flows (`samples/event-flows/`, from `concert::event.emits`):
 
 `deploy` builds, starts the stack with this module's `compose.yml` override (service `order-events-event-worker`, profile
 `order-events`), re-provisions ClickHouse, restarts the DuckDB sink and Deephaven so the new roots appear, and prints
-the links. The trace UI finds the machines and event catalogs through their SPIs (no edits needed).
+the links. The dashboard finds the machines and event catalogs through their SPIs (no edits needed).
 
 ## Send events
 
@@ -85,7 +85,7 @@ scripts/events.sh list errors        # ERROR_BLOCKING / ERROR_NON_BLOCKING; retr
 ./showcases/order-events/send-flow all
 ```
 
-Example queries (DuckDB: trace UI → Analytics → DuckDB; ClickHouse: add `FINAL`):
+Example queries (DuckDB: dashboard → Analytics → DuckDB; ClickHouse: add `FINAL`):
 
 ```sql
 SELECT status, count(*), avg(attempts) FROM evt_reserve_inventory_events GROUP BY status;

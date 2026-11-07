@@ -62,7 +62,7 @@ public final class TradingAnalytics {
         return out;
     }
 
-    /** Sample queries over the views, for the trace UI's ClickHouse console. */
+    /** Sample queries over the views, for the dashboard's ClickHouse console. */
     public static List<ClickHouseSamples.Sample> samples(SchemaSpec schema, boolean marketData) {
         List<ClickHouseSamples.Sample> out = new ArrayList<>();
         if (!marketData) {

@@ -5,10 +5,10 @@
 # For every typed smType with a running worker (or just --smType), ReconcileWorkflow runs in that worker: it
 # scans the StateStore for entities in a terminal state, asks the DuckDB sink for their stored versions
 # (read-only POST /versions) and republishes the CURRENT snapshot of missing or stale ones to Kafka
-# (entity-snapshots), from where every sink picks it up. --dry-run only counts. Started through the trace UI
-# (TRACE_UI_URL, default http://localhost:8088), which waits for the workflows and returns their reports.
+# (entity-snapshots), from where every sink picks it up. --dry-run only counts. Started through the dashboard
+# (DASHBOARD_URL, default http://localhost:8088), which waits for the workflows and returns their reports.
 set -euo pipefail
-url=${TRACE_UI_URL:-http://localhost:8088}
+url=${DASHBOARD_URL:-${TRACE_UI_URL:-http://localhost:8088}}
 sm=""
 dry=false
 while [ $# -gt 0 ]; do
@@ -21,7 +21,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 resp=$(curl -sf -X POST "$url/api/analytics/reconcile?dryRun=$dry${sm:+&smType=$sm}") || {
-  echo "trace UI not reachable at $url (scripts/up.sh <store> --analytics starts it)" >&2; exit 1; }
+  echo "dashboard not reachable at $url (scripts/up.sh <store> --analytics starts it)" >&2; exit 1; }
 python3 - "$resp" <<'PY'
 import json, sys
 d = json.loads(sys.argv[1])

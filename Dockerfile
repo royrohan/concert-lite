@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# One build, several runtime images (targets): coordinator, worker, trace-ui, sink-duckdb, sink-clickhouse,
+# One build, several runtime images (targets): coordinator, worker, dashboard, sink-duckdb, sink-clickhouse,
 # marketdata-sim, trading-worker, trading-loadgen, and showcase-worker (any generated ecosystem, by build args).
 #   docker compose build            (compose picks the target per service)
 
@@ -10,7 +10,7 @@ COPY gradle gradle
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon -q --version
 COPY . .
 RUN --mount=type=cache,target=/root/.gradle \
-    ./gradlew --no-daemon -q :orchestration:installDist :sample-workers:installDist :trace-ui:installDist \
+    ./gradlew --no-daemon -q :orchestration:installDist :sample-workers:installDist :dashboard:installDist \
       :sink-duckdb:installDist :sink-clickhouse:installDist :marketdata-sim:installDist \
       :trading:installDist
 
@@ -27,14 +27,14 @@ FROM runtime AS worker
 COPY --from=build /src/showcases/sample-workers/build/install/sample-workers /app
 ENTRYPOINT ["/app/bin/sample-workers"]
 
-FROM runtime AS trace-ui
-COPY --from=build /src/platform/trace-ui/build/install/trace-ui /app
+FROM runtime AS dashboard
+COPY --from=build /src/platform/dashboard/build/install/dashboard /app
 # docker CLI with the compose and buildx plugins: Start / Stop / Delete flow and the shared-services switch run
 # docker compose against the host's Docker socket (compose mounts it; local development only)
 COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:28-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 EXPOSE 8088
-ENTRYPOINT ["/app/bin/trace-ui"]
+ENTRYPOINT ["/app/bin/dashboard"]
 
 FROM runtime AS sink-duckdb
 COPY --from=build /src/analytics/sink-duckdb/build/install/sink-duckdb /app

@@ -15,7 +15,7 @@ import java.util.Optional;
 
 /**
  * Operator API for event-style events: list them by lifecycle status (from their {@code event:<id>} rows in the
- * StateStore), and retry / skip blocked or parked ones (updates on their processor workflow). The trace UI and
+ * StateStore), and retry / skip blocked or parked ones (updates on their processor workflow). The dashboard and
  * {@code scripts/events.sh} build on this.
  */
 public final class EventOps {

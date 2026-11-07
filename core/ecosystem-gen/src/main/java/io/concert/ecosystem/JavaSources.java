@@ -288,7 +288,7 @@ final class JavaSources {
         sb.append("import io.concert.sdk.MachineCatalog;\nimport io.concert.sdk.StateMachineRegistry;\nimport java.util.LinkedHashMap;\n"
                 + "import java.util.List;\nimport java.util.Map;\n\n");
         sb.append("/**\n * The machines of ecosystem {@code ").append(eco.name()).append("} by smType: their specs and the model's class diagram\n"
-                + " * (for the worker, the event sender and, through the {@link MachineCatalog} SPI, the trace UI).\n */\n");
+                + " * (for the worker, the event sender and, through the {@link MachineCatalog} SPI, the dashboard).\n */\n");
         String cls = machinesClass();
         sb.append("public final class ").append(cls).append(" implements MachineCatalog {\n\n");
         sb.append("    /** Mermaid class diagram of the ecosystem's model (all model files). */\n");

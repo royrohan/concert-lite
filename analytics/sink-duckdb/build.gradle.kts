@@ -1,6 +1,6 @@
 plugins { application }
 
-// Kafka -> DuckDB sink for completed entities, plus a read-only SQL endpoint for the trace UI.
+// Kafka -> DuckDB sink for completed entities, plus a read-only SQL endpoint for the dashboard.
 dependencies {
     implementation(project(":sink-core"))
     implementation(libs.duckdb.jdbc)

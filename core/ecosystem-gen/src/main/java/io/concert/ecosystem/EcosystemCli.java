@@ -137,7 +137,7 @@ public final class EcosystemCli {
         sb.append("UIs\n");
         sb.append("  Temporal UI       http://localhost:8080/namespaces/default/workflows?query=")
                 .append(java.net.URLEncoder.encode(temporalQuery(m), java.nio.charset.StandardCharsets.UTF_8)).append('\n');
-        sb.append("  Trace UI          http://localhost:8088   (Analytics tab: http://localhost:8088/#analytics)\n");
+        sb.append("  Dashboard          http://localhost:8088   (Analytics tab: http://localhost:8088/#analytics)\n");
         for (JsonNode r : m.path("roots")) {
             sb.append("    entity page     http://localhost:8088/#entity/").append(r.path("smType").asText()).append(':')
                     .append(r.path("sampleKey").asText()).append("   (after its happy path)\n");
@@ -179,7 +179,7 @@ public final class EcosystemCli {
             sb.append("  ./").append(mod).append("/send-flow ").append(mod).append('/').append(r.path("happyPath").asText()).append('\n');
         }
         if (analytics) {
-            sb.append("\nExample SQL (DuckDB via trace UI -> Analytics -> DuckDB; ClickHouse adds FINAL)\n");
+            sb.append("\nExample SQL (DuckDB via dashboard -> Analytics -> DuckDB; ClickHouse adds FINAL)\n");
             for (JsonNode r : m.path("roots")) {
                 String table = r.path("table").asText();
                 sb.append("  SELECT sm_state, count(*) AS entities, avg(date_diff('millisecond', created_at, completed_at)) AS avg_ms FROM ")

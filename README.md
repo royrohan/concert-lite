@@ -684,7 +684,7 @@ Modules are grouped in directories. Gradle project names stay flat (`./gradlew :
 | | `store` | `StateStore` + provider SPI, JDBC backend (Postgres / Aurora DSQL), async `TraceWriter`, contract tests |
 | | `store-dynamo` | DynamoDB backend |
 | | `store-spanner` | Cloud Spanner backend |
-| | `trace-ui` | Concert Dashboard (UI): flow pipeline view (`FlowMetrics`, `KinesisTail`), entity traces, state/model diagrams, Analytics proxy, pipeline strip, reconcile trigger |
+| | `dashboard` | Concert Dashboard: flow pipeline view (`FlowMetrics`, `KinesisTail`), entity traces, state/model diagrams, Analytics proxy, pipeline strip, reconcile trigger |
 | `analytics/` | `sink-core` | `EntitySnapshot` + Kafka codec/producer, `SinkTarget` SPI, `SnapshotConsumerLoop` (DLQ), `SinkMetrics`, `SchemaMapper` |
 | | `sink-duckdb` | Kafka → DuckDB sink; read-only `/query`, `/tables`, `/samples`, `/versions`, `/health`, `/metrics`; offline `DuckDbAdmin` |
 | | `sink-clickhouse` | one-shot ClickHouse provisioner (Kafka engine, views generated from the models, trading analytics views) |

@@ -14,4 +14,4 @@ docker compose --profile trading-load build -q trading-loadgen
 TRADING_ORDERS=$orders TRADING_RATE=$rate docker compose --profile trading-load run --rm trading-loadgen "$@"
 echo
 echo "Orders close after their allocations. Watch them in Temporal (http://localhost:8080, WorkflowId STARTS_WITH 'trading_order:')"
-echo "and in the trace UI Analytics tab (http://localhost:8088/#analytics/clickhouse): trading_fill_slippage, trading_account_positions."
+echo "and in the dashboard Analytics tab (http://localhost:8088/#analytics/clickhouse): trading_fill_slippage, trading_account_positions."

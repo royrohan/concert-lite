@@ -11,7 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** The trading machines by smType, with their specs and model diagram (for workers and the trace UI). */
+/** The trading machines by smType, with their specs and model diagram (for workers and the dashboard). */
 public final class TradingMachines {
     private TradingMachines() {}
 
@@ -47,7 +47,7 @@ public final class TradingMachines {
         return sb.toString();
     }
 
-    /** Registers the four specs in {@link StateMachineRegistry} (trace UI diagrams). */
+    /** Registers the four specs in {@link StateMachineRegistry} (dashboard diagrams). */
     public static void registerSpecs() {
         ALL.forEach((type, m) -> StateMachineRegistry.register(type, m.spec()));
     }

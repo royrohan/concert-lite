@@ -9,7 +9,7 @@ import java.util.Map;
 
 /**
  * The machines of ecosystem {@code insurance} by smType: their specs and the model's class diagram
- * (for the worker, the event sender and, through the {@link MachineCatalog} SPI, the trace UI).
+ * (for the worker, the event sender and, through the {@link MachineCatalog} SPI, the dashboard).
  */
 public final class InsuranceMachines implements MachineCatalog {
 

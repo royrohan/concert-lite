@@ -1,9 +1,9 @@
 # legend-lite (https://github.com/neema2/legend-lite) pinned to one commit and built from source with Bazel: it has no
 # releases or published artifact and its API moves daily, so concert builds exactly the commit it was tested against.
-# The trace UI's Model query tab uses it only to plan (Pure -> SQL); concert runs the SQL on DuckDB / ClickHouse itself.
+# The dashboard's Model query tab uses it only to plan (Pure -> SQL); concert runs the SQL on DuckDB / ClickHouse itself.
 # Two images from one build: target "server" (legend-lite's HTTP API) and target "studio" (Legend Studio Lite, level 0:
 # a static site whose compiler and SDLC run in the browser as WebAssembly; its demo projects/ are concert's models,
-# proxied from the trace UI).
+# proxied from the dashboard).
 #
 #   docker compose --profile analytics build legend-lite legend-studio
 #   LEGEND_LITE_REF=<commit> docker compose --profile analytics build legend-lite   # move the pin (re-run the checks)

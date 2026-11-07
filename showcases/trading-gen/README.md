@@ -147,7 +147,7 @@ Data: `trading::order::Allocation`, `allocId` = instance key, `status` = state. 
 
 `deploy` builds, starts the stack with this module's `compose.yml` override (service `trading-gen-worker`, profile
 `trading-gen`), re-provisions ClickHouse, restarts the DuckDB sink and Deephaven so the new roots appear, and prints
-the links. The trace UI finds the machines and event catalogs through their SPIs (no edits needed).
+the links. The dashboard finds the machines and event catalogs through their SPIs (no edits needed).
 
 ## Send events
 
@@ -158,7 +158,7 @@ the links. The trace UI finds the machines and event catalogs through their SPIs
 ./showcases/trading-gen/send-flow all
 ```
 
-Example queries (DuckDB: trace UI → Analytics → DuckDB; ClickHouse: add `FINAL`):
+Example queries (DuckDB: dashboard → Analytics → DuckDB; ClickHouse: add `FINAL`):
 
 ```sql
 SELECT sm_state, count(*) FROM gen_trading_orders GROUP BY sm_state;

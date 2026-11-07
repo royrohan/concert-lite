@@ -15,12 +15,12 @@ val modules = linkedMapOf(
     "trading-model" to "core",
     "worker-sdk" to "core",
     "ecosystem-gen" to "core",
-    // platform: the orchestration runtime, state stores and the trace UI
+    // platform: the orchestration runtime, state stores and the dashboard
     "orchestration" to "platform",
     "store" to "platform",
     "store-dynamo" to "platform",
     "store-spanner" to "platform",
-    "trace-ui" to "platform",
+    "dashboard" to "platform",
     // analytics: completed-entity snapshots, the DuckDB / ClickHouse sinks and the market data simulator
     "sink-core" to "analytics",
     "sink-duckdb" to "analytics",

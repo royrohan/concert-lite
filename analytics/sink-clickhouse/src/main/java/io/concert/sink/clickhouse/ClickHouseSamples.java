@@ -11,8 +11,8 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
- * Example queries for the trace UI's ClickHouse console, generated from the schema (like sink-duckdb's)
- * and stored by the provisioner in {@value ClickHouseSchema#SAMPLES}, where the trace UI reads them
+ * Example queries for the dashboard's ClickHouse console, generated from the schema (like sink-duckdb's)
+ * and stored by the provisioner in {@value ClickHouseSchema#SAMPLES}, where the dashboard reads them
  * as the read-only user.
  */
 public final class ClickHouseSamples {

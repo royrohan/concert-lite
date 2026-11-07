@@ -107,7 +107,7 @@ Data: `insurance::Policy`, `policyId` = instance key, `status` = state. Happy pa
 
 `deploy` builds, starts the stack with this module's `compose.yml` override (service `insurance-worker`, profile
 `insurance`), re-provisions ClickHouse, restarts the DuckDB sink and Deephaven so the new roots appear, and prints
-the links. The trace UI finds the machines and event catalogs through their SPIs (no edits needed).
+the links. The dashboard finds the machines and event catalogs through their SPIs (no edits needed).
 
 ## Send events
 
@@ -118,7 +118,7 @@ the links. The trace UI finds the machines and event catalogs through their SPIs
 ./showcases/insurance/send-flow all
 ```
 
-Example queries (DuckDB: trace UI → Analytics → DuckDB; ClickHouse: add `FINAL`):
+Example queries (DuckDB: dashboard → Analytics → DuckDB; ClickHouse: add `FINAL`):
 
 ```sql
 SELECT sm_state, count(*) FROM claims GROUP BY sm_state;

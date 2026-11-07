@@ -27,7 +27,7 @@ if [ -z "${STORE_KIND:-}" ]; then
   case "$running" in
     *concert-temporal-spanner-*) STORE_KIND=spanner ;;
     *concert-temporal-dsql-*) STORE_KIND=postgres ;;
-    *) STORE_KIND=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' concert-temporal-trace-ui-1 2>/dev/null \
+    *) STORE_KIND=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' concert-temporal-dashboard-1 2>/dev/null \
          | sed -n 's/^STORE_KIND=//p'); STORE_KIND=${STORE_KIND:-postgres} ;;
   esac
 fi

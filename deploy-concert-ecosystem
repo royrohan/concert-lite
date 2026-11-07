@@ -107,7 +107,7 @@ echo "==> docker compose -f docker-compose.yml -f $override up -d --build   (STO
 dc up -d --build
 
 echo "==> health"
-wait_until "trace UI" 180 http_ok http://localhost:8088/api/recent
+wait_until "dashboard" 180 http_ok http://localhost:8088/api/recent
 if has_machines; then wait_until "$name-worker" 240 worker_up; fi
 if has_events; then wait_until "$name-event-worker" 240 event_worker_up; fi
 if [ $analytics = 1 ]; then

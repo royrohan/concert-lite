@@ -623,7 +623,7 @@ final class ProjectFiles {
 
                 `deploy` builds, starts the stack with this module's `compose.yml` override (%2$s, profile
                 `%1$s`), re-provisions ClickHouse, restarts the DuckDB sink and Deephaven so the new roots appear, and prints
-                the links. The trace UI finds the machines and event catalogs through their SPIs (no edits needed).
+                the links. The dashboard finds the machines and event catalogs through their SPIs (no edits needed).
 
                 ## Send events
 
@@ -640,7 +640,7 @@ final class ProjectFiles {
             sb.append("scripts/events.sh list errors        # ERROR_BLOCKING / ERROR_NON_BLOCKING; retry | skip <eventId>\n");
         }
         sb.append("./").append(mod).append("/send-flow all\n```\n");
-        sb.append("\nExample queries (DuckDB: trace UI → Analytics → DuckDB; ClickHouse: add `FINAL`):\n\n```sql\n");
+        sb.append("\nExample queries (DuckDB: dashboard → Analytics → DuckDB; ClickHouse: add `FINAL`):\n\n```sql\n");
         for (MachineDecl m : eco.machines()) {
             sb.append("SELECT sm_state, count(*) FROM ").append(Ecosystem.rootTable(m.smType())).append(" GROUP BY sm_state;\n");
         }

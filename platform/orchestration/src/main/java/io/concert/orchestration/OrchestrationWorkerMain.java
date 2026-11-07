@@ -45,7 +45,7 @@ public final class OrchestrationWorkerMain {
         String stream = Flows.stream();
         var kinesis = KinesisClients.fromEnv();
         if (Env.getBool("INGEST_CREATE_STREAM", !Flows.CURRENT.isEmpty())) {
-            // a flow's stream is the flow's own: its coordinator creates it if Start flow (trace UI) did not
+            // a flow's stream is the flow's own: its coordinator creates it if Start flow (dashboard) did not
             if (KinesisStreams.ensure(kinesis, stream, Env.getInt("KINESIS_SHARDS", 2), 120_000)) {
                 log.info("created stream {}", stream);
             }
@@ -56,6 +56,25 @@ public final class OrchestrationWorkerMain {
             worker.ensureIngest(new IngestConfig(stream, Env.get("INGEST_POSITION", "TRIM_HORIZON"),
                     Env.getInt("INGEST_SHARD_LIST_SEC", 30), Env.getInt("INGEST_RUN_MINUTES", 30), List.of(),
                     Failover.shardHeartbeatTimeoutSeconds()));
+        }
+
+        if (Env.getBool("INGEST_CREATE_STREAM", !Flows.CURRENT.isEmpty())) {
+            // the flow's stream must outlive LocalStack restarts and stray deletes: recreate it when it disappears
+            Thread.ofVirtual().name("stream-keeper").start(() -> {
+                while (true) {
+                    try {
+                        Thread.sleep(30_000);
+                        if (KinesisStreams.status(kinesis, stream) == null
+                                && KinesisStreams.ensure(kinesis, stream, Env.getInt("KINESIS_SHARDS", 2), 120_000)) {
+                            log.warn("stream {} had disappeared: recreated it", stream);
+                        }
+                    } catch (InterruptedException e) {
+                        return;
+                    } catch (RuntimeException e) {
+                        log.warn("stream check of {} failed: {}", stream, e.getMessage());
+                    }
+                }
+            });
         }
 
         long ttlMillis = Env.getLong("DEDUPE_TTL_HOURS", 24) * 3_600_000L;

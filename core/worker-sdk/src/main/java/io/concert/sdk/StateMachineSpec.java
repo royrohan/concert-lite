@@ -14,7 +14,7 @@ import java.util.Set;
  * the event payload for that transition. Immutable and deterministic, so it is safe to use from
  * workflow code. A state without outgoing transitions is terminal, unless the terminal states are
  * declared explicitly ({@link Builder#terminal}). Also renders itself as a Mermaid diagram for the
- * trace UI.
+ * dashboard.
  */
 public final class StateMachineSpec {
 

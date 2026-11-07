@@ -118,7 +118,7 @@ final class EventSources {
                 + "import java.util.Map;\n\n");
         sb.append("/**\n * Event types of domain {@code ").append(domain).append("} (task queue {@code ev-").append(domain)
                 .append("}), declared with {@code concert::event} in the\n * Pure models; discovered through the {@link EventCatalog} SPI "
-                        + "(workers, event sender, trace UI).\n *\n * <pre>\n");
+                        + "(workers, event sender, dashboard).\n *\n * <pre>\n");
         for (EventDecl e : events) {
             sb.append(" *   ").append(html(e.name())).append("  locks ").append(html(e.locks().isEmpty() ? domain + ":{id}" : String.join(", ", e.locks())))
                     .append("  onError ").append(e.onError()).append("  attempts ").append(e.maxAttempts());

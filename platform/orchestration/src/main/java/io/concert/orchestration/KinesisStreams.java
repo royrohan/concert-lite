@@ -8,7 +8,7 @@ import software.amazon.awssdk.services.kinesis.model.StreamStatus;
 
 /**
  * Creates and deletes the per-flow ingest streams ({@code concert-<flow>}, {@link io.concert.common.Flows}). The
- * coordinator of a flow ensures its stream on startup, and the trace UI's Start / Delete flow does the same, so a
+ * coordinator of a flow ensures its stream on startup, and the dashboard's Start / Delete flow does the same, so a
  * flow brought up either way has its stream.
  */
 public final class KinesisStreams {

@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 /**
- * The simulator's control endpoint (the trace UI's "simulate market data" buttons):
+ * The simulator's control endpoint (the dashboard's "simulate market data" buttons):
  *
  * <pre>
  * GET  /status          {"running":true,"tickRate":200.0,"ticks":12345,"bars":67,"ticksPerSec":199.8}

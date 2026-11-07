@@ -1,0 +1,1525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concert Dashboard</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #6b6b66; --line: #e4e4df;
+    --accent: #2f6fdb; --ok: #1f8a4c; --warn: #b7791f; --bad: #c0392b; --chip: #eef2fb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #141413; --panel: #1d1d1b; --text: #ececea; --muted: #9a9a94; --line: #2e2e2b;
+            --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; color-scheme: dark; }
+  }
+  :root[data-theme="dark"] { --bg: #141413; --panel: #1d1d1b; --text: #ececea; --muted: #9a9a94; --line: #2e2e2b;
+          --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; color-scheme: dark; }
+  :root[data-theme="light"] { color-scheme: light; }
+  #theme { background: none; border: 1px solid var(--line); color: var(--text); padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-left: auto; }
+  /* Flow pages: left navigation pane */
+  .flowpage { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: start; max-width: 1400px; margin: 0 auto; }
+  .flowpage { padding: 16px; }
+  .flowpage > #out { padding: 0; max-width: none; margin: 0; }
+  #flownav { position: sticky; top: 12px; padding: 12px; }
+  #flownav h4 { margin: 0 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  #flownav a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--text); font-size: 13px; }
+  #flownav a.sub { padding-left: 18px; font-family: ui-monospace, monospace; font-size: 12px; }
+  #flownav a:hover { background: var(--chip); }
+  #flownav a.on { background: var(--chip); color: var(--accent); font-weight: 600; }
+  #flownav .sect { margin: 12px 0 4px; }
+  @media (max-width: 800px) { .flowpage { grid-template-columns: 1fr; } #flownav { position: static; } }
+  .ops { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .mtiles { display: grid; grid-template-columns: minmax(220px, 1.6fr) repeat(5, minmax(110px, 1fr)); gap: 12px; margin-top: 10px; }
+  .mtile { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; }
+  .mtile.wide > .mtile { border: 0; padding: 0; }
+  .mtile .tile-value small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  @media (max-width: 1000px) { .mtiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  button.danger { background: none; border: 1px solid var(--bad); color: var(--bad); padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+  button.danger:disabled, button.ghost:disabled { opacity: .5; cursor: default; }
+  pre.joblog { max-height: 260px; overflow: auto; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+    font: 11.5px/1.45 ui-monospace, monospace; white-space: pre-wrap; margin: 8px 0 0; }
+  .svc { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); border-radius: 14px; padding: 2px 10px; font-size: 12.5px; }
+  .svcs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  header { padding: 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  nav button { background: none; border: 1px solid var(--line); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  nav button.on { border-color: var(--accent); color: var(--accent); }
+  form { display: flex; gap: 8px; flex: 1; min-width: 240px; }
+  input { flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font-family: ui-monospace, monospace; }
+  main { padding: 16px; max-width: 1100px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 16px; overflow-x: auto; }
+  .muted { color: var(--muted); }
+  table { border-collapse: collapse; width: 100%; }
+  td, th { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  code, .mono { font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .stage { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--chip); font-size: 12px; font-weight: 600; }
+  .DONE, .TRANSITION { color: var(--ok); } .DROPPED, .REJECTED { color: var(--warn); } .FAILED { color: var(--bad); }
+  .bar { height: 6px; background: var(--accent); border-radius: 3px; min-width: 2px; }
+  a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; }
+  /* Analytics */
+  main.wide { max-width: 1400px; }
+  .subtabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .subtabs button { background: none; border: 1px solid var(--line); color: var(--text); padding: 4px 12px; border-radius: 14px; cursor: pointer; font-size: 13px; }
+  .subtabs button.on { background: var(--chip); border-color: var(--accent); color: var(--accent); }
+  .analytics { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 800px) { .analytics { grid-template-columns: 1fr; } }
+  .browser details { margin-bottom: 4px; }
+  .browser summary { cursor: pointer; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .browser ul { list-style: none; margin: 2px 0 6px 14px; padding: 0; }
+  .browser li { font-family: ui-monospace, monospace; font-size: 12px; cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  .browser li:hover { color: var(--accent); }
+  .kind { font-size: 11px; color: var(--muted); }
+  textarea#sql { width: 100%; min-height: 140px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+                 background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, monospace; tab-size: 2; }
+  .toolbar { display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .toolbar button.run { background: var(--accent); color: #fff; border: 0; padding: 6px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .chip { background: var(--chip); border: 1px solid transparent; color: var(--text); border-radius: 12px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  table.results td { font-family: ui-monospace, monospace; font-size: 12px; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.results th { white-space: nowrap; }
+  .null { color: var(--muted); font-style: italic; }
+  .pipeline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; font-size: 12.5px; }
+  .pipeline .lag { border: 1px solid var(--line); border-radius: 12px; padding: 2px 10px; background: var(--panel); }
+  .pipeline .lag b { font-weight: 600; }
+  .pipeline .lag.behind { border-color: var(--warn); }
+  .pipeline .lag.bad { border-color: var(--bad); }
+  .pipeline button { background: none; border: 1px solid var(--line); color: var(--text); padding: 2px 10px; border-radius: 12px; cursor: pointer; font-size: 12.5px; }
+  .pipeline button:hover { border-color: var(--accent); color: var(--accent); }
+  #reconcile table td, #reconcile table th { font-size: 12.5px; padding: 3px 8px; }
+  details.play summary { cursor: pointer; font-weight: 600; }
+  details.play iframe { width: 100%; height: 640px; border: 1px solid var(--line); border-radius: 6px; margin-top: 8px; background: #fff; }
+  .widgets { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+  .widgets .panel { padding: 8px 8px 4px; margin: 0; }
+  .widgets h4 { margin: 2px 4px 6px; font: 600 13px ui-monospace, monospace; }
+  .widgets iframe { width: 100%; height: 360px; border: 0; border-radius: 4px; }
+  .hint code { background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  /* Event style */
+  .SCHEDULED, .LOCK_WAIT { color: var(--accent); } .ERROR_BLOCKING, .BLOCKED { color: var(--bad); }
+  .ERROR_NON_BLOCKING, .PARKED { color: var(--warn); } .PENDING, .NEW { color: var(--muted); }
+  button.op { background: none; border: 1px solid var(--line); color: var(--text); padding: 2px 10px; border-radius: 12px; cursor: pointer; font-size: 12px; }
+  button.op:hover { border-color: var(--accent); color: var(--accent); }
+  button.op.retry:hover { border-color: var(--ok); color: var(--ok); }
+  button.op.skip:hover { border-color: var(--bad); color: var(--bad); }
+  .lifecycle { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .lifecycle .arrow { color: var(--muted); }
+  ul.tree { list-style: none; margin: 0; padding-left: 18px; border-left: 1px dashed var(--line); }
+  ul.tree.top { border-left: 0; padding-left: 0; }
+  ul.tree li { margin: 3px 0; font-size: 13px; }
+  ul.tree li.focus > .node { background: var(--chip); border-radius: 6px; padding: 1px 6px; }
+  pre.json { margin: 0; font: 12.5px/1.45 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; }
+  .proc { margin-top: 8px; font-size: 12.5px; }
+  /* Flows: landing cards and the per-flow pipeline */
+  .crumbs { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+  .crumbs h2 { font-size: 18px; margin: 0; }
+  .crumbs .sep { color: var(--muted); }
+  .crumbs .spacer { flex: 1; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { background: none; border: 0; border-right: 1px solid var(--line); color: var(--text); padding: 4px 10px; cursor: pointer; font-size: 12.5px; }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--chip); color: var(--accent); font-weight: 600; }
+  .group-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+  .card:hover, .card:focus-visible { border-color: var(--accent); outline: none; }
+  .card.idle { opacity: .62; }
+  .card .top { display: flex; align-items: center; gap: 8px; }
+  .card .name { font-weight: 600; font-family: ui-monospace, monospace; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .top .status { margin-left: auto; }
+  .card.compact { padding: 8px 12px; gap: 2px; }
+  .badge { font-size: 11px; border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; color: var(--muted); }
+  .status { font-size: 11.5px; display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+  .status.ok { color: var(--ok); } .status.idle { color: var(--muted); } .status.warn { color: var(--warn); } .status.bad { color: var(--bad); }
+  .tile-label { font-size: 12px; color: var(--muted); }
+  .tile-value { font-size: 22px; font-weight: 600; line-height: 1.15; }
+  .tile-value small { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+  .minis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; font-size: 12px; }
+  .minis b { display: block; font-weight: 600; font-size: 13px; }
+  .minis span { color: var(--muted); }
+  svg.spark { display: block; width: 100%; height: 26px; overflow: visible; }
+  svg.spark path { fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; }
+  svg.spark circle { fill: var(--accent); }
+  .flowmap { display: grid; /* 5 boxes with a wire after each of the first 4; the 5th (Kafka) feeds the stores through the bracket */
+              grid-template-columns: repeat(4, minmax(150px, 1fr) 30px) minmax(150px, 1fr) minmax(230px, 1.2fr); align-items: center; min-width: 1140px; }
+  /* next to the flow pane: narrower boxes and wires so the whole pipeline fits */
+  .flowpage .flowmap { grid-template-columns: repeat(4, minmax(128px, 1fr) 18px) minmax(128px, 1fr) minmax(190px, 1.1fr); min-width: 0; }
+  .node { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; min-height: 150px; }
+  .node:hover, .node:focus-visible { border-color: var(--accent); outline: none; }
+  .node.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .node.bad { border-color: var(--bad); }
+  .node .hd { display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+  .node .title { font-weight: 600; font-size: 13px; }
+  .node .rows { display: grid; grid-template-columns: 1fr auto; gap: 1px 8px; font-size: 12px; }
+  .node .rows span:nth-child(odd) { color: var(--muted); }
+  .node .rows span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
+  .wire { position: relative; height: 2px; background: var(--line); margin: 0 3px; }
+  .wire::after { content: ''; position: absolute; right: -2px; top: -4px; border: 5px solid transparent; border-left: 7px solid var(--line); border-right: 0; }
+  .wire.live { background: repeating-linear-gradient(90deg, var(--accent) 0 6px, transparent 6px 12px); background-size: 24px 2px; animation: flow 0.8s linear infinite; }
+  .wire.live::after { border-left-color: var(--accent); }
+  @keyframes flow { to { background-position: 24px 0; } }
+  @media (prefers-reduced-motion: reduce) { .wire.live { animation: none; } }
+  .fan { display: grid; grid-template-columns: 18px 1fr; align-items: stretch; }
+  .fan .bracket { border: 2px solid var(--line); border-right: 0; border-radius: 6px 0 0 6px; margin: 34px 0; }
+  .fan .bracket.live { border-color: var(--accent); }
+  .fan .stores { display: flex; flex-direction: column; gap: 8px; }
+  .fan .node { min-height: 0; }
+  .drill { margin-top: 16px; }
+  .drill h3 { margin: 0 0 8px; font-size: 15px; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .genbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .genbar select, .genbar input[type=number] { padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; font-size: 12.5px; }
+  .genbar input[type=number] { width: 80px; flex: none; }
+  button.primary { background: var(--accent); color: #fff; border: 0; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  button.ghost { background: none; border: 1px solid var(--line); color: var(--text); padding: 5px 12px; border-radius: 6px; cursor: pointer; }
+  button.ghost:hover { border-color: var(--bad); color: var(--bad); }
+  .progress { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; width: 160px; }
+  .progress > div { height: 100%; background: var(--accent); }
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .filters .chip.on { border-color: var(--accent); color: var(--accent); background: var(--chip); font-weight: 600; }
+  .filters input { max-width: 280px; font-family: inherit; }
+  tr.pick { cursor: pointer; } tr.pick:hover td { background: var(--chip); } tr.pick.on td { background: var(--chip); }
+  .stats { display: flex; gap: 18px; flex-wrap: wrap; }
+  .stats div b { display: block; font-size: 18px; } .stats div span { font-size: 12px; color: var(--muted); }
+  .mono-list a { margin-right: 6px; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .grid2 > .panel { margin: 0; }
+  textarea#pure { width: 100%; min-height: 150px; resize: vertical; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+                  background: var(--bg); color: var(--text); font: 13px/1.45 ui-monospace, monospace; tab-size: 2; }
+  pre.sql { margin: 6px 0 10px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+            font: 12px/1.45 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow: auto; }
+  .model-results { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
+  .model-results > .panel { margin: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Concert Dashboard</h1>
+  <nav>
+    <button data-view="flows" class="on">Flows</button>
+    <button data-view="event">Event</button>
+    <button data-view="entity">Entity</button>
+    <button data-view="lock">Lock</button>
+    <button data-view="events">Events</button>
+    <button data-view="analytics">Analytics</button>
+    <button data-view="model">Model</button>
+  </nav>
+  <form id="search"><input id="q" placeholder="event id" autocomplete="off"><button>Go</button></form>
+  <button id="theme" title="Theme: follows the system until you pick one" aria-label="toggle dark mode"></button>
+</header>
+<div id="page"><aside id="flownav" class="panel" hidden></aside><main id="out"><div class="panel muted">Loading recent events…</div></main></div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+const out = document.getElementById('out'), q = document.getElementById('q');
+let view = 'event';
+const placeholders = { event: 'event id', entity: 'smType:instanceKey, e.g. order:o1', lock: 'lock key, e.g. account:3', events: '' };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const time = ms => new Date(ms).toISOString().slice(11, 23);
+const link = (v, id) => `<a onclick="go('${v}','${esc(id)}')">${esc(id)}</a>`;
+// Theme: auto (system) / light / dark, remembered per browser; Mermaid follows it.
+let theme = (() => { try { return localStorage.getItem('theme') || 'auto'; } catch (e) { return 'auto'; } })();
+const isDark = () => theme === 'dark' || (theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+function applyTheme() {
+  if (theme === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', theme);
+  const b = document.getElementById('theme');
+  b.textContent = { auto: '◐ Auto', light: '☀ Light', dark: '☾ Dark' }[theme];
+  b.title = 'Theme: ' + theme + ' (click to switch)';
+  mermaid.initialize({ startOnLoad: false, theme: isDark() ? 'dark' : 'default' });
+}
+document.getElementById('theme').onclick = () => {
+  theme = { auto: isDark() ? 'light' : 'dark', light: 'dark', dark: 'light' }[theme];
+  try { localStorage.setItem('theme', theme); } catch (e) { /* private window */ }
+  applyTheme();
+  window.dispatchEvent(new HashChangeEvent('hashchange')); rerender(); // redraw diagrams in the new theme
+};
+applyTheme();
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  const v = b.dataset.view;
+  if (v === 'analytics') showAnalytics('duckdb');
+  else if (v === 'events') go('events', 'errors');
+  else if (v === 'flows') showFlows();
+  else if (v === 'model') showModel();
+  else if (v === 'event') { setView('event'); setHash('event'); showRecent(); }
+  else setView(v);
+});
+document.getElementById('search').onsubmit = e => { e.preventDefault(); if (q.value.trim()) go(view, q.value.trim()); };
+function setView(v) {
+  view = v; q.placeholder = placeholders[v] ?? '';
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  document.getElementById('search').style.visibility = ['analytics', 'events', 'flows', 'model'].includes(v) ? 'hidden' : '';
+  out.classList.toggle('wide', ['analytics', 'flows', 'model'].includes(v));
+  if (v !== 'flows') clearTimeout(flowTimer);
+}
+async function api(path) { const r = await fetch(path); return r.json(); }
+
+async function go(v, id) {
+  if (v === 'analytics') { showAnalytics(id || 'duckdb'); return; }
+  if (v === 'flows') { showFlows(); return; }
+  if (v === 'flow') {
+    if (!controlFlows) { try { await loadControl(); } catch (e) { /* metrics pages still work */ } }
+    const [first, sec = '', arg] = id.split('/');
+    if (ecoById(first)) {   // a flow (ecosystem) page
+      if (sec === 'models') showEcoModels(first);
+      else if (sec === 'diagrams') showEcoDiagrams(first, arg ? decodeURIComponent(arg) : undefined);
+      else if (sec === 'flowdiagram') showEcoFlowDiagram(first);
+      else showEco(first);
+      return;
+    }
+    const i = id.lastIndexOf('/'), msec = i > 0 ? id.slice(i + 1) : '';
+    if (NODE_PAGES.includes(msec) || msec === 'duckdb' || msec === 'clickhouse') showFlowSection(id.slice(0, i), msec); else showFlow(id); return; }
+  setView(v); q.value = v === 'events' ? '' : id; setHash(v + '/' + encodeURIComponent(id));
+  out.innerHTML = '<div class="panel muted">Loading…</div>';
+  try { await ({ event: showEvent, entity: showEntity, lock: showLock, events: showEvents })[v](id); }
+  catch (e) { out.innerHTML = `<div class="panel FAILED">${esc(e)}</div>`; }
+}
+
+async function showRecent() {
+  const d = await api('/api/recent');
+  out.innerHTML = `<div class="panel"><h3>Recent events</h3><table>
+    <tr><th>time</th><th>event</th><th>stage</th><th>entity</th><th>detail</th></tr>
+    ${d.events.map(t => `<tr><td class="mono">${time(t.tsMillis)}</td><td class="mono">${link('event', t.eventId)}</td>
+      <td><span class="stage ${t.stage}">${t.stage}</span></td><td class="mono">${t.workflowId ? link('entity', t.workflowId) : ''}</td>
+      <td class="mono muted">${esc(t.detail)}</td></tr>`).join('')}</table></div>`;
+}
+
+const chip = st => `<span class="stage ${esc(st)}">${esc(st)}</span>`;
+const STAGE_STATUS = { SCHEDULED: 'SCHEDULED', LOCK_WAIT: 'NEW', BLOCKED: 'ERROR_BLOCKING', PARKED: 'ERROR_NON_BLOCKING', DONE: 'DONE' };
+
+/** Status timeline of an event-style event: NEW, then the lifecycle states its trace rows show, ending in the row's status. */
+function lifecycleSteps(trace, lc) {
+  const steps = [lc.scheduledAt ? 'SCHEDULED' : 'NEW'];
+  for (const t of trace) {
+    const s = STAGE_STATUS[t.stage];
+    if (s && steps[steps.length - 1] !== s && !(s === 'NEW' && steps.length === 1)) steps.push(s);
+  }
+  if (steps[steps.length - 1] !== lc.row.status) steps.push(lc.row.status);
+  return steps;
+}
+
+function treeHtml(n) {
+  const kids = n.children.length ? `<ul class="tree">${n.children.map(treeHtml).join('')}</ul>` : '';
+  return `<li class="${n.focus ? 'focus' : ''}"><span class="node">${chip(n.status)} <span class="mono">${link('event', n.eventId)}</span>
+    ${n.eventType ? `<b>${esc(n.eventType)}</b> <span class="muted">${esc(n.domain)}</span>` : '<span class="muted">emitted, not processed yet</span>'}
+    ${n.attempts > 1 ? `<span class="muted">· ${n.attempts} attempts</span>` : ''}
+    ${n.error ? `<span class="mono FAILED"> · ${esc(n.error)}</span>` : ''}${n.truncated ? ' <span class="muted">(more children not shown)</span>' : ''}</span>${kids}</li>`;
+}
+
+async function eventOp(id, op) {
+  let url = `/api/ops/events/${encodeURIComponent(id)}/${op}`;
+  if (op === 'skip') {
+    const reason = prompt(`Skip ${id}: it goes DONE without running. Reason?`, 'skipped by operator');
+    if (reason === null) return;
+    url += '?reason=' + encodeURIComponent(reason);
+  }
+  const d = await apiJson(url, { method: 'POST' });
+  alert(d.error ? `${op} failed: ${d.error}` : `${id} -> ${d.status}${d.detail ? ' (' + d.detail + ')' : ''}`);
+  return d;
+}
+
+async function showProcessor(id, el) {
+  const s = await apiJson(`/api/ops/events/${encodeURIComponent(id)}/processor`);
+  if (s.error) { el.innerHTML = `<span class="FAILED">${esc(s.error)}</span>`; return; }
+  const items = (label, xs) => xs.length ? `<div><b>${label}</b> ${xs.map(i => `${link('event', i.eventId)} ${esc(i.eventType)}`
+      + (i.error ? ` <span class="muted">${esc(i.error)}</span>` : '') + (label === 'scheduled' ? ` <span class="muted">at ${new Date(i.atMillis).toISOString()}</span>` : '')).join(', ')}</div>` : '';
+  el.innerHTML = `<div class="muted">processor <span class="mono">evproc:${esc(s.domain)}:${esc(s.key)}</span> · processed this run ${s.processedThisRun}</div>`
+    + items('blocked', s.blocked) + items('parked', s.parked) + items('scheduled', s.scheduled)
+    + (s.recent.length ? `<div><b>recent</b> ${s.recent.slice(-8).map(r => `${link('event', r.eventId)} ${chip(r.status)}`).join(' ')}</div>` : '');
+}
+
+async function showEvent(id) {
+  const d = await api('/api/events/' + encodeURIComponent(id));
+  const tr = d.trace, lc = d.lifecycle;
+  if (!tr.length && !lc) { out.innerHTML = `<div class="panel muted">No trace for ${esc(id)}.</div>`; return; }
+  const t0 = tr.length ? tr[0].tsMillis : 0, span = tr.length ? Math.max(1, tr[tr.length - 1].tsMillis - t0) : 0;
+  const entity = tr.find(t => t.workflowId)?.workflowId;
+  let html = '';
+  if (lc) {
+    const r = lc.row, err = r.status.startsWith('ERROR_');
+    html += `<div class="panel"><div class="lifecycle">${lifecycleSteps(tr, lc).map(chip).join('<span class="arrow">→</span>')}
+        ${err ? `<span style="flex:1"></span><button class="op retry" onclick="eventOp('${esc(id)}','retry').then(() => go('event','${esc(id)}'))">Retry</button>
+        <button class="op skip" onclick="eventOp('${esc(id)}','skip').then(() => go('event','${esc(id)}'))">Skip</button>` : ''}</div>
+      <div class="kv" style="margin-top:12px">
+      <span class="muted">event</span><span class="mono">${esc(id)} · <b>${esc(r.eventType)}</b> · domain ${esc(r.domain)}</span>
+      <span class="muted">status</span><span>${chip(r.status)} <span class="muted">${esc(r.outcome ?? '')} · v${r.version} · updated ${new Date(r.updatedAtMillis).toISOString()}</span></span>
+      <span class="muted">attempts</span><span>${r.attempts}${lc.retries ? ` · operator retries ${lc.retries}` : ''}${d.type ? ` <span class="muted">(max ${d.type.maxAttempts}, on error ${esc(d.type.onError)})</span>` : ''}</span>
+      ${r.error ? `<span class="muted">error</span><span class="mono FAILED">${esc(r.error)}</span>` : ''}
+      <span class="muted">lock keys</span><span class="mono">${r.keys.map(k => link('lock', k)).join(', ')}${d.type?.lockTemplates?.length ? ` <span class="muted">(${esc(d.type.lockTemplates.join(', '))})</span>` : ''}</span>
+      <span class="muted">processor</span><span class="mono">${esc(r.processor)} <a onclick="showProcessor('${esc(id)}', document.getElementById('proc'))">status</a><div id="proc" class="proc"></div></span>
+      ${lc.scheduledAt ? `<span class="muted">scheduled at</span><span class="mono">${new Date(lc.scheduledAt).toISOString()}</span>` : ''}
+      <span class="muted">parent</span><span class="mono">${r.parentEventId ? link('event', r.parentEventId) : '–'}</span>
+      <span class="muted">causation</span><span class="mono">root ${link('event', r.causationRoot ?? id)} · depth ${lc.depth}${r.children.length ? ' · children ' + r.children.map(c => link('event', c)).join(', ') : ''}</span>
+      ${d.type?.emits?.length ? `<span class="muted">may emit</span><span class="mono">${esc(d.type.emits.join(', '))}</span>` : ''}
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">workflows touched by this event ↗</a></span>
+    </div></div>
+    <div class="panel"><h3>Causation tree</h3><ul class="tree top">${treeHtml(d.tree)}</ul></div>
+    <div class="panel"><h3>Payload</h3><pre class="json">${esc(JSON.stringify(lc.payload, null, 2))}</pre></div>`;
+  } else {
+    html += `<div class="panel"><div class="kv">
+      <span class="muted">event</span><span class="mono">${esc(id)}</span>
+      <span class="muted">dedupe</span><span>${esc(d.dedupeStatus)}</span>
+      <span class="muted">entity</span><span class="mono">${entity ? link('entity', entity) : '-'}</span>
+      <span class="muted">total</span><span>${span} ms (first to last trace row)</span>
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">workflows touched by this event ↗</a></span>
+    </div></div>`;
+  }
+  if (tr.length) {
+    html += `<div class="panel"><h3>Timeline</h3><p class="muted" style="margin-top:0">dedupe ${esc(d.dedupeStatus)} · ${span} ms first to last trace row</p><table>
+    <tr><th>+ms</th><th>stage</th><th>lock</th><th>detail</th><th style="width:30%"></th></tr>
+    ${tr.map(t => `<tr><td class="mono">+${t.tsMillis - t0}</td><td><span class="stage ${t.stage}">${t.stage}</span></td>
+      <td class="mono">${t.lockKey ? link('lock', t.lockKey) : ''}</td><td class="mono muted">${esc(t.detail)}</td>
+      <td><div class="bar" style="margin-left:${(t.tsMillis - t0) / span * 100}%;width:2px"></div></td></tr>`).join('')}
+    </table></div>`;
+  }
+  if (d.flowMermaid) html += '<div class="panel"><details><summary><h3 style="display:inline">Event flow</h3> <span class="muted">(concert::event.emits)</span></summary><div id="flow-diagram"></div></details></div>';
+  out.innerHTML = html;
+  if (d.flowMermaid) {
+    try { const { svg } = await mermaid.render('f' + Date.now(), d.flowMermaid); document.getElementById('flow-diagram').innerHTML = svg; }
+    catch (e) { document.getElementById('flow-diagram').textContent = 'flow diagram: ' + e; }
+  }
+}
+
+// ---------------------------------------------------------------- Events (event style operator view)
+const EVENT_TABS = { errors: 'Errors (blocking + non-blocking)', ERROR_BLOCKING: 'Blocking', ERROR_NON_BLOCKING: 'Non-blocking',
+  SCHEDULED: 'Scheduled', DONE: 'Done', types: 'Event types' };
+
+async function showEvents(sub) {
+  if (!EVENT_TABS[sub]) sub = 'errors';
+  const tabs = Object.entries(EVENT_TABS).map(([k, l]) => `<button class="${k === sub ? 'on' : ''}" onclick="go('events','${k}')">${l}</button>`).join('');
+  if (sub === 'types') { await showEventTypes(tabs); return; }
+  const d = await apiJson(`/api/ops/events?status=${encodeURIComponent(sub)}&limit=200`);
+  if (d.error) { out.innerHTML = `<div class="subtabs">${tabs}</div><div class="panel FAILED">${esc(d.error)}</div>`; return; }
+  const ops = r => r.status.startsWith('ERROR_') ? `<button class="op retry" onclick="eventOp('${esc(r.eventId)}','retry').then(() => go('events','${sub}'))">Retry</button>
+      <button class="op skip" onclick="eventOp('${esc(r.eventId)}','skip').then(() => go('events','${sub}'))">Skip</button>` : '';
+  const hint = { errors: 'ERROR_BLOCKING keeps the event’s lock keys held (later events on them wait); ERROR_NON_BLOCKING is parked with its keys released. Retry runs it again (a parked one re-enters its lock chain), Skip makes it DONE without running.',
+    SCHEDULED: 'Future-dated events wait on a durable timer in their processor, holding no locks; they join their lock chain as NEW when due.' }[sub === 'ERROR_BLOCKING' || sub === 'ERROR_NON_BLOCKING' ? 'errors' : sub] ?? '';
+  out.innerHTML = `<div class="subtabs">${tabs}</div><div class="panel"><h3 style="margin-top:0">${esc(EVENT_TABS[sub])} <span class="muted">(${d.total})</span></h3>
+    ${hint ? `<p class="muted">${esc(hint)}</p>` : ''}
+    <table><tr><th>updated</th><th>event</th><th>type</th><th>status</th><th>attempts</th><th>keys</th><th>error / children</th><th></th></tr>
+    ${d.events.map((r, i) => `<tr><td class="mono">${time(r.updatedAtMillis)}</td><td class="mono">${link('event', r.eventId)}</td>
+      <td>${esc(r.eventType)} <span class="muted">${esc(r.domain)}</span></td><td>${chip(r.status)}</td><td>${r.attempts}</td>
+      <td class="mono">${r.keys.map(k => link('lock', k)).join(', ')}</td>
+      <td class="mono ${r.error ? 'FAILED' : 'muted'}">${esc(r.error ?? r.children.join(', '))}</td>
+      <td style="white-space:nowrap">${ops(r)} <button class="op" onclick="showProcessor('${esc(r.eventId)}', document.getElementById('p${i}'))">processor</button>
+        <div id="p${i}" class="proc"></div></td></tr>`).join('')}
+    </table>${d.events.length ? '' : '<p class="muted">None.</p>'}</div>`;
+}
+
+async function showEventTypes(tabs) {
+  const d = await apiJson('/api/event-types');
+  const cats = d.catalogs || [];
+  out.innerHTML = `<div class="subtabs">${tabs}</div>` + (cats.length ? '' : '<div class="panel muted">No event catalogs on the dashboard’s class path.</div>')
+    + cats.map((c, i) => `<div class="panel"><h3 style="margin-top:0">${esc(c.name)}</h3>
+      <table><tr><th>event type</th><th>domain</th><th>lock templates</th><th>on error</th><th>attempts</th><th>emits</th><th>payload class</th></tr>
+      ${c.events.map(e => `<tr><td><b>${esc(e.name)}</b></td><td>${esc(e.domain)}</td><td class="mono">${esc(e.lockTemplates.join(', ') || e.domain + ':{id}')}</td>
+        <td>${esc(e.onError)}</td><td>${e.maxAttempts}</td><td>${esc(e.emits.join(', '))}</td><td class="mono muted">${esc(e.payloadClass)}</td></tr>`).join('')}</table>
+      ${c.states.length ? `<p><b>keyed states</b> ${c.states.map(s => `<code>${esc(s.name)}</code> <span class="mono muted">state:${esc(s.keyTemplate ?? '<key>')}</span>`).join(', ')}</p>` : ''}
+      ${c.flowMermaid ? `<details open><summary><b>Event flow</b></summary><div id="tf${i}"></div></details>` : ''}
+      ${c.modelMermaid ? `<details><summary><b>Payload and state models</b></summary><div id="tm${i}"></div></details>` : ''}</div>`).join('');
+  for (const [i, c] of cats.entries()) {
+    for (const [k, src] of [['tf', c.flowMermaid], ['tm', c.modelMermaid]]) {
+      if (!src) continue;
+      try { const { svg } = await mermaid.render(k + i + Date.now(), src); document.getElementById(k + i).innerHTML = svg; }
+      catch (e) { document.getElementById(k + i).textContent = 'diagram: ' + e; }
+    }
+  }
+}
+
+async function showEntity(id) {
+  const d = await api('/api/entities/' + encodeURIComponent(id));
+  const live = d.live, proj = d.projection;
+  out.innerHTML = `<div class="panel"><div class="kv">
+      <span class="muted">entity</span><span class="mono">${esc(id)}</span>
+      <span class="muted">state</span><span><b>${esc(live?.state ?? proj?.state ?? 'unknown')}</b> ${live ? '' : '<span class="muted">(workflow not running; from DSQL)</span>'}</span>
+      <span class="muted">version</span><span>${esc(live?.version ?? proj?.version)}</span>
+      <span class="muted">data</span><span class="mono">${esc(live?.data ?? proj?.data)}</span>
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">open workflow ↗</a></span>
+      ${d.terminal ? `<span class="muted">analytics</span><span><a onclick="openInDuckDb('${esc(d.smType)}','${esc(id)}')">open in DuckDB</a>
+        · <a onclick="openInClickHouse('${esc(d.smType)}','${esc(id)}')">open in ClickHouse</a>
+        <span class="muted">(completed: its snapshot is in the analytics sinks)</span></span>` : ''}
+    </div></div>
+    ${d.mermaid ? '<div class="panel"><h3>State machine</h3><div id="diagram"></div></div>' : ''}
+    ${d.modelMermaid ? '<div class="panel"><details><summary><h3 style="display:inline">Model</h3> <span class="muted">(Pure classes)</span></summary><div id="model-diagram"></div></details></div>' : ''}
+    <div class="panel"><h3>History</h3><table><tr><th>time</th><th>event</th><th>stage</th><th>detail</th></tr>
+    ${d.history.map(t => `<tr><td class="mono">${time(t.tsMillis)}</td><td class="mono">${link('event', t.eventId)}</td>
+      <td><span class="stage ${t.stage}">${t.stage}</span></td><td class="mono muted">${esc(t.detail)}</td></tr>`).join('')}</table></div>`;
+  if (d.mermaid) {
+    const { svg } = await mermaid.render('m' + Date.now(), d.mermaid);
+    document.getElementById('diagram').innerHTML = svg;
+  }
+  if (d.modelMermaid) {
+    try {
+      const { svg } = await mermaid.render('c' + Date.now(), d.modelMermaid);
+      document.getElementById('model-diagram').innerHTML = svg;
+    } catch (e) { document.getElementById('model-diagram').textContent = 'model diagram: ' + e; }
+  }
+}
+
+async function showLock(key) {
+  const d = await api('/api/locks/' + encodeURIComponent(key));
+  const l = d.live;
+  out.innerHTML = `<div class="panel"><div class="kv">
+      <span class="muted">lock</span><span class="mono">${esc(key)}</span>
+      <span class="muted">holder</span><span class="mono">${l?.holder ? link('event', l.holder) + ' — ' + esc(l.holderState) : 'free'}</span>
+      <span class="muted">waiting</span><span class="mono">${l?.waiting?.length ? l.waiting.map(w => link('event', w)).join(', ') : 'none'}</span>
+      <span class="muted">ops this run</span><span>${esc(l?.opsThisRun ?? 0)}</span>
+      <span class="muted">temporal</span><span><a href="${esc(d.temporalUi)}" target="_blank">open lock workflow ↗</a></span>
+    </div>${l ? '' : '<p class="muted">No open lock workflow: the key is free.</p>'}</div>`;
+}
+
+// ---------------------------------------------------------------- Analytics
+// Sub-tabs per analytics target, with a pipeline strip (consumer-group lag per target) on top.
+//   DuckDB:     our sink's read-only SQL endpoint, proxied under /api/analytics/duckdb/
+//   ClickHouse: the same console, proxied under /api/analytics/clickhouse/ to ClickHouse HTTP as the
+//               read-only user; plus ClickHouse's own Play UI embedded (or linked)
+//   Deephaven:  live widgets in iframes (http://localhost:10000/iframe/widget/?name=...) and the IDE
+const ANALYTICS = {
+  duckdb: { label: 'DuckDB', api: '/api/analytics/duckdb', limits: 'read-only · max 5000 rows, 10 s' },
+  clickhouse: { label: 'ClickHouse', api: '/api/analytics/clickhouse', final: true,
+                limits: 'read-only user · max 5000 rows, 10 s · use FINAL for one row per entity' },
+  deephaven: { label: 'Deephaven', deephaven: true },
+};
+let duckTables = null, chTables = null, currentApi = ANALYTICS.duckdb.api, lagTimer = null;
+
+async function apiJson(path, opts) {
+  const r = await fetch(path, opts);
+  let body; try { body = await r.json(); } catch { body = { error: `HTTP ${r.status}` }; }
+  if (!r.ok && !body.error) body.error = `HTTP ${r.status}`;
+  return body;
+}
+
+let anaFlow = null;
+function showAnalytics(sub, sql, ctx) {
+  if (!ANALYTICS[sub]) sub = 'duckdb';
+  anaFlow = ctx || null;
+  clearTimeout(mdTimer);
+  setView(anaFlow ? 'flows' : 'analytics');
+  out.classList.add('wide');
+  setHash(anaFlow ? 'flow/' + encodeURIComponent(anaFlow.flow.id) + '/' + sub
+    : 'analytics/' + sub + (sql ? '/' + encodeURIComponent(sql) : ''));
+  const tabs = anaFlow ? '' : Object.entries(ANALYTICS).map(([k, a]) =>
+    `<button class="${k === sub ? 'on' : ''}" onclick="showAnalytics('${k}')">${a.label}</button>`).join('');
+  const head = anaFlow ? sectionCrumbs(anaFlow.flow, sub, `<a onclick="showAnalytics('${sub}')">all tables ›</a>`) : '';
+  const a = ANALYTICS[sub];
+  const strip = '<div class="pipeline" id="pipeline"><span class="muted">pipeline: loading lag…</span></div>'
+    + '<div class="panel" id="reconcile" style="display:none"></div>';
+  clearInterval(lagTimer);
+  lagTimer = setInterval(() => document.getElementById('pipeline') ? loadPipeline() : clearInterval(lagTimer), 5000);
+  if (a.deephaven) {
+    out.innerHTML = `<div class="analytics-root">${head}${strip}${tabs ? `<div class="subtabs">${tabs}</div>` : ''}<div id="dh"><div class="panel muted">Loading…</div></div></div>`;
+    loadPipeline();
+    anaFlow ? showFlowDeephaven() : showDeephaven();
+    return;
+  }
+  currentApi = a.api;
+  const play = sub === 'clickhouse' ? `<div class="panel"><details class="play" id="play">
+      <summary>ClickHouse Play UI</summary>
+      <p class="muted">ClickHouse's own console, served by ClickHouse at <a href="http://localhost:8123/play" target="_blank">localhost:8123/play ↗</a>
+        (opens in a new tab if the frame stays blank). Log in as <code>readonly</code> / <code>readonly</code>.</p>
+      <iframe data-src="http://localhost:8123/play?user=readonly" title="ClickHouse Play"></iframe></details></div>` : '';
+  out.innerHTML = `<div class="analytics-root">${head}${strip}${tabs ? `<div class="subtabs">${tabs}</div>` : ''}
+    <div class="analytics">
+      <aside class="panel browser" id="browser"><div class="muted">Loading tables…</div></aside>
+      <section>
+        <div class="panel">
+          <div class="chips" id="samples"></div>
+          <textarea id="sql" spellcheck="false" placeholder="SELECT * FROM orders LIMIT 10"></textarea>
+          <div class="toolbar"><button class="run" onclick="runSql()">Run</button>
+            <span class="muted">Ctrl/⌘ + Enter · ${esc(a.limits)}</span><span id="status" class="muted"></span></div>
+        </div>
+        <div class="panel" id="results"><span class="muted">Results appear here.</span></div>
+        ${play}
+      </section>
+    </div></div>`;
+  const pd = document.getElementById('play');
+  if (pd) pd.ontoggle = () => { const f = pd.querySelector('iframe'); if (pd.open && !f.src) f.src = f.dataset.src; };
+  loadPipeline();
+  const ta = document.getElementById('sql');
+  ta.value = sql || ta.value;
+  ta.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runSql(); } };
+  loadBrowser(a.api);
+  loadSamples(a.api);
+  if (sql) runSql();
+}
+
+async function loadBrowser(api) {
+  const el = document.getElementById('browser');
+  const d = await apiJson(api + '/tables');
+  if (d.error) { el.innerHTML = `<div class="FAILED">${esc(d.error)}</div>`; return; }
+  if (api === ANALYTICS.clickhouse.api) chTables = d.tables; else duckTables = d.tables;
+  const fin = t => api === ANALYTICS.clickhouse.api && /ReplacingMergeTree/.test(t.engine || '') ? ' FINAL' : '';
+  el.innerHTML = '<h3 style="margin-top:0">Tables</h3>' + d.tables.map(t => `<details ${t.kind === 'root' ? 'open' : ''}>
+      <summary><a onclick="setSql('SELECT * FROM &quot;${esc(t.name)}&quot;${fin(t)} LIMIT 100', true)">${esc(t.name)}</a>
+        <span class="kind">${esc(t.kind)}${t.smType ? ' · ' + esc(t.smType) : ''}</span></summary>
+      <ul>${t.columns.map(c => `<li onclick="insertSql('${esc(c.name)}')"><span>${esc(c.name)}</span><span class="kind">${esc(c.type)}</span></li>`).join('')}</ul>
+    </details>`).join('');
+}
+
+async function loadSamples(api) {
+  const el = document.getElementById('samples');
+  const d = await apiJson(api + '/samples');
+  if (d.error) { el.innerHTML = ''; return; }
+  window._samples = d.samples;
+  el.innerHTML = d.samples.map((s, i) => `<button class="chip" title="${esc(s.sql)}" onclick="setSql(_samples[${i}].sql, true)">${esc(s.title)}</button>`).join('');
+}
+
+function setSql(sql, run) { const ta = document.getElementById('sql'); ta.value = sql; ta.focus(); if (run) runSql(); }
+function insertSql(text) {
+  const ta = document.getElementById('sql'), s = ta.selectionStart, e = ta.selectionEnd;
+  ta.value = ta.value.slice(0, s) + text + ta.value.slice(e); ta.focus(); ta.selectionStart = ta.selectionEnd = s + text.length;
+}
+
+async function runSql() {
+  const sql = document.getElementById('sql').value.trim(), res = document.getElementById('results'), st = document.getElementById('status');
+  if (!sql) return;
+  st.textContent = 'running…';
+  const d = await apiJson(currentApi + '/query', { method: 'POST', body: sql, headers: { 'Content-Type': 'text/plain' } });
+  if (d.error) { st.textContent = ''; res.innerHTML = `<div class="FAILED mono">${esc(d.error)}</div>`; return; }
+  st.textContent = `${d.rows.length} row${d.rows.length === 1 ? '' : 's'}${d.truncated ? ' (truncated)' : ''} · ${d.elapsedMs} ms`;
+  const cell = v => v === null ? '<span class="null">null</span>' : esc(typeof v === 'object' ? JSON.stringify(v) : v);
+  res.innerHTML = d.columns.length === 0 ? '<span class="muted">Statement returned no result set.</span>' :
+    `<table class="results"><tr>${d.columns.map((c, i) => `<th title="${esc(d.types[i])}">${esc(c)}</th>`).join('')}</tr>
+      ${d.rows.map(r => `<tr>${r.map(v => `<td title="${esc(v)}">${cell(v)}</td>`).join('')}</tr>`).join('')}</table>`;
+}
+
+/** Entity page link: the entity's row in its root table (found via /tables, else smType + "s"). */
+async function openInDuckDb(smType, entityId) {
+  if (!duckTables) { const d = await apiJson(ANALYTICS.duckdb.api + '/tables'); duckTables = d.tables || []; }
+  const root = duckTables.find(t => t.kind === 'root' && t.smType === smType)?.name ?? smType + 's';
+  showAnalytics('duckdb', `SELECT * FROM "${root}" WHERE entity_id = '${entityId.replace(/'/g, "''")}'`);
+}
+
+/** Entity page link: the entity's latest row in ClickHouse (root table from /tables, FINAL for one row). */
+async function openInClickHouse(smType, entityId) {
+  if (!chTables) { const d = await apiJson(ANALYTICS.clickhouse.api + '/tables'); chTables = d.tables || []; }
+  const root = chTables.find(t => t.kind === 'root' && t.smType === smType)?.name ?? smType + 's';
+  showAnalytics('clickhouse', `SELECT * FROM ${root} FINAL WHERE entity_id = '${entityId.replace(/'/g, "''")}'`);
+}
+
+/**
+ * Pipeline strip: per sink applied/sec, consumer-group lag and dead-lettered records (DLQ topic per target;
+ * ClickHouse's kafka_errors), Deephaven note, console links and the reconcile buttons.
+ */
+async function loadPipeline() {
+  const el = document.getElementById('pipeline');
+  if (!el) return;
+  const d = await apiJson('/api/analytics/lag');
+  if (!document.getElementById('pipeline')) return;
+  const groups = (d.groups || []).filter(g => g.target !== 'other');
+  const duck = d.sinks?.duckdb || {}, ch = d.sinks?.clickhouse || {}, dlq = d.dlq || {}, by = dlq.byTarget || {};
+  const rate = v => v === null || v === undefined ? '…' : v;
+  const chip = g => `<span class="lag ${g.lag > 0 ? 'behind' : ''}" title="${esc(Object.entries(g.topics).map(([t, v]) =>
+      `${t}: committed ${v.committed}, end ${v.end}`).join('\n'))} · ${esc(g.state)}"><b>${esc(g.group)}</b> lag ${g.lag}</span>`;
+  const duckDlq = Object.entries(by).filter(([t]) => t.startsWith('sink-duckdb')).reduce((a, [, n]) => a + n, 0);
+  const chErr = ch.kafkaErrors ?? 0;
+  el.innerHTML = '<span class="muted">pipeline</span>' + (d.error ? `<span class="FAILED">${esc(d.error)}</span>` : '')
+    + (duck.error ? '' : `<span class="lag" title="entities applied by the DuckDB sink (total ${duck.applied ?? 0})"><b>duckdb</b> ${rate(duck.appliedPerSec)}/s</span>`)
+    + (ch.error ? '' : `<span class="lag" title="snapshots read by ClickHouse's Kafka engine (total ${ch.read ?? 0})"><b>clickhouse</b> ${rate(ch.readPerSec)}/s</span>`)
+    + groups.map(chip).join('')
+    + `<span class="lag ${duckDlq > 0 ? 'bad' : ''}" title="${esc((dlq.topic || 'entity-snapshots.dlq') + (dlq.latestError ? '\nlatest: ' + dlq.latestError : '') + (dlq.error ? '\n' + dlq.error : ''))}"><b>dlq</b> duckdb ${duckDlq}</span>`
+    + `<span class="lag ${chErr > 0 ? 'bad' : ''}" title="ClickHouse rows in kafka_errors (unparsable records)"><b>kafka_errors</b> clickhouse ${chErr}</span>`
+    + `<span class="lag muted" title="${esc(d.deephaven || '')}"><b>deephaven</b> replays from 0</span>`
+    + (d.console?.reachable ? `<a href="${esc(d.console.url)}" target="_blank">Redpanda Console ↗</a>`
+       : `<span class="muted" title="COMPOSE_PROFILES=kafka-ui docker compose up -d redpanda-console">Redpanda Console off</span>`)
+    + (d.clickhousePlay ? `<a href="${esc(d.clickhousePlay)}" target="_blank">ClickHouse Play ↗</a>` : '')
+    + `<button onclick="runReconcile(true)" title="compare the StateStore's terminal entities with DuckDB, publish nothing">Reconcile (dry run)</button>`
+    + `<button onclick="runReconcile(false)" title="republish the current snapshot of terminal entities missing or stale in DuckDB">Reconcile</button>`;
+}
+
+/** Runs ReconcileWorkflow for every typed smType (each in its own worker) and shows the counts. */
+async function runReconcile(dryRun) {
+  const el = document.getElementById('reconcile');
+  if (!el) return;
+  el.style.display = '';
+  el.innerHTML = `<span class="muted">reconciling${dryRun ? ' (dry run)' : ''}…</span>`;
+  const d = await apiJson('/api/analytics/reconcile?dryRun=' + dryRun, { method: 'POST' });
+  if (d.error) { el.innerHTML = `<div class="FAILED">${esc(d.error)}</div>`; return; }
+  const t = d.totals || {};
+  const row = r => r.error ? `<tr><td>${esc(r.smType)}</td><td colspan="7" class="FAILED">${esc(r.error)}</td></tr>`
+    : `<tr><td>${esc(r.smType)}</td><td>${r.scanned}</td><td>${r.terminal}</td><td>${r.missing}</td><td>${r.stale}</td>
+       <td>${r.ahead}</td><td>${r.republished}</td><td class="muted">${r.skipped ? esc(r.skipped) : r.elapsedMs + ' ms'}</td></tr>`;
+  el.innerHTML = `<b>Reconciliation${d.dryRun ? ' (dry run)' : ''}</b> <span class="muted">${esc(d.at)} · ${d.elapsedMs} ms ·
+      scanned ${t.scanned}, missing ${t.missing}, stale ${t.stale}, republished ${t.republished}</span>
+    <table><tr><th>smType</th><th>scanned</th><th>terminal</th><th>missing</th><th>stale</th><th>ahead</th><th>republished</th><th></th></tr>
+      ${(d.reports || []).map(row).join('')}</table>
+    ${(d.skipped || []).length ? `<div class="muted">skipped: ${d.skipped.map(s => esc(s.smType + ' (' + s.reason + ')')).join(', ')}</div>` : ''}`;
+}
+
+/**
+ * Deephaven: live widgets as iframes. The PSK comes from /api/analytics/deephaven/config and is put in the
+ * iframe URLs so they log in by themselves -- fine for local dev only (anyone who can open the page gets it).
+ */
+async function showDeephaven() {
+  const el = document.getElementById('dh');
+  const c = await apiJson('/api/analytics/deephaven/config');
+  if (c.error) { el.innerHTML = `<div class="panel FAILED">${esc(c.error)}</div>`; return; }
+  const psk = encodeURIComponent(c.psk);
+  el.innerHTML = `<div class="panel hint">
+      <a href="${esc(c.ide)}" target="_blank"><b>Open Deephaven IDE ↗</b></a>
+      ${c.reachable ? '' : '<span class="FAILED"> · Deephaven is not reachable (scripts/up.sh &lt;store&gt; --analytics)</span>'}
+      <p style="margin:8px 0 0"><b>Run your own Python:</b> every table below (and <code>ticks</code>, <code>instruments</code>,
+        <code>bars_1m</code>, <code>snapshots</code>, <code>orders_latest</code>, …) is a global in the IDE console, built by
+        <code>infra/deephaven/app.d/concert.py</code>. Starter notebooks (IDE › File Explorer, saved in
+        <code>infra/deephaven/notebooks</code>): ${c.notebooks.map(n => `<code>${esc(n)}</code>`).join(', ')}.</p></div>
+    <div id="dh-all" class="panel muted">Checking which widgets Deephaven has…</div>`;
+  const fields = c.reachable ? await deephavenFields(c) : null;
+  const w = document.getElementById('dh-all'); if (!w) return;
+  const grid = widgetGrid(c, c.widgets, fields);
+  w.outerHTML = grid.html + missingWidgets(grid.gone,
+    'Deephaven has no variable by these names; its app script (infra/deephaven/app.d/concert.py) may have failed to build them: <code>docker compose logs deephaven</code>.');
+  pinScroll(8000);
+}
+
+
+// ---------------------------------------------------------------- Flows: landing page and per-flow pipeline
+
+let flowTimer = null, flowWindow = Number(localStorage.getItem('flowWindow')) || 60, flowSel = null;
+const WINDOWS = [[60, '1m'], [300, '5m'], [900, '15m'], [3600, '1h']];
+
+/** 1,284 · 12.9K · 4.2M */
+function fmt(n) {
+  if (n === null || n === undefined || Number.isNaN(n)) return '–';
+  const a = Math.abs(n);
+  if (a >= 1e6) return (n / 1e6).toFixed(a >= 1e7 ? 0 : 1) + 'M';
+  if (a >= 1e4) return (n / 1e3).toFixed(a >= 1e5 ? 0 : 1) + 'K';
+  return Number.isInteger(n) ? n.toLocaleString() : n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+const rate = n => n === null || n === undefined ? '–' : fmt(n) + '/s';
+const ms = n => n === null || n === undefined ? '–' : n >= 10000 ? (n / 1000).toFixed(0) + ' s' : n >= 1000 ? (n / 1000).toFixed(1) + ' s' : Math.round(n) + ' ms';
+const ago = t => { if (!t) return 'no activity'; const s = Math.round((Date.now() - t) / 1000); return s < 60 ? s + 's ago' : s < 3600 ? Math.round(s / 60) + 'm ago' : Math.round(s / 3600) + 'h ago'; };
+
+/** Status pill: icon + label, never color alone. kind: ok | idle | warn | bad */
+function status(kind, label) {
+  const icon = { ok: '●', idle: '○', warn: '▲', bad: '✕' }[kind];
+  return `<span class="status ${kind}" aria-label="status ${esc(label)}">${icon} ${esc(label)}</span>`;
+}
+
+/** 12–30 point sparkline in the muted hue, latest point in the accent; the title summarizes it. */
+function spark(series, stepSec, unit) {
+  if (!series || !series.length || !series.some(v => v > 0)) return '<svg class="spark" aria-hidden="true"></svg>';
+  const w = 100, h = 24, max = Math.max(...series), n = series.length;
+  const x = i => (i / (n - 1)) * w, y = v => h - (v / max) * (h - 2) - 1;
+  const d = series.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+  const per = s => stepSec ? fmt(Math.round(s / stepSec * 10) / 10) + '/s' : fmt(s);
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+      aria-label="trend: peak ${per(max)}, latest ${per(series[n - 1])}"><title>${unit || ''} peak ${per(max)} · latest ${per(series[n - 1])} · ${stepSec ? stepSec + ' s buckets' : ''}</title>
+    <path d="${d}" vector-effect="non-scaling-stroke"/><circle cx="${x(n - 1)}" cy="${y(series[n - 1])}" r="2.2"/></svg>`;
+}
+
+function windowPicker(onPick) {
+  return `<div class="seg" role="group" aria-label="time window">${WINDOWS.map(([s, l]) =>
+    `<button class="${s === flowWindow ? 'on' : ''}" onclick="flowWindow=${s};localStorage.setItem('flowWindow',${s});${onPick}">${l}</button>`).join('')}</div>`;
+}
+
+// ---------------------------------------------------------------- Flows (ecosystems): landing page, flow page, left pane
+
+let controlFlows = null;              // /api/control/flows: every flow (ecosystem) with its machines and containers
+async function loadControl() { controlFlows = await apiJson('/api/control/flows'); return controlFlows; }
+const ecoById = id => (controlFlows?.flows || []).find(f => f.id === id);
+const ecoOfMachine = mid => (controlFlows?.flows || []).find(f => f.machineFlows.includes(mid));
+const STATE = { running: ['ok', 'Running'], partial: ['warn', 'Partly running'], stopped: ['idle', 'Stopped'], absent: ['idle', 'Not created'] };
+const ecoStatus = f => status(...(STATE[f.state] || ['idle', f.state]));
+const jobRunning = j => j && j.state === 'RUNNING';
+const jobLog = j => j ? `<details ${jobRunning(j) || j.state === 'FAILED' ? 'open' : ''}><summary class="muted">${esc(j.action)}: ${esc(j.state.toLowerCase())}
+    ${j.endedAt ? '· ' + ago(j.endedAt) : ''}</summary><pre class="joblog">${esc(j.log.join('\n'))}</pre></details>` : '';
+
+async function sharedOp(op) {
+  if (op === 'stop' && !confirm('Stop Kinesis, Kafka, DuckDB, ClickHouse and legend-lite? Every running flow stops ingesting and publishing until they are back.')) return;
+  const d = await apiJson('/api/control/shared/' + op, { method: 'POST' });
+  if (d.error) alert(d.error);
+  showFlows();
+}
+function sharedPanel(sh) {
+  if (!sh) return '';
+  const st = { up: status('ok', 'All up'), partial: status('warn', 'Partly up'), down: status('idle', 'Down') }[sh.state];
+  const busy = jobRunning(sh.job);
+  const pill = x => `<span class="svc" title="${esc(x.service)}: ${esc(x.state)}${x.health ? ' (' + esc(x.health) + ')' : ''}">${x.state === 'running'
+    ? (x.health === 'unhealthy' ? status('warn', x.label) : status('ok', x.label)) : status('idle', x.label)}</span>`;
+  const btn = sh.state === 'up'
+    ? `<button class="ghost" onclick="sharedOp('stop')" ${busy || sh.docker ? 'disabled' : ''}>Stop shared services</button>`
+    : `<button class="primary" onclick="sharedOp('start')" ${busy || sh.docker ? 'disabled' : ''}>${busy ? 'Working…' : 'Start shared services'}</button>`;
+  return `<div class="panel"><div class="ops"><b>Shared services</b>${st}<div class="svcs">${sh.services.map(pill).join('')}</div>
+      <span class="spacer" style="flex:1"></span>${btn}</div>
+    ${sh.docker ? `<div class="note">${status('bad', 'No Docker control')} ${esc(sh.docker)}</div>` : ''}
+    ${jobLog(sh.job)}
+    <div class="note">Used by every flow. Starting a flow also brings up Kinesis and Kafka if they're down.</div></div>`;
+}
+
+async function showFlows() {
+  setView('flows'); setHash('flows'); flowSel = null;
+  clearTimeout(flowTimer);
+  if (!document.getElementById('flows-root')) out.innerHTML = '<div class="panel muted">Loading flows…</div>';
+  const [ctl, d, sh] = await Promise.all([loadControl(), apiJson('/api/flows?window=' + flowWindow), apiJson('/api/control/shared')]);
+  if (view !== 'flows' || !location.hash.startsWith('#flows')) return;
+  if (ctl.error || d.error) { out.innerHTML = `<div class="panel FAILED">${esc(ctl.error || d.error)}</div>`; return; }
+  const metrics = {};
+  d.groups.forEach(g => g.flows.forEach(m => metrics[m.id] = m));
+  const step = Math.max(1, d.coveredSec / 30);
+  const card = f => {
+    const ms_ = f.machineFlows.map(id => metrics[id]).filter(Boolean);
+    const sum = k => ms_.reduce((a, m) => a + (m[k] || 0), 0);
+    const series = ms_.length ? ms_[0].series.map((_, i) => ms_.reduce((a, m) => a + (m.series[i] || 0), 0)) : [];
+    const last = Math.max(0, ...ms_.map(m => m.lastSeen || 0)) || null;
+    const errors = sum('errored');
+    const open = `tabindex="0" role="link" onclick="go('flow','${esc(f.id)}')" onkeydown="if(event.key==='Enter')go('flow','${esc(f.id)}')"`;
+    return `<div class="card ${f.state === 'running' || f.state === 'partial' ? '' : 'idle'}" ${open}>
+      <div class="top"><span class="name">${esc(f.label)}</span>${jobRunning(f.job) ? status('warn', f.job.action + '…') : ecoStatus(f)}</div>
+      <div class="muted" style="font-size:12px">${f.machines.length} machine${f.machines.length === 1 ? '' : 's'}${f.eventCatalogs.length
+        ? ` · ${f.machineFlows.length - f.machines.length} event domain${f.machineFlows.length - f.machines.length === 1 ? '' : 's'}` : ''}</div>
+      <div><div class="tile-label">Processed</div><div class="tile-value">${rate(sum('processedPerSec'))}</div></div>
+      ${spark(series, step, 'processed')}
+      <div class="minis"><div><b>${fmt(sum('published'))}</b><span>published</span></div><div><b>${fmt(sum('processed'))}</b><span>processed</span></div>
+        <div><b class="${errors ? 'FAILED' : ''}">${fmt(errors)}</b><span>errors</span></div></div>
+      <div class="muted" style="font-size:11.5px">${ago(last)}</div></div>`;
+  };
+  out.innerHTML = `<div id="flows-root"><div class="crumbs"><h2>Flows</h2><span class="muted">the registered flows: open one to run it</span>
+      <span class="spacer"></span>${windowPicker('showFlows()')}</div>
+    ${sharedPanel(sh)}
+    ${ctl.docker ? '' : ''}
+    <div class="cards">${ctl.flows.map(card).join('')}</div>
+    <div class="note">Each flow has its own Kinesis stream, Kafka topic and Temporal task queues, so flows never share a shard, a partition or a poller.
+      Counts over the last ${fmt(d.coveredSec)} s${d.truncated ? ' (trace read capped)' : ''}.</div></div>`;
+  const busy = jobRunning(sh.job) || ctl.flows.some(f => jobRunning(f.job));
+  flowTimer = setTimeout(() => location.hash.startsWith('#flows') && showFlows(), busy ? 2000 : 5000);
+}
+
+// The flow page: header with Start / Stop / Delete, its job log, infrastructure and machines.
+async function flowOp(id, op) {
+  const f = ecoById(id);
+  if (op === 'delete' && !confirm(`Delete flow ${f?.label || id}?\n\nRemoves its containers, terminates its running workflows, deletes its Kinesis stream `
+      + `${f?.stream || ''} and Kafka topic ${f?.topic || ''}, and purges its state and trace rows. Analytics tables are kept; Start recreates it empty.`)) return;
+  const d = await apiJson(`/api/control/flows/${encodeURIComponent(id)}/${op}`, { method: 'POST' });
+  if (d.error) alert(d.error);
+  showEco(id);
+}
+function flowButtons(f) {
+  const busy = jobRunning(f.job), up = f.state === 'running', none = f.state === 'absent';
+  const dis = c => busy || controlFlows?.docker || c ? 'disabled' : '';
+  return `<div class="ops">
+    <button class="primary" onclick="flowOp('${esc(f.id)}','start')" ${dis(up && f.streamStatus === 'ACTIVE')} title="Bring up Kinesis + Kafka if needed, create ${esc(f.stream)} and ${esc(f.topic)}, start the coordinator and workers">${busy && f.job.action === 'start' ? 'Starting…' : 'Start'}</button>
+    <button class="ghost" onclick="flowOp('${esc(f.id)}','stop')" ${dis(!up && f.state !== 'partial')} title="Stop its data generators and containers; data stays">Stop</button>
+    <button class="danger" onclick="flowOp('${esc(f.id)}','delete')" ${dis(none && f.streamStatus === 'absent')} title="Remove containers, workflows, stream, topic and state rows">Delete flow</button></div>`;
+}
+
+async function showEco(id) {
+  setView('flows'); setHash('flow/' + encodeURIComponent(id));
+  clearTimeout(flowTimer);
+  if (!document.getElementById('eco-root')) out.innerHTML = '<div class="panel muted">Loading flow…</div>';
+  if (!controlFlows) await loadControl();
+  const [f, d] = await Promise.all([apiJson('/api/control/flows/' + encodeURIComponent(id)), apiJson('/api/flows?window=' + flowWindow)]);
+  if (location.hash !== '#flow/' + encodeURIComponent(id)) return;
+  if (f.error) { out.innerHTML = `<div class="panel FAILED">${esc(f.error)}</div>`; return; }
+  const i = controlFlows.flows.findIndex(x => x.id === id); if (i >= 0) controlFlows.flows[i] = { ...controlFlows.flows[i], ...f };
+  updateFlowNav();
+  const metrics = {};
+  d.groups.forEach(g => g.flows.forEach(m => metrics[m.id] = m));
+  const step = Math.max(1, d.coveredSec / 30);
+  const machineCard = mid => {
+    const m = metrics[mid] || { label: mid, style: mid.startsWith('ev:') ? 'event' : 'entity', series: [] };
+    const st = m.errored > 0 ? status('bad', fmt(m.errored) + ' errors') : (m.lastSeen || m.published > 0) ? status('ok', 'Active') : status('idle', 'Idle');
+    const open = `tabindex="0" role="link" onclick="go('flow','${esc(mid)}')" onkeydown="if(event.key==='Enter')go('flow','${esc(mid)}')"`;
+    return `<div class="card" ${open}><div class="top"><span class="name">${esc(m.label || mid)}</span><span class="badge">${esc(m.style)}</span>${st}</div>
+      <div><div class="tile-label">Completions (new → terminal)</div><div class="tile-value">${rate(m.completedPerSec)}</div></div>${spark(m.series, step, 'processed')}
+      <div class="minis"><div><b>${rate(m.processedPerSec)}</b><span>events</span></div><div><b>${ms(m.e2eP95)}</b><span>p95 event</span></div>
+        <div><b>${ms(m.e2eP99)}</b><span>p99 event</span></div></div></div>`;
+  };
+  const svc = x => `<tr><td class="mono">${esc(x.name)}</td><td>${x.state === 'running' ? status('ok', 'running') : x.state === 'absent' ? status('idle', 'not created')
+    : status(x.state === 'restarting' ? 'warn' : 'idle', x.state)}</td><td class="muted">${esc(x.status)}</td></tr>`;
+  out.innerHTML = `<div id="eco-root"><div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span><h2>${esc(f.label)}</h2>
+      ${jobRunning(f.job) ? status('warn', f.job.action + '…') : ecoStatus(f)}<span class="spacer"></span>${flowButtons(f)}</div>
+    ${controlFlows.docker ? `<div class="panel">${status('bad', 'No Docker control')} ${esc(controlFlows.docker)}</div>` : ''}
+    ${f.job ? `<div class="panel">${jobLog(f.job)}</div>` : ''}
+    <div class="panel"><h3>Runs on</h3>
+      <table><tr><th>service</th><th>state</th><th>status</th></tr>${f.services.map(svc).join('')}</table>
+      <div class="kv" style="margin-top:10px">
+        <span class="muted">Kinesis stream</span><span class="mono">${esc(f.stream)} <span class="muted">(${esc((f.streamStatus || '').toLowerCase())})</span></span>
+        <span class="muted">Kafka topic</span><span class="mono">${esc(f.topic)}</span>
+        <span class="muted">coordinator queue</span><span class="mono">${esc(f.orchestrationQueue)}</span>
+        <span class="muted">worker queues</span><span class="mono">${esc(f.taskQueues.filter(q => q !== f.orchestrationQueue).join(', '))}</span></div>
+      <div class="note">Nothing here is shared with another flow: its own stream, topic, coordinator, task queues and lock workflows (<span class="mono">lock:${esc(f.id)}:&lt;key&gt;</span>).</div></div>
+    <div class="group-title">Machines and event domains</div>
+    <div class="cards">${f.machineFlows.map(machineCard).join('')}</div>
+    <div class="note">Open one for its pipeline, data generator, coordinator and worker. Last ${fmt(d.coveredSec)} s.</div></div>`;
+  flowTimer = setTimeout(() => location.hash === '#flow/' + encodeURIComponent(id) && showEco(id), jobRunning(f.job) ? 1500 : 4000);
+}
+
+// The left pane of every page inside a flow: the flow, its machines, models, diagrams and flow diagram.
+let studioUrl = null;
+function flowCtx() {
+  const m = location.hash.match(/^#flow\/([^/]+)(?:\/(.*))?$/);
+  if (!m) return null;
+  const id = decodeURIComponent(m[1]), rest = m[2] || '';
+  const eco = ecoById(id) || ecoOfMachine(id);
+  return eco ? { eco, id, rest } : null;
+}
+function updateFlowNav() {
+  const nav = document.getElementById('flownav'), page = document.getElementById('page');
+  const c = flowCtx();
+  nav.hidden = !c; page.classList.toggle('flowpage', !!c);
+  if (!c) return;
+  const e = c.eco, here = c.id === e.id ? (c.rest || 'overview') : 'm:' + c.id;
+  const a = (key, label, href, cls = '') => `<a class="${cls} ${here === key ? 'on' : ''}" onclick="go('flow','${esc(href)}')">${esc(label)}</a>`;
+  nav.innerHTML = `<h4>Flow</h4>${a('overview', e.label, e.id)}
+    <div class="sect"><h4>Machines</h4>${e.machineFlows.map(mid => a('m:' + mid, mid, mid, 'sub')).join('')}</div>
+    <div class="sect"><h4>Model</h4>
+      ${a('models', 'Models (Pure query)', e.id + '/models')}
+      ${a('diagrams', 'Diagrams', e.id + '/diagrams')}
+      ${a('flowdiagram', 'Flow diagram', e.id + '/flowdiagram')}
+      ${studioUrl ? `<a href="${esc(studioUrl)}" target="_blank" title="concert's models in Legend Studio Lite">Legend Studio ↗</a>` : ''}</div>
+    <div class="sect"><h4>Runs on</h4><div class="muted mono" style="font-size:11.5px;padding:0 8px">${esc(e.stream)}<br>${esc(e.topic)}<br>${esc(e.orchestrationQueue)}</div></div>`;
+}
+// Hashes the pages set themselves only update the nav; any other change (back / forward, an edited URL) opens its page.
+let codeHash = null;
+function setHash(h) { codeHash = '#' + String(h).replace(/^#/, ''); location.hash = h; }
+window.addEventListener('hashchange', () => { updateFlowNav(); if (location.hash !== codeHash) { codeHash = location.hash; route(); } });
+
+// Models of a flow: the Model query over all of its types.
+async function showEcoModels(id) {
+  const e = ecoById(id);
+  const types = [...new Set(await Promise.all(e.machineFlows.map(async mid => (await meta(mid)).flow?.snapshotTypes || [])).then(x => x.flat()))];
+  showModel(undefined, false, { eco: true, flow: { id: e.id, label: e.label, snapshotTypes: types } });
+}
+
+// Diagrams of a flow: its machines' states, transition classes and Pure model; its event catalogs' flow and model.
+async function showEcoDiagrams(id, sel) {
+  const e = ecoById(id);
+  setView('flows'); clearTimeout(flowTimer);
+  diagramsData = diagramsData || await apiJson('/api/model/diagrams');
+  const machines = diagramsData.machines.filter(m => e.machines.includes(m.smType));
+  const events = diagramsData.eventCatalogs.filter(c => e.eventCatalogs.includes(c.name));
+  sel = sel || machines[0]?.smType || (events[0] && 'events:' + events[0].name);
+  setHash('flow/' + encodeURIComponent(id) + '/diagrams' + (sel ? '/' + encodeURIComponent(sel) : ''));
+  const tab = (k, l) => `<button class="${k === sel ? 'on' : ''}" onclick="showEcoDiagrams('${esc(id)}','${esc(k)}')">${esc(l)}</button>`;
+  out.innerHTML = `<div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span><a onclick="go('flow','${esc(id)}')">${esc(e.label)}</a>
+      <span class="sep">›</span><h2>Diagrams</h2></div>
+    <div class="subtabs">${machines.map(m => tab(m.smType, m.smType)).join('')}${events.map(c => tab('events:' + c.name, c.name)).join('')}</div>
+    <div id="dg-body"></div>`;
+  await renderDiagram(sel, machines, events);
+}
+
+// Flow diagram: every machine's state machine as declared in Pure (concert::sm transitions), and the event flows.
+async function showEcoFlowDiagram(id) {
+  const e = ecoById(id);
+  setView('flows'); clearTimeout(flowTimer);
+  diagramsData = diagramsData || await apiJson('/api/model/diagrams');
+  const machines = diagramsData.machines.filter(m => e.machines.includes(m.smType));
+  const events = diagramsData.eventCatalogs.filter(c => e.eventCatalogs.includes(c.name));
+  out.innerHTML = `<div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span><a onclick="go('flow','${esc(id)}')">${esc(e.label)}</a>
+      <span class="sep">›</span><h2>Flow diagram</h2><span class="muted">the state machines as declared in Pure: each transition's event and payload class</span></div>
+    ${machines.map((m, i) => `<div class="panel"><h3 class="mono">${esc(m.smType)} <span class="muted" style="font-weight:400">${esc(m.root || '')}</span></h3>
+      <div id="fd-m${i}" style="overflow:auto"></div></div>`).join('')}
+    ${events.map((c, i) => `<div class="panel"><h3 class="mono">${esc(c.name)} <span class="muted" style="font-weight:400">event flow</span></h3>
+      <div id="fd-e${i}" style="overflow:auto"></div></div>`).join('')}
+    ${!machines.length && !events.length ? '<div class="panel muted">No state machines or event catalogs in this flow.</div>' : ''}`;
+  const draw = async (elId, src) => { const el = document.getElementById(elId); if (!el || !src) return;
+    try { el.innerHTML = (await mermaid.render(elId + Date.now(), src)).svg; } catch (err) { el.textContent = 'diagram: ' + err; } };
+  for (const [i, m] of machines.entries()) await draw('fd-m' + i, m.stateMermaid);
+  for (const [i, c] of events.entries()) await draw('fd-e' + i, c.flowMermaid);
+}
+
+/** Node card in the pipeline. rows: [[label, value], ...] */
+function node(key, title, st, label, value, rows, series, stepSec) {
+  return `<div class="node ${flowSel === key ? 'sel' : ''} ${st.startsWith('<span class="status bad') ? 'bad' : ''}" tabindex="0" role="button"
+      aria-label="${esc(title)} details" onclick="openNode('${key}')" onkeydown="if(event.key==='Enter')openNode('${key}')"
+      title="${NODE_PAGES.includes(key) ? 'open ' + esc(title) + ' for this flow' : 'details below'}">
+    <div class="hd"><span class="title">${esc(title)}</span>${st}</div>
+    <div><div class="tile-label">${esc(label)}</div><div class="tile-value">${value}</div></div>
+    ${series !== undefined ? spark(series, stepSec) : ''}
+    <div class="rows">${rows.map(([k, v]) => `<span>${esc(k)}</span><span>${v}</span>`).join('')}</div></div>`;
+}
+const wire = live => `<div class="wire ${live ? 'live' : ''}" aria-hidden="true"></div>`;
+let lastFlow = null;
+function selectNode(k) { flowSel = flowSel === k ? null : k; if (lastFlow) renderFlow(lastFlow); }
+const NODE_PAGES = ['coordinator', 'worker', 'legend', 'deephaven'];
+function openNode(k) {
+  if (NODE_PAGES.includes(k) && lastFlow) { go('flow', lastFlow.flow.id + '/' + k); return; }
+  selectNode(k);
+}
+
+async function showFlow(id) {
+  setView('flows'); setHash('flow/' + encodeURIComponent(id));
+  clearTimeout(flowTimer);
+  if (!document.getElementById('flow-root') || lastFlow?.flow.id !== id) {
+    out.innerHTML = '<div class="panel muted">Loading flow…</div>'; lastFlow = null;
+  }
+  const d = await apiJson('/api/flows/' + encodeURIComponent(id) + '?window=' + flowWindow);
+  if (location.hash !== '#flow/' + encodeURIComponent(id)) return;
+  if (d.error) { out.innerHTML = `<div class="panel FAILED">${esc(d.error)}</div>`; return; }
+  lastFlow = d;
+  renderFlow(d);
+  flowTimer = setTimeout(() => location.hash === '#flow/' + encodeURIComponent(id) && showFlow(id), 3000);
+}
+
+function renderFlow(d) {
+  const f = d.flow, p = d.publisher, k = d.kinesis, c = d.coordinator, w = d.worker, kf = d.kafka, s = d.stores;
+  const step = Math.max(1, d.coveredSec / 30);
+  const active = (x, label = 'Active') => x > 0 ? status('ok', label) : status('idle', 'Idle');
+
+  const pubSt = p.error ? status('bad', 'Unreadable') : active(p.perSec);
+  const kinSt = k.error ? status('bad', 'Unreadable') : k.transitP95 > 1000 ? status('warn', 'Slow') : active(k.perSec);
+  const coordSt = c.pollers === 0 ? status('bad', 'No pollers') : active(c.perSec);
+  const workSt = w.pollers === 0 ? status('bad', 'No workers') : w.errored > 0 ? status('bad', fmt(w.errored) + ' errors') : active(w.perSec);
+  const kLag = Object.values(kf.lagByTarget || {}).reduce((a, b) => a + b, 0);
+  const kafkaSt = kf.error ? status('bad', 'Down') : kf.dlq > 0 ? status('warn', 'DLQ ' + fmt(kf.dlq)) : kLag > 1000 ? status('warn', 'Lag') : active(kf.perSec);
+  const duck = s.duckdb, ch = s.clickhouse, dh = s.deephaven;
+  const lg = d.legend || {};
+  const legendSt = !lg.reachable ? status('bad', 'legend-lite down') : duck.error || ch.error ? status('bad', (duck.error ? 'DuckDB' : 'ClickHouse') + ' down')
+    : duck.lag > 1000 ? status('warn', 'Lag') : ch.kafkaErrors > 0 ? status('warn', fmt(ch.kafkaErrors) + ' parse errors')
+    : active(Math.max(duck.perSec || 0, ch.perSec || 0));
+  const dhSt = dh.reachable ? status('ok', 'Up') : status('bad', 'Down');
+
+  const nodes = [
+    node('publisher', 'Publisher', pubSt, 'Events published', rate(p.perSec),
+      [[p.coveredSec < d.windowSec ? `last ${fmt(p.coveredSec)} s (tailing)` : 'in window', fmt(p.published)], ['source', 'Kinesis tail']],
+      p.series, Math.max(1, p.coveredSec / 30)),
+    wire(p.perSec > 0),
+    node('kinesis', 'Kinesis', kinSt, 'Records in', rate(k.perSec),
+      [['transit p50', ms(k.transitP50)], ['transit p95', ms(k.transitP95)], ['shards', fmt(k.shards)]]),
+    wire(c.perSec > 0),
+    node('coordinator', 'Coordinator', coordSt, 'Events dispatched', rate(c.perSec),
+      [['in window', fmt(c.dispatched)], ['duplicates', fmt(c.duplicates)], ['lock waits', fmt(c.lockWaits)], ['pollers', fmt(c.pollers)]], c.series, step),
+    wire(w.perSec > 0),
+    node('worker', 'Worker', workSt, 'Events processed', rate(w.perSec),
+      [['processed', fmt(w.processed)], ['errored', fmt(w.errored)], ['rejected', fmt(w.rejected)], ['p95 e2e', ms(w.e2eP95)], ['pollers', fmt(w.pollers)]], w.series, step),
+    wire(kf.perSec > 0),
+    node('kafka', 'Kafka', kafkaSt, 'Topic TPS (this flow)', rate(kf.perSec),
+      [['this flow', rate(kf.flowPerSec)], ['consumer lag', fmt(kLag)], ['DLQ', fmt(kf.dlq)]]),
+    `<div class="fan"><div class="bracket ${kf.perSec > 0 ? 'live' : ''}" aria-hidden="true"></div><div class="stores">
+      ${node('legend', 'Legend lite', legendSt, 'Rows: DuckDB / ClickHouse', `${fmt(duck.volume)} / ${fmt(ch.volume)}`,
+        [['DuckDB applied', rate(duck.perSec)], ['DuckDB lag', fmt(duck.lag)], ['CH latency p50', ms(ch.latencyP50)],
+         ['CH latency p95', ms(ch.latencyP95)], ['CH ingested', rate(ch.perSec)]])}
+      ${node('deephaven', 'Deephaven', dhSt, 'Volume', fmt(dh.volume) + '<small>records</small>', [['latency', '–']])}
+    </div></div>`,
+  ].join('');
+
+  const eco = ecoOfMachine(f.id);
+  out.innerHTML = `<div id="flow-root"><div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span>
+      ${eco ? `<a onclick="go('flow','${esc(eco.id)}')">${esc(eco.label)}</a><span class="sep">›</span>` : ''}
+      <h2 class="mono">${esc(f.label)}</h2><span class="badge">${esc(f.style)}</span><span class="spacer"></span>
+      ${d.studio ? `<a href="${esc(d.studio.url)}" target="_blank" title="Opens ${esc(d.studio.project)} (concert's models plus the generated Legend store layer) read-only in Legend Studio Lite, which runs in your browser; the first time it publishes the project there">Legend Studio ↗</a>` : ''}
+      ${windowPicker(`showFlow('${esc(f.id)}')`)}</div>
+    ${generatorPanel(d)}
+    ${machineWidget(d)}
+    <div class="panel"><div class="flowmap">${nodes}</div>
+      <div class="note">Last ${fmt(d.coveredSec)} s${d.truncated ? ' (trace read capped: newest rows only)' : ''}${d.traceSample < 1 ? ` · trace sampling ${d.traceSample}: counts scaled` : ''}.
+        Click Coordinator, Worker, Legend lite or Deephaven to open it for this flow; the others show details below. Legend lite runs one Legend query on both DuckDB and ClickHouse. Kafka is this flow's own topic (${esc(kf.topic || '')}); ClickHouse latency is completed → ingested.</div></div>
+    <div class="drill">${drill(d)}</div></div>`;
+}
+
+/** The state machine widget: instances completed (initial -> terminal) per second, their lifetime, and per-event latency. */
+function machineWidget(d) {
+  const m = d.machine; if (!m) return '';
+  const step = Math.max(1, d.coveredSec / 30);
+  const tile = (label, value, sub) => `<div class="mtile"><div class="tile-label">${label}</div><div class="tile-value">${value}</div>${sub ? `<div class="muted" style="font-size:11.5px">${sub}</div>` : ''}</div>`;
+  const msv = v => v === null || v === undefined ? '–' : fmt(Math.round(v)) + '<small> ms</small>';
+  return `<div class="panel"><div class="ops"><b>State machine</b><span class="mono muted">${esc(m.initial || '?')} → ${esc((m.terminal || []).join(' | ') || '?')}</span></div>
+    <div class="mtiles">
+      <div class="mtile wide">${tile('Completions (new → terminal)', rate(m.completedPerSec), fmt(m.completed) + ' in the last ' + fmt(d.coveredSec) + ' s')}${spark(m.completedSeries, step, 'completed')}</div>
+      ${tile('Instance lifetime p50', msv(m.lifetimeP50), m.lifetimeSamples ? fmt(m.lifetimeSamples) + (m.lifetimeSamples === 1 ? ' instance' : ' instances') + ' started and finished in the window' : 'no instance started and finished in the window')}
+      ${tile('Instance lifetime p95', msv(m.lifetimeP95), '')}
+      ${tile('Event latency p50', msv(m.latencyP50), fmt(m.latencySamples) + ' events')}
+      ${tile('Event latency p95', msv(m.latencyP95), '')}
+      ${tile('Event latency p99', msv(m.latencyP99), '')}
+    </div>
+    <div class="note">Event latency: one event, from the coordinator reading it off Kinesis to its transition being persisted (lock waits included).
+      Lifetime: the instance's first transition out of ${esc(m.initial || 'the initial state')} to its terminal one.${d.traceSample < 1 ? ' Counts scaled for trace sampling.' : ''}</div></div>`;
+}
+
+const traceRows = rows => rows.length ? `<table><tr><th>time</th><th>event</th><th>stage</th><th>entity</th><th>detail</th></tr>
+  ${rows.map(t => `<tr><td class="mono">${time(t.tsMillis)}</td><td class="mono">${link('event', t.eventId)}</td><td>${chip(t.stage)}</td>
+    <td class="mono">${t.workflowId && !t.workflowId.startsWith('evproc:') ? link('entity', t.workflowId) : esc(t.workflowId || '')}</td>
+    <td class="mono muted">${esc(t.detail)}</td></tr>`).join('')}</table>` : '<div class="muted">None in this window.</div>';
+
+function drill(d) {
+  const f = d.flow, w = d.worker, kf = d.kafka, s = d.stores;
+  const types = f.snapshotTypes.map(t => `'${t}'`).join(', ');
+  const chSql = `SELECT * FROM entity_snapshots WHERE sm_type IN (${types}) ORDER BY ingested_at DESC LIMIT 100`;
+  const duckTable = (s.duckdb.tables || [])[0];
+  const duckSql = duckTable ? `SELECT * FROM "${duckTable}" ORDER BY completed_at DESC NULLS LAST LIMIT 100` : '';
+  const sql = (store, q) => `showAnalytics('${store}', ${JSON.stringify(q).replace(/"/g, '&quot;')})`;
+  switch (flowSel) {
+    case 'publisher': case 'kinesis': return `<div class="panel"><h3>${flowSel === 'publisher' ? 'Publisher' : 'Kinesis'}</h3><div class="kv">
+        <span class="muted">stream</span><span class="mono">${esc(d.kinesis.stream)}</span>
+        <span class="muted">published</span><span>${fmt(d.publisher.published)} in ${fmt(d.publisher.coveredSec)} s (${rate(d.publisher.perSec)})</span>
+        <span class="muted">transit p50 / p95</span><span>${ms(d.kinesis.transitP50)} / ${ms(d.kinesis.transitP95)} <span class="muted">(producer timestamp → coordinator read)</span></span>
+        <span class="muted">shards tailed</span><span>${fmt(d.kinesis.shards)}</span></div>
+        ${d.publisher.error ? `<div class="FAILED" style="margin-top:8px">${esc(d.publisher.error)}</div>` : ''}
+        <div class="note">Published counts come from the dashboard tailing the stream from LATEST, independent of the coordinator's checkpoint.</div></div>`;
+    default: return `${d.errors.length ? `<div class="panel"><h3>Failed and rejected in ${esc(f.label)}</h3>${traceRows(d.errors)}</div>` : ''}
+      <div class="panel"><h3>Recent events in ${esc(f.label)}</h3>${traceRows(d.recent)}</div>`;
+  }
+}
+
+
+// ---------------------------------------------------------------- Generate data flow (on the flow page)
+
+let genForm = JSON.parse(localStorage.getItem('genForm') || '{"rate":2,"duration":60,"errors":false}');
+function generatorPanel(d) {
+  const g = d.generator || {}, r = g.run, f = d.flow;
+  if (!g.available) return `<div class="panel muted">No test data generator for ${esc(f.label)}: it has no sample flows and no state machine to walk.</div>`;
+  const noWorker = d.worker && d.worker.pollers === 0;
+  const noTemporal = d.worker && (d.worker.pollers === null || d.worker.pollers === undefined);
+  const how = { samples: `replays ${esc((g.samples || []).join(', '))}`, trading: 'trading order flow (submit → ack → route → fills → allocate → close)',
+                walk: 'walks the state machine to each terminal state' }[g.available];
+  if (r && r.running) {
+    const pct = Math.min(100, Math.round(r.elapsedSec * 100 / r.durationSec));
+    return `<div class="panel"><div class="genbar"><b>Generating</b>${status('ok', 'Running')}
+        <div class="progress" title="${r.elapsedSec}s of ${r.durationSec}s"><div style="width:${pct}%"></div></div>
+        <span>${fmt(r.elapsedSec)} / ${fmt(r.durationSec)} s · ${fmt(r.instances)} instances · ${fmt(r.sent)} events sent${r.errors ? ` · ${fmt(r.injected)} failures injected` : ''}${r.failed ? ` · <span class="FAILED">${fmt(r.failed)} put failures</span>` : ''}</span>
+        <span class="spacer" style="flex:1"></span><button class="ghost" onclick="genStop('${esc(f.id)}')">Stop</button></div>
+      ${r.lastError ? `<div class="FAILED note">${esc(r.lastError)}</div>` : ''}
+      <div class="note">run <span class="mono">${esc(r.runId)}</span> · ${how}</div></div>`;
+  }
+  const opt = (v, cur, l) => `<option value="${v}" ${v == cur ? 'selected' : ''}>${l}</option>`;
+  return `<div class="panel"><div class="genbar">
+      <button class="primary" onclick="genStart('${esc(f.id)}')" ${noWorker || noTemporal ? `disabled title="${noTemporal ? 'Temporal is not reachable' : 'start its worker first'}"` : ''}>Generate data flow</button>
+      <label>rate <input type="number" id="gen-rate" min="0.1" max="200" step="0.5" value="${genForm.rate}"> instances/s</label>
+      <label>for <select id="gen-duration">${opt(30, genForm.duration, '30 s')}${opt(60, genForm.duration, '1 min')}${opt(300, genForm.duration, '5 min')}${opt(900, genForm.duration, '15 min')}${opt(3600, genForm.duration, '1 h')}</select></label>
+      <label title="${esc((g.errorSamples || []).join(', ') || 'invalid transitions')}"><input type="checkbox" id="gen-errors" ${genForm.errors ? 'checked' : ''}> inject failures</label>
+      ${r && !r.running ? `<span class="muted">last run: ${fmt(r.instances)} instances, ${fmt(r.sent)} events in ${fmt(r.elapsedSec)} s</span>` : ''}</div>
+    ${noTemporal ? `<div class="note">${status('bad', 'Temporal unreachable')} the dashboard can't reach Temporal, so nothing would dispatch generated events: generating is off until it's back.</div>` : ''}
+    ${noWorker ? `<div class="note">${status('bad', 'No worker')} nothing polls <span class="mono">${esc(d.worker.taskQueue)}</span>, so generating is off:
+        its events would wait in Temporal, each holding a dispatch slot, until they starve every other flow.
+        ${ecoOfMachine(f.id) ? `<a onclick="go('flow','${esc(ecoOfMachine(f.id).id)}')">Start the ${esc(ecoOfMachine(f.id).label)} flow</a> first.` : 'Start its worker first.'}</div>` : ''}
+    <div class="note">Publishes to ${esc(d.kinesis.stream)}: ${how}.</div></div>`;
+}
+async function genStart(id) {
+  genForm = { rate: Number(document.getElementById('gen-rate').value) || 2, duration: Number(document.getElementById('gen-duration').value),
+              errors: document.getElementById('gen-errors').checked };
+  localStorage.setItem('genForm', JSON.stringify(genForm));
+  const d = await apiJson(`/api/flows/${encodeURIComponent(id)}/generate?rate=${genForm.rate}&duration=${genForm.duration}&errors=${genForm.errors}`, { method: 'POST' });
+  if (d.error) alert(d.error);
+  showFlow(id);
+}
+async function genStop(id) { await apiJson(`/api/flows/${encodeURIComponent(id)}/generate/stop`, { method: 'POST' }); showFlow(id); }
+
+// ---------------------------------------------------------------- flow sections: coordinator, worker, stores
+
+const SECTION_TITLES = { coordinator: 'Coordinator', worker: 'Worker', legend: 'Legend lite', deephaven: 'Deephaven' };
+const flowMeta = {};
+async function meta(id) { return flowMeta[id] ||= await apiJson('/api/flows/' + encodeURIComponent(id) + '/meta'); }
+
+function sectionCrumbs(f, sec, extra = '') {
+  const tabs = NODE_PAGES.map(k => `<button class="${k === sec ? 'on' : ''}" onclick="go('flow','${esc(f.id)}/${k}')">${SECTION_TITLES[k]}</button>`).join('');
+  const eco = ecoOfMachine(f.id);
+  return `<div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span>
+      ${eco ? `<a onclick="go('flow','${esc(eco.id)}')">${esc(eco.label)}</a><span class="sep">›</span>` : ''}<a class="mono" onclick="go('flow','${esc(f.id)}')">${esc(f.label)}</a>
+      <span class="sep">›</span><h2>${SECTION_TITLES[sec]}</h2><span class="spacer"></span>${extra}</div>
+    <div class="subtabs">${tabs}</div>`;
+}
+
+async function showFlowSection(id, sec) {
+  clearTimeout(flowTimer);
+  const m = await meta(id);
+  if (m.error) { out.innerHTML = `<div class="panel FAILED">${esc(m.error)}</div>`; return; }
+  if (sec === 'deephaven') { showAnalytics(sec, undefined, m); return; }
+  if (sec === 'legend' || sec === 'duckdb' || sec === 'clickhouse') { showModel(undefined, true, m); return; }
+  setView('flows'); setHash('flow/' + encodeURIComponent(id) + '/' + sec);
+  if (sec === 'coordinator') showCoordinator(m.flow); else showWorker(m.flow);
+}
+
+// Coordinator: serial key queues, workflows by status, task queues, ingest consumers
+let lockFilter = '', showFreeLocks = false, lastCoord = null;
+async function showCoordinator(f) {
+  const here = '#flow/' + encodeURIComponent(f.id) + '/coordinator';
+  clearTimeout(flowTimer);
+  if (document.getElementById('coord-root')?.dataset.flow !== f.id) {
+    lastCoord = null;
+    out.innerHTML = `<div id="coord-root" data-flow="${esc(f.id)}">${sectionCrumbs(f, 'coordinator', windowPicker(`showCoordinator(flowMeta['${esc(f.id)}'].flow)`))}
+      <div class="panel"><h3>Serial key queues</h3>
+        <div class="filters"><input id="lock-filter" placeholder="filter by key or event id" value="${esc(lockFilter)}" oninput="lockFilter=this.value;renderCoordinator()">
+          <label><input type="checkbox" ${showFreeLocks ? 'checked' : ''} onchange="showFreeLocks=this.checked;renderCoordinator()"> show free keys</label>
+          <span id="lock-summary" class="muted"></span></div><div id="locks" class="muted">Loading Temporal state…</div></div>
+      <div id="coord"></div></div>`;
+  }
+  const d = await apiJson(`/api/flows/${encodeURIComponent(f.id)}/temporal?window=${Math.max(300, flowWindow)}`);
+  if (location.hash !== here) return;
+  lastCoord = { f, d };
+  renderCoordinator();
+  flowTimer = setTimeout(() => location.hash === here && showCoordinator(f), 10000);
+}
+function renderCoordinator() {
+  if (!lastCoord) return;
+  const { f, d } = lastCoord;
+  const el = document.getElementById('coord');
+  if (d.error) { el.innerHTML = `<div class="panel FAILED">${esc(d.error)}</div>`; return; }
+  const q = t => t?.error ? `<span class="FAILED">${esc(t.error)}</span>` : `${fmt(t?.pollers)} pollers${t?.backlog !== undefined ? ` · backlog ${fmt(t.backlog)} · add ${rate(t.addRate)} · dispatch ${rate(t.dispatchRate)}` : ''}`;
+  const busy = d.locks.filter(l => l.queued > 0), free = d.locks.length - busy.length;
+  const lf = lockFilter.toLowerCase();
+  const shown = (showFreeLocks ? d.locks : busy).filter(l => !lf || l.lockKey.toLowerCase().includes(lf)
+      || (l.holder || '').toLowerCase().includes(lf) || (l.waiting || []).some(w => w.toLowerCase().includes(lf)));
+  const evLink = id => link('event', id);
+  const wfLink = w => w.workflowId.startsWith('evproc:') ? `<span class="mono">${esc(w.workflowId)}</span>` : link('entity', w.workflowId);
+  const wfTable = rows => Array.isArray(rows) ? (rows.length ? `<table><tr><th>workflow</th><th>status</th><th>started</th><th>history</th><th></th></tr>
+      ${rows.map(w => `<tr><td class="mono">${wfLink(w)}</td><td>${chip(w.status)}</td><td class="mono">${time(w.startMillis)}</td><td>${w.historyLength ? fmt(w.historyLength) : "–"}</td>
+        <td><a href="${esc(w.temporalUi)}" target="_blank">Temporal ↗</a></td></tr>`).join('')}</table>` : '<div class="muted">None.</div>')
+      : `<div class="FAILED">${esc(rows.error)}</div>`;
+  document.getElementById('lock-summary').textContent =
+    `${fmt(busy.length)} busy · ${fmt(free)} free of ${fmt(d.locks.length)} keys this flow waited on · ${fmt(d.openLocks)} lock workflows open in total`;
+  document.getElementById('locks').innerHTML = `${shown.length ? `<table><tr><th>lock key</th><th>holder</th><th>holder state</th><th>waiting</th><th>queue</th><th></th></tr>
+        ${shown.map(l => `<tr><td class="mono">${link('lock', l.lockKey)}</td><td class="mono">${l.holder ? evLink(l.holder) : '<span class="muted">free</span>'}</td>
+          <td class="muted">${esc(l.holderState || l.error || '')}</td><td>${fmt((l.waiting || []).length)}</td>
+          <td class="mono mono-list">${(l.waiting || []).slice(0, 5).map(evLink).join('')}${(l.waiting || []).length > 5 ? '…' : ''}</td>
+          <td><a href="${esc(l.temporalUi)}" target="_blank">Temporal ↗</a></td></tr>`).join('')}</table>`
+        : `<div class="muted">${d.locks.length ? 'No key is held or queued right now' + (lf ? ' matching the filter' : '') + '.' : 'No lock waits for this flow in the window.'}</div>`}`;
+  el.innerHTML = `
+    <div class="grid2">
+      <div class="panel"><h3>Workflows <a href="${esc(d.temporalUi)}" target="_blank" style="font-size:12px;font-weight:400">Temporal UI ↗</a></h3>
+        <div class="stats">${Object.entries(d.workflows).map(([k, v]) => `<div><b>${fmt(v)}</b><span>${esc(k)}</span></div>`).join('') || '<span class="muted">visibility not available</span>'}</div>
+        <div class="note mono">${esc(d.query)}</div></div>
+      <div class="panel"><h3>Task queues</h3><table><tr><th>queue</th><th>workflow tasks</th><th>activity tasks</th></tr>
+        ${d.taskQueues.map(t => `<tr><td class="mono">${esc(t.name)}</td><td>${q(t.workflow)}</td><td>${q(t.activity)}</td></tr>`).join('')}</table></div>
+    </div>
+    <div class="grid2" style="margin-top:16px">
+      <div class="panel"><h3>Running</h3>${wfTable(d.running)}</div>
+      <div class="panel"><h3>Failed / terminated / timed out</h3>${wfTable(d.failed)}</div>
+    </div>
+    <div class="panel" style="margin-top:16px"><h3>Ingest <span class="mono muted" style="font-weight:400">${esc(d.ingest.workflowId)}</span>
+        <a href="${esc(d.ingest.temporalUi)}" target="_blank" style="font-size:12px;font-weight:400">Temporal ↗</a></h3>
+      ${d.ingest.error ? `<div class="FAILED">${esc(d.ingest.error)}</div>` : `<div class="muted">supervisor ${chip(d.ingest.status)} · history ${fmt(d.ingest.historyLength)} events</div>
+      <table><tr><th>shard consumer</th><th>activity</th><th>state</th><th>attempt</th><th>last heartbeat</th><th>last failure</th></tr>
+        ${(d.ingest.consumers || []).map(a => `<tr><td class="mono">${esc(a.activityId)}</td><td>${esc(a.type)}</td><td>${chip(a.state)}</td><td>${a.attempt}</td>
+          <td class="mono">${a.lastHeartbeatMillis ? ago(a.lastHeartbeatMillis) : '–'}</td><td class="mono muted">${esc(a.lastFailure || '')}</td></tr>`).join('')}</table>`}
+    </div>`;
+}
+
+// Worker: failures grouped by stage and message; click to narrow down
+let wf = { stage: null, group: null, text: '' };
+async function showWorker(f) {
+  const here = '#flow/' + encodeURIComponent(f.id) + '/worker';
+  clearTimeout(flowTimer);
+  if (document.getElementById('worker-root')?.dataset.flow !== f.id) {
+    if (lastFailures?.flow.id !== f.id) wf = { stage: null, group: null, text: '' };
+    lastFailures = null;
+    out.innerHTML = `<div id="worker-root" data-flow="${esc(f.id)}">${sectionCrumbs(f, 'worker', windowPicker(`showWorker(flowMeta['${esc(f.id)}'].flow)`))}
+      <div class="panel"><div class="filters" id="wf-stages"></div>
+        <div class="filters"><input id="wf-text" placeholder="narrow down: event id, entity, message" value="${esc(wf.text)}"
+          oninput="wf.text=this.value;renderWorker()"><span id="wf-summary" class="muted"></span></div></div>
+      <div class="panel"><h3>Failure groups <span class="muted" style="font-weight:400;font-size:12px">click one to see its events</span></h3><div id="wf-groups" class="muted">Loading…</div></div>
+      <div class="panel"><h3 id="wf-events-title">Failed events</h3><div id="wf-events"></div></div></div>`;
+  }
+  const d = await apiJson(`/api/flows/${encodeURIComponent(f.id)}/failures?window=${Math.max(300, flowWindow)}`);
+  if (location.hash !== here) return;
+  if (d.error) { document.getElementById('wf-groups').innerHTML = `<span class="FAILED">${esc(d.error)}</span>`; return; }
+  lastFailures = d;
+  renderWorker();
+  flowTimer = setTimeout(() => location.hash === here && showWorker(f), 5000);
+}
+let lastFailures = null;
+function wfPick(k, v) { wf[k] = wf[k] === v ? null : v; if (k === 'stage') wf.group = null; renderWorker(); }
+function renderWorker() {
+  const d = lastFailures; if (!d) return;
+  const t = wf.text.trim().toLowerCase();
+  const rows = [...d.events.map(e => ({ ...e, kind: 'trace' })), ...d.lifecycle.map(e => ({ eventId: e.eventId, tsMillis: e.updatedAtMillis,
+      stage: e.status, workflowId: (e.keys || []).join(', '), detail: e.error, group: e.group, attempts: e.attempts, eventType: e.eventType, kind: 'lifecycle' }))];
+  const stages = {}; rows.forEach(r => stages[r.stage] = (stages[r.stage] || 0) + 1);
+  document.getElementById('wf-stages').innerHTML = `<button class="chip ${!wf.stage ? 'on' : ''}" onclick="wfPick('stage', null)">All ${fmt(rows.length)}</button>`
+    + Object.entries(stages).map(([k, n]) => `<button class="chip ${wf.stage === k ? 'on' : ''}" onclick="wfPick('stage','${k}')">${chip(k)} ${fmt(n)}</button>`).join('');
+  const groups = d.groups.filter(g => !wf.stage || g.stage === wf.stage).filter(g => !t || g.message.toLowerCase().includes(t));
+  document.getElementById('wf-groups').innerHTML = groups.length ? `<table><tr><th>stage</th><th>message</th><th>events</th><th>last seen</th></tr>
+    ${groups.map(g => `<tr class="pick ${wf.group === g.key ? 'on' : ''}" onclick="wfPick('group', ${JSON.stringify(g.key).replace(/"/g, '&quot;')})">
+      <td>${chip(g.stage)}</td><td class="mono">${esc(g.message)}</td><td>${fmt(g.count)}</td><td class="mono">${ago(g.lastSeen)}</td></tr>`).join('')}</table>`
+    : '<div class="muted">No failures in this window. Generate data with "inject failures" on the flow page to see some.</div>';
+  const shown = rows.filter(r => (!wf.stage || r.stage === wf.stage) && (!wf.group || r.group === wf.group)
+      && (!t || [r.eventId, r.workflowId, r.detail, r.eventType].some(x => (x || '').toLowerCase().includes(t))))
+    .sort((a, b) => b.tsMillis - a.tsMillis);
+  const g = d.groups.find(x => x.key === wf.group);
+  document.getElementById('wf-events-title').innerHTML = g ? `Events in ${chip(g.stage)} <span class="mono">${esc(g.message)}</span> <a style="font-size:12px;font-weight:400" onclick="wfPick('group', null)">clear</a>` : 'Failed events';
+  document.getElementById('wf-summary').textContent = `${shown.length} of ${rows.length} shown · last ${fmt(d.windowSec)} s of traces${d.lifecycle.length ? ' + events still in an error state' : ''}`;
+  const ops = r => r.kind === 'lifecycle' ? `<button class="op retry" onclick="eventOp('${esc(r.eventId)}','retry').then(() => showWorker(flowMeta['${esc(d.flow.id)}'].flow))">Retry</button>
+      <button class="op skip" onclick="eventOp('${esc(r.eventId)}','skip').then(() => showWorker(flowMeta['${esc(d.flow.id)}'].flow))">Skip</button>` : '';
+  document.getElementById('wf-events').innerHTML = shown.length ? `<table><tr><th>time</th><th>event</th><th>stage</th><th>entity / keys</th><th>detail</th><th></th></tr>
+    ${shown.slice(0, 300).map(r => `<tr><td class="mono">${time(r.tsMillis)}</td><td class="mono">${link('event', r.eventId)}${r.eventType ? ` <span class="muted">${esc(r.eventType)}</span>` : ''}</td>
+      <td>${chip(r.stage)}${r.attempts > 1 ? ` <span class="muted">×${r.attempts}</span>` : ''}</td>
+      <td class="mono">${r.kind === 'trace' && r.workflowId && !r.workflowId.startsWith('evproc:') ? link('entity', r.workflowId) : esc(r.workflowId || '')}</td>
+      <td class="mono muted">${esc(r.detail)}</td><td style="white-space:nowrap">${ops(r)}</td></tr>`).join('')}</table>${shown.length > 300 ? '<div class="note">first 300 shown: narrow down to see the rest</div>' : ''}`
+    : '<div class="muted">Nothing matches.</div>';
+}
+
+/**
+ * Deephaven widgets take focus as they load, which scrolls the page to them. Hold the scroll position for a few
+ * seconds after rendering them, until the user scrolls, clicks or types themselves.
+ */
+function pinScroll(ms) {
+  const y = window.scrollY, until = Date.now() + ms;
+  let user = false;
+  const mine = () => { user = true; };
+  const keep = () => { if (!user && Date.now() < until && window.scrollY !== y) window.scrollTo(0, y); };
+  ['wheel', 'touchstart', 'keydown', 'mousedown'].forEach(e => window.addEventListener(e, mine, { once: true, passive: true }));
+  window.addEventListener('scroll', keep, { passive: true });
+  const iv = setInterval(keep, 100);
+  setTimeout(() => { window.removeEventListener('scroll', keep); clearInterval(iv); }, ms);
+}
+
+/**
+ * The variables (application fields) Deephaven has right now, via its JS API (the page logs in with the PSK, as the
+ * iframes do); cached for 30 s. Null when that fails, so callers fall back to showing every widget.
+ */
+let dhFields = null;
+async function deephavenFields(c) {
+  if (dhFields && Date.now() - dhFields.at < 30000) return dhFields.names;
+  try {
+    const { default: dh } = await import(c.url + '/jsapi/dh-core.js');
+    const client = new dh.CoreClient(c.url);
+    const names = await Promise.race([(async () => {
+      await client.login({ type: 'io.deephaven.authentication.psk.PskAuthenticationHandler', token: c.psk });
+      const conn = await client.getAsIdeConnection();
+      return await new Promise(resolve => {
+        const off = conn.subscribeToFieldUpdates(ch => { off(); resolve(new Set(ch.created.map(f => f.title ?? f.name))); });
+      });
+    })(), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000))]);
+    try { client.disconnect(); } catch { /* already closed */ }
+    dhFields = { at: Date.now(), names };
+    return names;
+  } catch (e) {
+    console.warn('Deephaven field list unavailable:', e);
+    return null;
+  }
+}
+
+/**
+ * Widgets in two groups: the ones Deephaven has, as live iframes, then the missing ones at the bottom as notes (an
+ * iframe for a missing variable only shows "Variable ... not found"). Unknown availability: every widget, in order.
+ */
+function widgetGrid(c, names, fields) {
+  const psk = encodeURIComponent(c.psk);
+  const live = fields ? names.filter(w => fields.has(w)) : names, gone = fields ? names.filter(w => !fields.has(w)) : [];
+  const frame = w => `<div class="panel"><h4>${esc(w)} <a href="${esc(c.url)}/iframe/widget/?name=${encodeURIComponent(w)}&psk=${psk}" target="_blank" title="open alone">↗</a></h4>
+      <iframe loading="lazy" src="${esc(c.url)}/iframe/widget/?name=${encodeURIComponent(w)}&psk=${psk}" title="${esc(w)}"></iframe></div>`;
+  return { html: live.length ? `<div class="widgets">${live.map(frame).join('')}</div>` : '', gone };
+}
+/** One note, placed last on the page, for widgets Deephaven doesn't have. */
+function missingWidgets(gone, hint) {
+  return gone.length ? `<div class="panel" style="margin-top:16px"><b>Not loaded in Deephaven</b> ${status('warn', gone.length + ' widget' + (gone.length > 1 ? 's' : ''))}
+      <div class="mono" style="margin:6px 0">${gone.map(esc).join(' · ')}</div><div class="note">${hint}</div></div>` : '';
+}
+
+// Deephaven for a flow: market data simulator control + the flow's widgets
+let mdTimer = null;
+async function showFlowDeephaven() {
+  const el = document.getElementById('dh'), m = anaFlow;
+  const c = await apiJson('/api/analytics/deephaven/config');
+  if (c.error) { el.innerHTML = `<div class="panel FAILED">${esc(c.error)}</div>`; return; }
+  el.innerHTML = `<div class="panel" id="md"><span class="muted">Market data: loading…</span></div><div id="dh-widgets" class="panel muted">Checking which widgets Deephaven has…</div>`;
+  loadMarketData();
+  const fields = c.reachable ? await deephavenFields(c) : null;
+  const eco = !['samples', 'trading', 'other'].includes(m.flow.group);
+  const hint = eco ? `These come from the <b>${esc(m.flow.group)}</b> ecosystem, which Deephaven hasn't loaded: it loads an ecosystem's tables only while
+      it's deployed. <code>./deploy-concert-ecosystem ${esc(m.flow.group)}</code> deploys it and restarts Deephaven with them.`
+    : 'Deephaven has no variable by these names; its app script (infra/deephaven/app.d/concert.py) may have failed to build them: <code>docker compose logs deephaven</code>.';
+  const w = document.getElementById('dh-widgets'); if (!w) return;
+  const flowGrid = widgetGrid(c, m.deephavenWidgets, fields);
+  const mdGrid = widgetGrid(c, m.marketDataWidgets.filter(x => !m.deephavenWidgets.includes(x)), fields);
+  w.outerHTML = `<div id="dh-widgets"><div class="panel hint">${c.reachable ? '' : '<span class="FAILED">Deephaven is not reachable (scripts/up.sh &lt;store&gt; --analytics) · </span>'}
+      Widgets for <b class="mono">${esc(m.flow.label)}</b>. <a href="${esc(c.ide)}" target="_blank">Deephaven IDE ↗</a> · <a onclick="showAnalytics('deephaven')">all widgets</a></div>
+    ${flowGrid.html || (fields ? `<div class="panel muted">None of ${esc(m.flow.label)}'s widgets are loaded in Deephaven (see the note at the bottom).</div>` : '')}
+    <h3 style="margin:18px 0 8px">Market data</h3>${mdGrid.html}
+    ${missingWidgets(flowGrid.gone, hint)}${missingWidgets(mdGrid.gone, 'Market data tables come from concert.py; check <code>docker compose logs deephaven</code>.')}</div>`;
+  pinScroll(8000);
+}
+async function loadMarketData() {
+  clearTimeout(mdTimer);
+  const el = document.getElementById('md'); if (!el) return;
+  const s = await apiJson('/api/marketdata/status');
+  if (!document.getElementById('md')) return;
+  if (s.error) { el.innerHTML = `<b>Market data</b> <span class="FAILED">${esc(s.error)}</span>`; return; }
+  const rateInput = document.getElementById('md-rate')?.value || s.tickRate;
+  el.innerHTML = `<div class="genbar"><b>Simulate market data</b>${s.running ? status('ok', 'Ticking') : status('idle', 'Stopped')}
+      <span>${rate(s.ticksPerSec)} · ${fmt(s.ticks)} ticks · ${fmt(s.bars)} bars · ${fmt(s.instruments)} instruments</span>
+      <label>rate <input type="number" id="md-rate" min="1" max="20000" step="50" value="${rateInput}"> ticks/s</label>
+      <button class="primary" onclick="mdOp('start')">${s.running ? 'Apply rate' : 'Start ticking'}</button>
+      ${s.running ? '<button class="ghost" onclick="mdOp(\'stop\')">Stop</button>' : ''}</div>
+    <div class="note">marketdata-sim publishes quotes and trades to md.ticks (and 1-minute bars); the quote widgets below tick while it runs.</div>`;
+  mdTimer = setTimeout(loadMarketData, 2000);
+}
+async function mdOp(op) {
+  const r = document.getElementById('md-rate')?.value;
+  const d = await apiJson('/api/marketdata/' + op + (op === 'start' && r ? '?rate=' + encodeURIComponent(r) : ''), { method: 'POST' });
+  if (d.error) alert(d.error);
+  loadMarketData();
+}
+
+
+// ---------------------------------------------------------------- Model query (legend-lite plans, concert runs)
+
+let modelInfo = null, modelStores = JSON.parse(localStorage.getItem('modelStores') || '["duckdb","clickhouse"]');
+let modelFlow = null, modelVariant = null;
+async function showModel(query, run, ctx) {
+  modelFlow = ctx || null;
+  setView(modelFlow ? 'flows' : 'model'); clearTimeout(flowTimer);
+  if (modelFlow) setHash('flow/' + encodeURIComponent(modelFlow.flow.id) + (modelFlow.eco ? '/models' : '/legend'));
+  else if (!query) setHash('model');
+  const head = modelFlow?.eco
+    ? `<div class="crumbs"><a onclick="showFlows()">Flows</a><span class="sep">›</span><a onclick="go('flow','${esc(modelFlow.flow.id)}')">${esc(modelFlow.flow.label)}</a>
+        <span class="sep">›</span><h2>Models</h2><span class="spacer"></span><a href="/api/model/store" target="_blank">generated store layer ↗</a></div>
+      <div class="note" style="margin:-6px 0 12px">Pure queries over the classes of <b>${esc(modelFlow.flow.label)}</b>: legend-lite writes the SQL for DuckDB and ClickHouse, concert runs it.</div>`
+    : modelFlow
+    ? sectionCrumbs(modelFlow.flow, 'legend', `<a href="/api/model/store" target="_blank">generated store layer ↗</a> · <a onclick="showModel()">all classes ›</a>`)
+      + `<div class="note" style="margin:-6px 0 12px">Legend queries over <b class="mono">${esc(modelFlow.flow.label)}</b>: each one runs on DuckDB and ClickHouse, legend-lite writing the SQL for each.</div>`
+    : `<div class="crumbs"><h2>Model query</h2><span class="muted">Pure over the concert models: legend-lite writes the SQL, concert runs it</span>
+      <span class="spacer"></span><a onclick="showDiagrams()">diagrams ›</a> · <a href="/api/model/store" target="_blank">generated store layer ↗</a> · <span id="m-studio"></span></div>`;
+  out.innerHTML = `${head}
+    <div class="analytics">
+      <aside class="panel browser" id="m-browser"><div class="muted">Loading the model…</div></aside>
+      <section>
+        <div class="panel">
+          <div class="chips" id="m-samples"></div>
+          <textarea id="pure" spellcheck="false" placeholder="demo::order::Order.all()->project([x|$x.orderId, x|$x.total.amount], ['id', 'total'])->take(10)"></textarea>
+          <div class="toolbar"><button class="run" onclick="runModel()">Run</button>
+            ${['duckdb', 'clickhouse'].map(k => `<label><input type="checkbox" class="m-store" value="${k}" ${modelStores.includes(k) ? 'checked' : ''}
+              onchange="modelStores=[...document.querySelectorAll('.m-store:checked')].map(x=>x.value);localStorage.setItem('modelStores',JSON.stringify(modelStores))">
+              ${k === 'duckdb' ? 'DuckDB' : 'ClickHouse'}</label>`).join('')}
+            <span class="muted">Ctrl/⌘ + Enter · read-only · ClickHouse reads the deduplicated <code>_latest</code> views</span><span id="m-status" class="muted"></span></div>
+          <div id="m-health" class="note"></div><div id="m-variant" class="note"></div>
+        </div>
+        <div id="m-results"></div>
+      </section>
+    </div>`;
+  const ta = document.getElementById('pure');
+  const qKey = 'modelQuery' + (modelFlow ? ':' + modelFlow.flow.id : '');
+  ta.value = query || localStorage.getItem(qKey) || '';
+  ta.onkeydown = e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runModel(); } };
+  const d = await apiJson('/api/model/info' + (modelFlow ? '?types=' + encodeURIComponent(modelFlow.flow.snapshotTypes.join(',')) : ''));
+  modelInfo = d;
+  const health = document.getElementById('m-health');
+  if (!health) return;
+  const studio = document.getElementById('m-studio');
+  if (studio && d.studioUrl) studio.innerHTML = `<a href="${esc(d.studioUrl)}/demo/index.html?concert=${encodeURIComponent(d.studioProjectId || '')}" target="_blank"
+      title="Opens ${esc(d.studioProject || 'Concert models')} (the models plus the generated store layer) in Legend Studio Lite, which runs in your browser; the first time it publishes the project there">Legend Studio ↗</a>`;
+  health.innerHTML = d.reachable ? `${status('ok', 'legend-lite')} <span class="mono">${esc(d.liteUrl)}</span> · ${fmt(d.files)} model files from the DuckDB sink`
+    : `${status('bad', 'legend-lite down')} ${esc(d.error || '')}`;
+  if (d.modelError) {
+    document.getElementById('m-browser').innerHTML = `<div class="FAILED">${esc(d.modelError)}</div>`;
+    return;
+  }
+  const byRoot = {};
+  d.classes.forEach(c => (byRoot[c.smType] ||= []).push(c));
+  document.getElementById('m-browser').innerHTML = '<h3 style="margin-top:0">Classes</h3>' + Object.values(byRoot).map(cs => cs.map(c => `
+    <details ${c.kind === 'root' && !c.smType.startsWith('evt_') ? '' : ''}>
+      <summary><a onclick="insertPure('${esc(c.class)}.all()')">${esc(c.class.split('::').pop())}</a>
+        <span class="kind">${esc(c.kind)} · ${esc(c.table)}</span></summary>
+      <div class="kind mono" style="margin:2px 0 4px 14px">${esc(c.class)}</div>
+      <ul>${c.properties.map(p => `<li onclick="insertPure('$x.${esc(p)}')"><span>${esc(p)}</span></li>`).join('') || '<li class="muted">no mapped properties</li>'}
+        <li onclick="insertPure('#>{concert::store::Sink.${esc(c.table)}}#')" title="table access: system columns (sm_state, entity_version, created_at, completed_at)"><span class="muted">#&gt;{…${esc(c.table)}}#</span></li></ul>
+    </details>`).join('')).join('');
+  window._mSamples = d.samples;
+  // A flow whose root class another root maps too (gen_trading_order / trading_order): run with its own mapping.
+  modelVariant = modelFlow ? (d.classes.find(c => c.variant)?.variant || null) : null;
+  const vnote = document.getElementById('m-variant');
+  if (vnote) vnote.innerHTML = modelVariant ? `class queries read <span class="mono">${esc(modelVariant)}</span> (mapping
+      <span class="mono">${esc(d.classes.find(c => c.variant).mapping)}</span>: its class is shared with another flow)` : '';
+  document.getElementById('m-samples').innerHTML = (modelFlow ? d.samples : d.samples.slice(0, 18)).map((x, i) =>
+    `<button class="chip" title="${esc(x.query)}" onclick="document.getElementById('pure').value=_mSamples[${i}].query;modelVariant=_mSamples[${i}].variant||(modelFlow?modelVariant:null);runModel()">${esc(x.title)}</button>`).join('');
+  if (!d.classes.length) document.getElementById('m-browser').innerHTML += '<div class="muted">No sink tables for this flow (its types aren\'t in SINK_ROOTS).</div>';
+  if (!ta.value && d.samples.length) ta.value = d.samples[0].query;
+  if (run && ta.value.trim()) runModel();
+}
+function insertPure(text) {
+  const ta = document.getElementById('pure'), a = ta.selectionStart, b = ta.selectionEnd;
+  ta.value = ta.value.slice(0, a) + text + ta.value.slice(b); ta.focus(); ta.selectionStart = ta.selectionEnd = a + text.length;
+}
+async function runModel() {
+  const q = document.getElementById('pure').value.trim(), st = document.getElementById('m-status'), res = document.getElementById('m-results');
+  if (!q) return;
+  if (!modelStores.length) { st.textContent = 'pick a store'; return; }
+  localStorage.setItem('modelQuery' + (modelFlow ? ':' + modelFlow.flow.id : ''), q);
+  if (!modelFlow) history.replaceState(null, '', '#model/' + encodeURIComponent(q)); // shareable: opening the link runs it
+  st.textContent = 'planning…';
+  const d = await apiJson('/api/model/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: q, stores: modelStores.join(','), variant: modelVariant }) });
+  st.textContent = d.planMs !== undefined ? `${d.planMs} ms` : '';
+  if (d.error) { res.innerHTML = `<div class="panel FAILED mono" style="white-space:pre-wrap">${esc(d.error)}</div>`; return; }
+  const cell = v => v === null ? '<span class="null">null</span>' : esc(typeof v === 'object' ? JSON.stringify(v) : v);
+  const one = (k, r) => `<div class="panel"><h3>${k === 'duckdb' ? 'DuckDB' : 'ClickHouse'}
+      ${r.error ? status('bad', 'Failed') : `<span class="muted" style="font-weight:400;font-size:12px">${fmt(r.rows.length)} rows${r.truncated ? ' (truncated)' : ''} · plan ${r.planMs} ms · run ${r.elapsedMs} ms</span>`}</h3>
+    ${r.sql ? `<details ${r.error ? 'open' : ''}><summary class="muted">generated SQL</summary><pre class="sql">${esc(r.sql)}</pre></details>` : ''}
+    ${r.error ? `<div class="FAILED mono" style="white-space:pre-wrap">${esc(r.error)}</div>`
+      : r.columns.length ? `<div style="overflow-x:auto"><table class="results"><tr>${r.columns.map((c, i) => `<th title="${esc((r.types || [])[i] || '')}">${esc(c)}</th>`).join('')}</tr>
+        ${r.rows.map(row => `<tr>${row.map(v => `<td title="${esc(v)}">${cell(v)}</td>`).join('')}</tr>`).join('')}</table></div>` : '<span class="muted">No result set.</span>'}</div>`;
+  res.innerHTML = `<div class="model-results">${Object.entries(d.results).map(([k, r]) => one(k, r)).join('')}</div>`;
+}
+
+// Diagrams of the emitted models (/api/model/diagrams): per machine its states (event + payload class), the classes
+// doing the transitions (entity root + payload classes) and its whole Pure model; event catalogs' flow and model.
+let diagramsData = null;
+async function showDiagrams(sel) {
+  setView('model'); clearTimeout(flowTimer);
+  diagramsData = diagramsData || await apiJson('/api/model/diagrams');
+  const d = diagramsData;
+  const machines = d.machines || [], events = d.eventCatalogs || [];
+  sel = sel || (machines[0] && machines[0].smType) || (events[0] && 'events:' + events[0].name);
+  setHash('diagrams/' + encodeURIComponent(sel || ''));
+  const byCatalog = {};
+  machines.forEach(m => (byCatalog[m.catalog] = byCatalog[m.catalog] || []).push(m));
+  const item = (key, label, n) => `<li onclick="showDiagrams('${esc(key)}')" style="${key === sel ? 'color:var(--accent);font-weight:600' : ''}">
+    <span>${esc(label)}</span><span class="muted">${n}</span></li>`;
+  out.innerHTML = `<div class="crumbs"><h2>Diagrams</h2><span class="muted">the emitted models: states, the classes doing the transitions, Pure classes</span>
+      <span class="spacer"></span><a onclick="showModel()">model query ›</a></div>
+    <div class="analytics">
+      <aside class="panel browser">
+        ${Object.entries(byCatalog).map(([c, ms]) => `<details open><summary>${esc(c)}</summary><ul>
+          ${ms.map(m => item(m.smType, m.smType, m.transitions.length + ' →')).join('')}</ul></details>`).join('')}
+        ${events.length ? `<details open><summary>event catalogs</summary><ul>${events.map(e => item('events:' + e.name, e.name, '')).join('')}</ul></details>` : ''}
+      </aside>
+      <section id="dg-body"></section>
+    </div>`;
+  await renderDiagram(sel, machines, events);
+}
+
+/** The diagrams of one machine (smType) or event catalog ('events:<name>') into #dg-body. */
+async function renderDiagram(sel, machines, events) {
+  const body = document.getElementById('dg-body');
+  const panel = (id, title, note, open = true) => `<div class="panel"><details ${open ? 'open' : ''}><summary><h3 style="display:inline">${title}</h3>
+    <span class="muted">${note}</span></summary><div id="${id}" style="overflow:auto"></div></details></div>`;
+  const diagrams = [];
+  if (sel && sel.startsWith('events:')) {
+    const e = events.find(x => 'events:' + x.name === sel);
+    if (!e) { body.innerHTML = '<div class="panel muted">Unknown catalog.</div>'; return; }
+    body.innerHTML = panel('dg-flow', 'Event flow', 'event types, what each emits') + panel('dg-model', 'Model', 'payload and state classes (Pure)');
+    diagrams.push(['dg-flow', e.flowMermaid], ['dg-model', e.modelMermaid]);
+  } else {
+    const m = machines.find(x => x.smType === sel);
+    if (!m) { body.innerHTML = '<div class="panel muted">No machines on the class path.</div>'; return; }
+    body.innerHTML = `<div class="panel"><div class="kv"><span class="muted">machine</span><span class="mono">${esc(m.smType)}</span>
+        <span class="muted">catalog</span><span>${esc(m.catalog)}</span>
+        <span class="muted">entity class</span><span class="mono">${esc(m.root || '(untyped)')}</span>
+        <span class="muted">states</span><span class="mono">${esc(m.initial)} → … → ${esc(m.terminal.join(', '))}</span></div></div>`
+      + panel('dg-states', 'State machine', 'each transition: event (payload class)')
+      + panel('dg-classes', 'Transition classes', 'the entity class and the payload classes that move it, linked by event')
+      + (m.modelMermaid ? panel('dg-model', 'Pure model', 'every class of the machine\'s model files', false) : '')
+      + `<div class="panel"><h3>Transitions</h3><table><tr><th>from</th><th>event</th><th>to</th><th>payload class</th></tr>
+        ${m.transitions.map(t => `<tr><td class="mono">${esc(t.from)}</td><td class="mono">${esc(t.event)}</td><td class="mono">${esc(t.to)}</td>
+          <td class="mono muted">${esc(t.payload || '')}</td></tr>`).join('')}</table></div>`;
+    diagrams.push(['dg-states', m.stateMermaid], ['dg-classes', m.transitionMermaid], ['dg-model', m.modelMermaid]);
+  }
+  for (const [id, src] of diagrams) {
+    const el = document.getElementById(id);
+    if (!el || !src) continue;
+    try { el.innerHTML = (await mermaid.render(id + Date.now(), src)).svg; }
+    catch (err) { el.textContent = 'diagram: ' + err; }
+  }
+}
+
+/** Opens the page of the current hash (on load, and to redraw after a theme switch). Startup lands on the flows. */
+function route() {
+  const [hv, hid, hextra] = location.hash.slice(1).split('/');
+  if (hv === 'analytics') showAnalytics(hid || 'duckdb', hextra ? decodeURIComponent(hextra) : undefined);
+  else if (hv === 'events') go('events', hid ? decodeURIComponent(hid) : 'errors');
+  else if (hv === 'diagrams') showDiagrams(hid ? decodeURIComponent(hid) : undefined);
+  else if (hv === 'model') showModel(hid ? decodeURIComponent(location.hash.slice('#model/'.length)) : undefined, !!hid);
+  else if (hv === 'flow' && hid) go('flow', location.hash.slice('#flow/'.length).split('/').map(decodeURIComponent).join('/'));
+  else if (hv === 'event' && !hid) { setView('event'); showRecent(); }
+  else if (hv && hid) go(hv, decodeURIComponent(hid)); else showFlows();
+}
+function rerender() { route(); }
+apiJson('/api/model/info').then(d => { if (d.studioUrl) studioUrl = d.studioUrl + '/demo/index.html?concert=' + encodeURIComponent(d.studioProjectId || ''); updateFlowNav(); })
+  .catch(() => {});
+loadControl().catch(() => {}).finally(() => { updateFlowNav(); route(); });
+</script>
+</body>
+</html>

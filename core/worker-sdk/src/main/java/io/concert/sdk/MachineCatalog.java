@@ -12,7 +12,7 @@ import org.slf4j.LoggerFactory;
 /**
  * A set of state machines a module provides, discovered with {@link ServiceLoader} (declare the
  * implementation in {@code META-INF/services/io.concert.sdk.MachineCatalog}). Tools that show every
- * machine (the trace UI) load all catalogs on their classpath instead of naming the modules: the
+ * machine (the dashboard) load all catalogs on their classpath instead of naming the modules: the
  * sample workers, trading and every generated ecosystem ({@code ./generate-concert-ecosystem})
  * implement it.
  */

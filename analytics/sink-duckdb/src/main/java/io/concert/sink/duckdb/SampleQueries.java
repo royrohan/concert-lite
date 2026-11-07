@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/** Example queries for the trace UI, generated from the schema so they follow the models. */
+/** Example queries for the dashboard, generated from the schema so they follow the models. */
 public final class SampleQueries {
 
     public record Sample(String title, String sql) {}

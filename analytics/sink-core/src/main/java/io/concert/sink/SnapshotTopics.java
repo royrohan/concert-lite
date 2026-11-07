@@ -16,7 +16,7 @@ import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 /**
  * The snapshot topics: the legacy shared {@value SnapshotCodec#TOPIC} and one {@code snapshots.<flow>} per flow
  * ({@code io.concert.common.Flows}). Kafka auto-creation is off, so a flow's worker ensures its topic on first
- * publish and the trace UI's Start / Delete flow creates and deletes it. Sinks subscribe to {@link #PATTERN}, so a new
+ * publish and the dashboard's Start / Delete flow creates and deletes it. Sinks subscribe to {@link #PATTERN}, so a new
  * flow's topic is picked up without restarting them.
  */
 public final class SnapshotTopics {

@@ -126,7 +126,7 @@ Sample tick:
 |---|---|
 | spec adapter | `machines.TradingSpecs.spec(flow)` — the SDK `StateMachineSpec` built from `TradingFlows` (states, transitions, terminals); payload class names resolve to the generated `io.concert.trading.command.*` classes |
 | machines | `machines.TradingOrderMachine` (`trading_order`, data `Order`), `TradingExecutionMachine` (`trading_execution`, `Execution`), `TradingFillMachine` (`trading_fill`, `Fill`), `TradingAllocationMachine` (`trading_allocation`, `Allocation`), all `ModelStateMachine<D>` via `TradingStateMachine` |
-| registry | `machines.TradingMachines` — smType → impl, spec, model Mermaid; `registerSpecs()` for the trace UI |
+| registry | `machines.TradingMachines` — smType → impl, spec, model Mermaid; `registerSpecs()` for the dashboard |
 | worker | `TradingWorkerMain` — workers for all four smTypes in one process (`bin/trading-worker`, `./gradlew :trading:runWorker`) |
 | tests | `TradingMachinesTest` (Temporal test server, in-memory store, capturing snapshot publisher), `TradingSpecsTest` |
 
@@ -198,8 +198,8 @@ ENTRYPOINT ["/app/bin/trading-worker"]
     restart: unless-stopped
 ```
 
-The trace UI draws the trading diagrams once it calls `TradingMachines.registerSpecs()` next to
-`SampleMachines.registerSpecs()` (needs `implementation(project(":trading"))` in `trace-ui`).
+The dashboard draws the trading diagrams once it calls `TradingMachines.registerSpecs()` next to
+`SampleMachines.registerSpecs()` (needs `implementation(project(":trading"))` in `dashboard`).
 
 ---
 
@@ -213,7 +213,7 @@ execution/fill tree). The original notes:
 One `ModelStateMachine<D>` per flow over the generated `io.concert.trading.order.*` classes from
 `trading-model`, with `root = "trading::order::<Order|Execution|Fill|Allocation>"`. The machines live in
 `trading` and only reference the generated classes. They may carry `@LegendModel` (same `files` and
-`javaPackage` as `TradingModels`) for runtime discovery, e.g. the trace UI's model view: `trading` does
+`javaPackage` as `TradingModels`) for runtime discovery, e.g. the dashboard's model view: `trading` does
 not run the annotation processor, so nothing is generated twice, spec built from `TradingFlows`
 (`payloadClass` → generated command class). Handlers only maintain their own aggregate:
 
@@ -433,7 +433,7 @@ sector_exposure = (positions.natural_join(instruments, on="Symbol", joins="Secto
 ```
 
 `quotes`, `vwap_live`, `slippage_by_venue`, `pnl_by_account` and `sector_exposure` are the widgets the
-trace UI's Analytics tab would iframe.
+dashboard's Analytics tab would iframe.
 
 ### 4. Compose (snippets for whoever owns `docker-compose.yml` / `Dockerfile`)
 

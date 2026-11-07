@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * Event types of domain {@code orders} (task queue {@code ev-orders}), declared with {@code concert::event} in the
- * Pure models; discovered through the {@link EventCatalog} SPI (workers, event sender, trace UI).
+ * Pure models; discovered through the {@link EventCatalog} SPI (workers, event sender, dashboard).
  *
  * <pre>
  *   OrderCreateEvent  locks order:{orderId}, customer:{customerId}  onError BLOCKING  attempts 3  emits OrderAcceptedEvent, OrderRejectedEvent

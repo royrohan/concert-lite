@@ -23,7 +23,7 @@ import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 
 /**
- * HTTP API of the DuckDB sink (proxied by the trace UI under {@code /api/analytics/duckdb/}):
+ * HTTP API of the DuckDB sink (proxied by the dashboard under {@code /api/analytics/duckdb/}):
  *
  * <pre>
  * POST /query    body = one read-only SQL statement (or {"sql": "..."}) -> {columns, types, rows, elapsedMs, truncated}
@@ -34,7 +34,7 @@ import java.util.function.Supplier;
  * GET  /health   consumer and apply counters (incl. dead-lettered records), stored offsets
  * GET  /metrics  the same counters, batch latency p50 / p99 and lag in Prometheus text format
  * GET  /models   the .pure files the model was built from (MODELS_DIR, top level, identical duplicates skipped) and SINK_ROOTS:
- *                {roots, files: [{name, text}]}; the trace UI generates its Legend store layer from them
+ *                {roots, files: [{name, text}]}; the dashboard generates its Legend store layer from them
  * </pre>
  *
  * There is no endpoint that writes: the consumer loop is the only writer of the database.

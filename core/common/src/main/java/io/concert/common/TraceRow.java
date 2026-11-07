@@ -1,7 +1,7 @@
 package io.concert.common;
 
 /**
- * One step in an event's life, persisted to {@code event_trace} and shown by the trace UI.
+ * One step in an event's life, persisted to {@code event_trace} and shown by the dashboard.
  *
  * @param workflowId the entity workflow the event targets (for entity-history lookups)
  * @param detail free text, e.g. {@code CREATED -> PAID} or {@code waitedMs=12}

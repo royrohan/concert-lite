@@ -11,7 +11,7 @@ import java.util.Objects;
  * lock key templates, error policy and retries, plus keyed-state classes and their key template. Generated
  * from Pure models annotated with {@code concert::event} ({@code ./generate-concert-ecosystem}: one catalog per
  * domain, discovered with {@link java.util.ServiceLoader} through
- * {@code META-INF/services/io.concert.sdk.events.EventCatalog}, which is also how the trace UI finds them), or
+ * {@code META-INF/services/io.concert.sdk.events.EventCatalog}, which is also how the dashboard finds them), or
  * built by hand with {@link #builder} and registered with {@link EventCatalogs#register}.
  *
  * <p>Templates use {@link io.concert.sdk.LockTemplates} syntax: literal text with {@code {field}} placeholders
