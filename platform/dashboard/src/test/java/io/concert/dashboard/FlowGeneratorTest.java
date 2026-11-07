@@ -62,7 +62,7 @@ class FlowGeneratorTest {
 
     @Test
     void instancesCarryLocksAndInjectInvalidEvents() {
-        FlowGenerator.Run claim = gen.new Run("claim", "samples", 1, 10, true);
+        FlowGenerator.Run claim = gen.new Run("claim", "samples", 1, 10, true, false);
         List<EventEnvelope> events = claim.instance(1, false, 1000);
         assertTrue(events.size() >= 3);
         EventEnvelope first = events.getFirst();
@@ -72,11 +72,11 @@ class FlowGeneratorTest {
         assertEquals(1, bad.size(), "no error samples for claim: the last event alone, invalid in the initial state");
         assertEquals(events.getLast().eventType(), bad.getFirst().eventType());
 
-        FlowGenerator.Run order = gen.new Run("order", "walk", 1, 10, true);
+        FlowGenerator.Run order = gen.new Run("order", "walk", 1, 10, true, false);
         assertEquals(1, order.instance(5, true, 0).size());
         assertTrue(order.instance(1, false, 0).size() >= 2);
 
-        FlowGenerator.Run ev = gen.new Run("ev:orders", "samples", 1, 10, false);
+        FlowGenerator.Run ev = gen.new Run("ev:orders", "samples", 1, 10, false, false);
         EventEnvelope create = ev.instance(1, false, 0).stream().filter(e -> e.eventType().equals("OrderCreateEvent"))
                 .findAny().orElse(null);
         if (create != null) {
@@ -90,5 +90,17 @@ class FlowGeneratorTest {
         assertEquals(FlowMetrics.normalize("payment 42 for ORDER-17 declined (attempt 3)"),
                 FlowMetrics.normalize("payment 99 for ORDER-301 declined (attempt 1)"));
         assertEquals("(no detail)", FlowMetrics.normalize(null));
+    }
+
+    @Test
+    void entityKeyOnlyDropsDeclaredLockKeysOfEntityEventsOnly() {
+        io.concert.common.EventEnvelope order = new io.concert.common.EventEnvelope("e1", "rs_trading_order", "O-1", "submit",
+                java.util.List.of("account:A-1"), "{}", 1, 0);
+        io.concert.common.EventEnvelope stripped = FlowGenerator.withoutLockKeys(order);
+        assertEquals(java.util.List.of(), stripped.lockKeys());
+        assertEquals(java.util.List.of("rs_trading_order:O-1"), stripped.effectiveLockKeys(), "serialized on its entity alone");
+        io.concert.common.EventEnvelope tick = io.concert.common.EventEnvelope.event("t1", "ticks", "Tick",
+                java.util.List.of("sym:AAPL"), "{}", 1);
+        assertEquals(java.util.List.of("sym:AAPL"), FlowGenerator.withoutLockKeys(tick).lockKeys(), "event style keeps its keys");
     }
 }

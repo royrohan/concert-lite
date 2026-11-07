@@ -14,7 +14,14 @@ import java.util.Map;
 public final class ChainEmissions {
     private ChainEmissions() {}
 
-    /** The entity's data overlaid with the triggering event's payload (either may be {@code null}). */
+    /** Jackson's polymorphic type id ({@code ModelJson} writes the Pure class name there). */
+    static final String TYPE_ID = "@type";
+
+    /**
+     * The entity's data overlaid with the triggering event's payload (either may be {@code null}), without their type
+     * ids: those name the source machine's classes (its root, its command), and the emitted payload is bound to the
+     * target transition's payload class, which a copied type id would contradict.
+     */
     public static ObjectNode source(String dataJson, String payloadJson) {
         ObjectNode out = Json.MAPPER.createObjectNode();
         for (String json : new String[] {dataJson, payloadJson}) {
@@ -25,6 +32,7 @@ public final class ChainEmissions {
                 }
             }
         }
+        out.remove(TYPE_ID);
         return out;
     }
 

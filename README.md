@@ -79,14 +79,33 @@ The dashboard's **Performance** tab measures one flow at a time, on its own:
    Constrained). Each sets the coordinator and worker replicas (`docker compose --scale`), a load rate and tuning
    (`WORKER_WF_SLOTS`, `WORKER_LA_SLOTS`, `ORCH_WF_POLLERS_MAX`, `INGEST_PARALLEL_GROUPS`, `WORKFLOW_TASK_TIMEOUT_MS`).
    The counts and rate can be overridden.
-3. **Chaos and services**: optional chaos (every N seconds a random coordinator or worker replica is killed or stopped
+3. **Lock keys**: how events are serialized.
+   - **Serial keys** (default): each event takes its entity key plus the lock keys its model declares (for example
+     every order's `account:<id>`), as in production.
+   - **Entity key only**: the generator drops the declared lock keys, so each event waits only on its own entity.
+   - **No locks (direct)**: entity key only, and `DIRECT_SM_TYPES` is set to the flow's machines, so the coordinator
+     hands single-key events straight to the worker without a lock workflow.
+
+   Comparing the modes shows what the shared locks cost. In the trading sample data every order has the same account,
+   so serial runs queue all order events on one lock.
+4. **Chaos and services**: optional chaos (every N seconds a random coordinator or worker replica is killed or stopped
    for 3 to 12 s, Kafka too if chosen), and whether to stop the analytics services so they don't compete for CPU.
 
 **Stop all other services and start** stops every other flow first, so only one flow runs. The run page then shows
 the flow like any machine page (completions, instance lifetime, event latency p50 / p95 / p99, the pipeline), plus its
 instances with **Kill** (SIGKILL), **Stop** (SIGTERM) and **Start** per coordinator or worker replica, **Stop / Start
 Kafka**, and a timeline of every manual and chaos action to line up with dips in the metrics. **Stop run** ends the
-load and chaos and brings back whatever is down; the flow keeps running.
+load and chaos and brings back whatever is down; the flow keeps running. A run also ends on its own 30 s after its
+load finishes.
+
+**Past runs** are kept in DuckDB (`PERF_DB`: `/data/perf-runs.duckdb` on the dashboard's `dashboard-data` volume, or
+`build/perf/perf-runs.duckdb` when the dashboard runs on the host). Each run stores its configuration (flow, coordinator
+implementation, machine, preset, replicas, rate, lock mode, chaos, tuning), a sample of the flow's metrics every 10 s
+and every timeline action. The table under the page lists the runs with their averages. Select up to four and click
+**Compare** to see them side by side: a table of the summaries (best value in bold) and charts of completions/s,
+events processed/s and p95 latency over time, with each run's chaos actions marked. A run still going when the
+dashboard stops is marked `interrupted`. The API is `GET /api/perf/runs`, `GET /api/perf/compare?ids=a,b` and
+`POST /api/perf/runs/{id}/delete`.
 
 ## Quickstart
 
@@ -620,6 +639,11 @@ Measured on a 10-core laptop with Docker limited to 6 CPUs, the whole stack loca
   Latency under chaos is dominated by the down time of a killed tier. Each run writes
   `build/chaos/<run-id>/report.txt`, with a throughput timeline and every chaos action marked.
 
+A hot lock key (one account shared by every order) keeps many updates open on its lock workflow: an `acquire` per
+waiting event plus the `release` of each holder. Temporal's default of 10 in-flight updates per workflow rejects
+the rest, and the key stops moving, so `infra/temporal-init/dynamicconfig.yaml` raises
+`history.maxInFlightUpdates` to 500. Set the same on a production cluster that has hot keys.
+
 Failover speed is Temporal's, tuned in `core/common/.../Failover.java`. Lower values fail over faster but
 redo more (idempotent) work when a process merely pauses.
 
@@ -643,6 +667,7 @@ redo more (idempotent) work when a process merely pauses.
 | `TRACE_SAMPLE` | `1.0` | fraction of events traced, deterministic per event id |
 | `LOCK_IDLE_SECONDS` | `600` | how long an idle lock workflow stays warm |
 | `DIRECT_SM_TYPES` | — | types allowed to bypass locks (only if they never share keys) |
+| `PERF_DB` | `build/perf/perf-runs.duckdb` (`/data/perf-runs.duckdb` in compose) | DuckDB file with the Performance page's past runs (dashboard) |
 | `DEDUPE_TTL_HOURS` | `24` | |
 | `MD_AUTOSTART` | `true` | marketdata-sim: `false` starts it paused (start it from a flow's Deephaven page or `POST :8091/start?rate=N`) |
 | `KAFKA_BOOTSTRAP` | — | workers: publish snapshots (unset: logged, not delivered, no reconcile schedule); sinks/dashboard: Kafka |

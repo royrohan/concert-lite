@@ -13,3 +13,7 @@ limit.maxIDLength:
   - value: 255
 system.enableActivityEagerExecution:
   - value: true
+# A lock workflow on a hot key (e.g. one account shared by every order) holds an acquire update per
+# waiting event plus the releases of its holders; the default of 10 in-flight updates rejects them.
+history.maxInFlightUpdates:
+  - value: 500

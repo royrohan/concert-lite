@@ -157,6 +157,18 @@ class JavaGeneratorTest {
     }
 
     @Test
+    void aDocumentWithoutTypeIdBindsToTheRequestedClass() throws IOException {
+        ModelObject order = validOrder();
+        com.fasterxml.jackson.databind.node.ObjectNode tree =
+                (com.fasterxml.jackson.databind.node.ObjectNode) new ObjectMapper().readTree(ModelJson.write(order));
+        assertEquals("demo::order::Order", tree.remove("@type").asText());
+        Object back = ModelJson.read(tree.toString(), order.getClass());
+        assertSame(order.getClass(), back.getClass(), "a missing type id means the requested class (a chained event's payload)");
+        String json = ModelJson.write(back);
+        assertTrue(json.contains("\"id\":\"o-1\"") && json.contains("\"sku\":\"B\"") && json.contains("\"@type\":\"demo::order::Order\""), json);
+    }
+
+    @Test
     void jsonNestsOwnedChildrenAndOmitsBackReferences() throws IOException {
         ModelObject order = validOrder();
         call(order, "addTag", call(create("Tag"), "setName", "t"));

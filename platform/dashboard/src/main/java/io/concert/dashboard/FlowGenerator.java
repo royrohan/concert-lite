@@ -234,6 +234,8 @@ final class FlowGenerator implements AutoCloseable {
         final double rate;
         final int durationSec;
         final boolean errors;
+        /** Entity events carry no lock keys but their entity's (the Performance page's lock modes). */
+        final boolean entityKeyOnly;
         final long startedAt = System.currentTimeMillis();
         volatile boolean stopped;
         volatile long instances;
@@ -245,12 +247,13 @@ final class FlowGenerator implements AutoCloseable {
         private final PriorityQueue<EventEnvelope> due = new PriorityQueue<>(Comparator.comparingLong(EventEnvelope::sourceTsMillis));
         private Iterator<EventEnvelope> trading;
 
-        Run(String flowId, String strategy, double rate, int durationSec, boolean errors) {
+        Run(String flowId, String strategy, double rate, int durationSec, boolean errors, boolean entityKeyOnly) {
             this.flowId = flowId;
             this.strategy = strategy;
             this.rate = rate;
             this.durationSec = durationSec;
             this.errors = errors;
+            this.entityKeyOnly = entityKeyOnly;
         }
 
         boolean running() {
@@ -369,7 +372,7 @@ final class FlowGenerator implements AutoCloseable {
         private void publish(List<EventEnvelope> batch) {
             List<PutRecordsRequestEntry> entries = new ArrayList<>(batch.size());
             for (EventEnvelope e : batch) {
-                EventEnvelope stamped = restamp(e, System.currentTimeMillis());
+                EventEnvelope stamped = restamp(entityKeyOnly ? withoutLockKeys(e) : e, System.currentTimeMillis());
                 entries.add(PutRecordsRequestEntry.builder().partitionKey(stamped.effectiveLockKeys().getFirst())
                         .data(SdkBytes.fromUtf8String(Json.write(stamped))).build());
             }
@@ -397,6 +400,7 @@ final class FlowGenerator implements AutoCloseable {
             m.put("rate", rate);
             m.put("durationSec", durationSec);
             m.put("errors", errors);
+            m.put("entityKeyOnly", entityKeyOnly);
             m.put("startedAt", startedAt);
             m.put("finishedAt", finishedAt == 0 ? null : finishedAt);
             m.put("elapsedSec", ((finishedAt == 0 ? System.currentTimeMillis() : finishedAt) - startedAt) / 1000);
@@ -492,6 +496,18 @@ final class FlowGenerator implements AutoCloseable {
         }
     }
 
+    /**
+     * An entity event serialized on its own entity only: its declared lock keys (e.g. an order's account) dropped.
+     * Event-style events keep theirs: their keys name the processor that applies them.
+     */
+    static EventEnvelope withoutLockKeys(EventEnvelope e) {
+        if (e.isEventStyle() || e.lockKeys().isEmpty()) {
+            return e;
+        }
+        return new EventEnvelope(e.eventId(), e.smType(), e.instanceKey(), e.eventType(), List.of(), e.payload(), e.sourceTsMillis(),
+                e.ingestTsMillis(), e.style(), e.scheduledAtMillis(), e.parentEventId(), e.causationRoot());
+    }
+
     /** The envelope with its producer timestamp set to the moment it is published. */
     static EventEnvelope restamp(EventEnvelope e, long ts) {
         return new EventEnvelope(e.eventId(), e.smType(), e.instanceKey(), e.eventType(), e.lockKeys(), e.payload(), ts,
@@ -541,6 +557,11 @@ final class FlowGenerator implements AutoCloseable {
     // ---------------------------------------------------------------- API
 
     synchronized Map<String, Object> start(String flowId, double rate, int durationSec, boolean errors) {
+        return start(flowId, rate, durationSec, errors, false);
+    }
+
+    /** Like {@link #start(String, double, int, boolean)}; {@code entityKeyOnly} drops entity events' declared lock keys. */
+    synchronized Map<String, Object> start(String flowId, double rate, int durationSec, boolean errors, boolean entityKeyOnly) {
         Run current = runs.get(flowId);
         if (current != null && current.running()) {
             throw new IllegalStateException("a generator is already running for " + flowId);
@@ -550,7 +571,8 @@ final class FlowGenerator implements AutoCloseable {
             throw new IllegalArgumentException("no way to generate events for " + flowId
                     + ": no sample flows and no machine spec to walk");
         }
-        Run run = new Run(flowId, strategy, Math.max(0.1, Math.min(rate, 200)), Math.max(5, Math.min(durationSec, 3600)), errors);
+        Run run = new Run(flowId, strategy, Math.max(0.1, Math.min(rate, 200)), Math.max(5, Math.min(durationSec, 3600)), errors,
+                entityKeyOnly);
         runs.put(flowId, run);
         Thread.ofVirtual().name("generate-" + flowId).start(run::loop);
         return run.status();

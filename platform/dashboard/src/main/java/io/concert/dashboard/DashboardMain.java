@@ -50,6 +50,10 @@ import org.slf4j.LoggerFactory;
  * POST /api/perf/start?flow=&preset=&machine=&coordinators=&workers=&rate=&duration=&chaos=&chaosEvery=&chaosKafka=&stopAnalytics=
  *                          one flow at a time: stops the others (and analytics if asked), starts it scaled, loads it
  * POST /api/perf/stop · /api/perf/restore · /api/perf/chaos/{on|off} · /api/perf/kafka/{stop|start}
+ *                          (start also takes lockMode=serial|entity|direct)
+ * GET  /api/perf/runs?limit=        past runs (DuckDB, PERF_DB) with summaries, newest first
+ * GET  /api/perf/compare?ids=a,b    up to 4 runs side by side: settings, summary, 10 s samples, timeline
+ * POST /api/perf/runs/{runId}/delete
  * POST /api/perf/instance/{container}/{kill|stop|start}
  * GET /api/flows/{flow}/failures?window=     failures grouped by stage and message (+ event lifecycle errors)
  * GET  /api/model/info     Model query: legend-lite status, mapped classes (per table) and sample queries
@@ -160,8 +164,21 @@ public final class DashboardMain {
         this.temporal = new FlowTemporal(client, temporalUi);
         this.ops = new FlowOps(registry, new DockerCompose(repo(), registry.composeFiles()),
                 io.concert.orchestration.KinesisClients.fromEnv(), client, store, generator);
-        this.perf = new PerfOps(ops, generator);
+        this.perf = new PerfOps(ops, generator, flows, openPerfStore());
         this.model = new ModelQuery(Env.get("LEGEND_LITE_URL", "http://legend-lite:8095"), sinkDuckDb, clickHouse, http);
+    }
+
+    /** The Performance page's history ({@code PERF_DB}), or {@code null} (runs still work, nothing is kept). */
+    private static PerfStore openPerfStore() {
+        java.nio.file.Path file = java.nio.file.Path.of(Env.get("PERF_DB", repo().resolve("build/perf/perf-runs.duckdb").toString()));
+        try {
+            PerfStore s = new PerfStore(file);
+            log.info("performance runs are kept in {}", file);
+            return s;
+        } catch (java.sql.SQLException | RuntimeException e) {
+            log.warn("performance runs are not kept: cannot open {}: {}", file, e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -444,6 +461,15 @@ public final class DashboardMain {
                 json(ex, perf.view());
                 return;
             }
+            if (!post && p[0].equals("runs")) {
+                json(ex, perf.history(intParam(q, "limit", 50)));
+                return;
+            }
+            if (!post && p[0].equals("compare")) {
+                json(ex, perf.compare(java.util.Arrays.stream(q.getOrDefault("ids", "").split(","))
+                        .map(String::trim).filter(x -> !x.isEmpty()).toList()));
+                return;
+            }
             if (!post) {
                 json(ex, 405, Map.of("error", "POST /api/perf/" + rest));
                 return;
@@ -453,10 +479,16 @@ public final class DashboardMain {
                         intParam(q, "coordinators", 0), intParam(q, "workers", 0), Double.parseDouble(q.getOrDefault("rate", "0")),
                         intParam(q, "duration", 300), Boolean.parseBoolean(q.getOrDefault("chaos", "false")),
                         intParam(q, "chaosEvery", 20), Boolean.parseBoolean(q.getOrDefault("chaosKafka", "false")),
-                        Boolean.parseBoolean(q.getOrDefault("stopAnalytics", "true")));
+                        Boolean.parseBoolean(q.getOrDefault("stopAnalytics", "true")), q.getOrDefault("lockMode", "serial"));
                 case "stop" -> perf.stop();
                 case "restore" -> perf.restore();
                 case "chaos" -> perf.chaos(p.length > 1 && p[1].equals("on"));
+                case "runs" -> {
+                    if (p.length < 3 || !p[2].equals("delete")) {
+                        throw new IllegalArgumentException("POST /api/perf/runs/{runId}/delete");
+                    }
+                    yield perf.deleteRun(p[1]);
+                }
                 case "kafka" -> perf.kafka(p.length > 1 ? p[1] : "");
                 case "instance" -> {
                     if (p.length < 3) {

@@ -8,13 +8,16 @@
   :root {
     --bg: #f7f7f5; --panel: #ffffff; --text: #1c1c1a; --muted: #6b6b66; --line: #e4e4df;
     --accent: #2f6fdb; --ok: #1f8a4c; --warn: #b7791f; --bad: #c0392b; --chip: #eef2fb;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) { --bg: #141413; --panel: #1d1d1b; --text: #ececea; --muted: #9a9a94; --line: #2e2e2b;
-            --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; color-scheme: dark; }
+            --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; color-scheme: dark;
+            --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; }
   }
   :root[data-theme="dark"] { --bg: #141413; --panel: #1d1d1b; --text: #ececea; --muted: #9a9a94; --line: #2e2e2b;
-          --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; color-scheme: dark; }
+          --accent: #7aa7ff; --ok: #4cc38a; --warn: #e0a84a; --bad: #ff7a6b; --chip: #232a38; color-scheme: dark;
+          --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; }
   :root[data-theme="light"] { color-scheme: light; }
   #theme { background: none; border: 1px solid var(--line); color: var(--text); padding: 6px 10px; border-radius: 6px; cursor: pointer; margin-left: auto; }
   /* Flow pages: left navigation pane */
@@ -209,6 +212,18 @@
   .tl .act.bad { color: var(--bad); } .tl .act.warn { color: var(--warn); } .tl .act.ok { color: var(--ok); }
   .inst td .ops { gap: 6px; }
   .inst button { padding: 2px 8px; font-size: 12px; }
+  .runs td, .runs th { font-size: 12.5px; white-space: nowrap; }
+  .runs tr.sel td { background: var(--chip); }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .cmp th.run { text-align: right; } .cmp td.num { text-align: right; font-variant-numeric: tabular-nums; } .cmp td.best { font-weight: 700; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; }
+  .chart { position: relative; } .chart h4 { margin: 0 0 4px; font-size: 13px; }
+  .chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .chart .grid { stroke: var(--line); stroke-width: 1; } .chart .axis text { fill: var(--muted); font-size: 11px; }
+  .chart .end { font-size: 11px; font-weight: 600; fill: var(--text); }
+  .chart .tip { position: absolute; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                padding: 6px 8px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,.12); white-space: nowrap; display: none; z-index: 2; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; margin: 4px 0 10px; }
 </style>
 </head>
 <body>
@@ -278,6 +293,7 @@ async function api(path) { const r = await fetch(path); return r.json(); }
 
 async function go(v, id) {
   if (v === 'analytics') { showAnalytics(id || 'duckdb'); return; }
+  if (v === 'perf-compare') { showPerfCompare(id); return; }
   if (v === 'flows') { showFlows(); return; }
   if (v === 'flow') {
     if (!controlFlows) { try { await loadControl(); } catch (e) { /* metrics pages still work */ } }
@@ -1576,7 +1592,8 @@ function renderPerf(p, d) {
       ${run && !setup ? windowPicker('showPerf()') : ''}</div>
     ${p.docker ? `<div class="panel">${status('bad', 'No Docker control')} ${esc(p.docker)}</div>` : ''}
     ${p.job && p.job.action ? `<div class="panel">${jobLog(p.job)}</div>` : ''}
-    ${setup ? perfSetupPanel(p) : perfRunPanel(p) + perfInstancesPanel(p) + perfMetrics(d, p) + perfTimeline(p)}</div>`;
+    ${setup ? perfSetupPanel(p) : perfRunPanel(p) + perfInstancesPanel(p) + perfMetrics(d, p) + perfTimeline(p)}
+    <div id="perf-history">${perfHistoryPanel(p)}</div></div>`;
 }
 
 function perfFlow(p) {
@@ -1615,7 +1632,11 @@ function perfSetupPanel(p) {
         <label>for <select id="pf-dur" onchange="perfForm.duration=+this.value;savePerfForm()">${[60, 300, 600, 1800, 3600].map(x => opt(x, v('duration', 300), x < 120 ? x + ' s' : x / 60 + ' min')).join('')}</select></label>
       </div>
       <div class="note">Replicas run with <span class="mono">docker compose --scale</span>; the tuning applies to this flow's coordinator and worker containers.</div></div>
-    <div class="panel"><h3>3. Chaos and services</h3>
+    <div class="panel"><h3>3. Lock keys</h3>
+      <div class="presets" role="radiogroup">${p.lockModes.map(lm => perfLockCard(lm, v('lockMode', 'serial'))).join('')}</div>
+      <div class="note">Events that workers emit (chained machines) always go through the lock workflows. Direct needs each entity's events on one shard:
+        the generator partitions by the entity key in that mode.</div></div>
+    <div class="panel"><h3>4. Chaos and services</h3>
       <div class="perfform">
         <label><input type="checkbox" id="pf-chaos" ${v('chaos', false) ? 'checked' : ''} onchange="perfForm.chaos=this.checked;savePerfForm()"> include chaos: a random coordinator or worker goes down every</label>
         <label><input type="number" id="pf-every" min="5" max="600" value="${v('chaosEvery', 20)}" oninput="perfForm.chaosEvery=+this.value;savePerfForm()"> s</label>
@@ -1632,6 +1653,17 @@ function perfSetupPanel(p) {
       <span class="muted">${others.length ? `stops ${esc(others.map(o => o.label).join(', '))}` : 'no other flow is running'}${analyticsUp.length && v('stopAnalytics', true)
         ? ` · stops ${esc(analyticsUp.join(', '))}` : ''}</span></div></div>`;
 }
+const LOCK_MODES = {
+  serial: ['Serial keys (as declared)', "Events carry the catalog's lock keys (e.g. an order's account): multi-key events take them in order through the lock workflows. The production setup."],
+  entity: ['Entity key only', 'Each event locks its own entity only, still through the lock workflows: no serialization across entities (accounts no longer queue).'],
+  direct: ['No locks (direct)', 'Entity key only, and the coordinators skip the lock workflows (DIRECT_SM_TYPES): events go straight to their entity, ordered by the shard.'],
+};
+function perfLockCard(lm, cur) {
+  const [label, note] = LOCK_MODES[lm] || [lm, ''];
+  return `<div class="preset ${lm === cur ? 'on' : ''}" tabindex="0" role="radio" aria-checked="${lm === cur}"
+      onclick="perfForm.lockMode='${lm}';savePerfForm();renderPerf(perfLast,null)" onkeydown="if(event.key==='Enter'||event.key===' '){perfForm.lockMode='${lm}';savePerfForm();renderPerf(perfLast,null)}">
+      <span class="lbl">${esc(label)}</span><span class="muted" style="font-size:12px">${esc(note)}</span></div>`;
+}
 function perfPick(id) {
   const pr = perfLast.presets.find(x => x.id === id);
   perfForm = { ...perfForm, preset: id, coordinators: pr.coordinators, workers: pr.workers, rate: pr.rate };
@@ -1642,7 +1674,8 @@ async function perfStart() {
   const val = id => document.getElementById(id);
   const q = new URLSearchParams({ flow: f.id, preset: pr.id, machine: val('pf-machine').value, coordinators: val('pf-coord').value,
     workers: val('pf-work').value, rate: val('pf-rate').value, duration: val('pf-dur').value, chaos: val('pf-chaos').checked,
-    chaosEvery: val('pf-every').value, chaosKafka: val('pf-kafka').checked, stopAnalytics: val('pf-analytics').checked });
+    chaosEvery: val('pf-every').value, chaosKafka: val('pf-kafka').checked, stopAnalytics: val('pf-analytics').checked,
+    lockMode: perfForm.lockMode || 'serial' });
   const others = perfLast.otherFlowsRunning || [];
   if (others.length && !confirm(`Start the performance run on ${f.label}?\n\nThis stops ${others.map(o => o.label).join(', ')} first (only one flow runs at a time).`)) return;
   perfForm = { ...perfForm, flow: f.id, machine: val('pf-machine').value }; savePerfForm();
@@ -1674,7 +1707,8 @@ function perfRunPanel(p) {
       <span class="muted">configuration</span><span>${esc(r.preset.label.split(':')[0])} preset · <b>${r.coordinators}</b> coordinator${r.coordinators === 1 ? '' : 's'} · <b>${r.workers}</b> worker${r.workers === 1 ? '' : 's'} <span class="muted mono">${esc(tuning)}</span></span>
       <span class="muted">load</span><span>${fmt(r.rate)} instances/s on <a class="mono" onclick="go('flow','${esc(r.machine)}')">${esc(r.machine)}</a> for ${fmt(r.durationSec)} s
         ${g ? `<span class="muted">· ${fmt(g.elapsedSec)} s · ${fmt(g.instances)} instances · ${fmt(g.sent)} events sent${g.failed ? ` · <span class="FAILED">${fmt(g.failed)} put failures</span>` : ''}</span>` : ''}</span>
-      <span class="muted">started</span><span>${ago(r.startedAt)}</span></div>
+      <span class="muted">lock keys</span><span>${esc((LOCK_MODES[r.lockMode] || [r.lockMode])[0])}</span>
+      <span class="muted">started</span><span>${ago(r.startedAt)} · <span class="mono muted">${esc(r.runId)}</span> · ${esc(r.status)}${p.store ? ' · recorded in DuckDB' : ''}</span></div>
     ${g ? `<div class="progress" style="width:100%;margin-top:8px" title="${g.elapsedSec}s of ${g.durationSec}s"><div style="width:${pct}%"></div></div>` : ''}</div>`;
 }
 
@@ -1716,6 +1750,145 @@ function perfTimeline(p) {
     <div class="note">Every manual and chaos action, newest first: line them up with dips in the completions above.</div></div>`;
 }
 
+// ---------------------------------------------------------------- Performance: past runs (DuckDB) and comparison
+
+let perfRuns = null, perfRunsAt = 0, perfSel = [];
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
+const lockLabel = lm => (LOCK_MODES[lm] || [lm || '–'])[0];
+const num = (v, d = 1) => v === null || v === undefined ? '–' : fmt(Math.round(v * 10 ** d) / 10 ** d);
+const runName = r => `${r.flow} · ${r.preset} · ${r.coordinators}c/${r.workers}w · ${lockLabel(r.lock_mode).split(' (')[0].toLowerCase()}${r.chaos ? ' · chaos' : ''}`;
+
+function perfHistoryPanel(p) {
+  if (!p.store) return `<div class="panel muted">Past runs are not kept: the dashboard could not open its DuckDB file (PERF_DB).</div>`;
+  if (perfRuns === null || Date.now() - perfRunsAt > 15000) loadPerfRuns(); // refreshed while the page polls
+  if (perfRuns === null) return '<div class="panel muted">Loading past runs…</div>';
+  if (!perfRuns.length) return `<div class="panel"><h3>Past runs</h3><div class="muted">None yet: every run is recorded in <span class="mono">${esc(p.store)}</span>.</div></div>`;
+  const row = r => {
+    const on = perfSel.includes(r.run_id);
+    const st = r.status === 'completed' ? status('ok', 'completed') : r.status === 'running' ? status('warn', 'running') : status('idle', r.status);
+    return `<tr class="${on ? 'sel' : ''}"><td><input type="checkbox" aria-label="select ${esc(r.run_id)}" ${on ? 'checked' : ''} onchange="perfToggle('${esc(r.run_id)}')"></td>
+      <td class="mono">${time(r.started_at).slice(0, 8)} <span class="muted">${new Date(r.started_at).toISOString().slice(0, 10)}</span></td>
+      <td class="mono">${esc(r.flow)}${r.coordinator_impl === 'rust' ? ' <span class="badge">Rust</span>' : ''}</td>
+      <td>${esc(r.preset)}</td><td>${r.coordinators}c / ${r.workers}w</td><td>${num(r.rate)}/s</td><td>${esc(lockLabel(r.lock_mode))}</td>
+      <td>${r.chaos ? 'yes' : '–'}</td><td>${st}</td>
+      <td class="num">${num(r.avg_completed_per_sec)}/s</td><td class="num">${ms(r.latency_p95)}</td><td class="num ${r.errored ? 'FAILED' : ''}">${fmt(r.errored || 0)}</td>
+      <td><button class="ghost" style="padding:2px 8px;font-size:12px" onclick="perfDeleteRun('${esc(r.run_id)}')" ${r.status === 'running' ? 'disabled' : ''}>Delete</button></td></tr>`;
+  };
+  return `<div class="panel"><div class="ops"><h3 style="margin:0">Past runs</h3><span class="muted">${perfRuns.length} recorded in <span class="mono">${esc(p.store)}</span></span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="primary" onclick="go('perf-compare')" ${perfSel.length < 2 ? 'disabled' : ''} title="select 2 to 4 runs">Compare ${perfSel.length || ''} selected</button></div>
+    <div style="overflow-x:auto"><table class="runs" style="margin-top:8px"><tr><th></th><th>started</th><th>flow</th><th>preset</th><th>instances</th><th>load</th><th>lock keys</th>
+      <th>chaos</th><th>status</th><th>completions</th><th>p95 latency</th><th>errors</th><th></th></tr>${perfRuns.map(row).join('')}</table></div>
+    <div class="note">Completions: mean of the 10 s samples while loading. p95 latency: mean of the samples' p95 (Kinesis read → transition persisted). Select up to four to compare.</div></div>`;
+}
+async function loadPerfRuns() {
+  perfRunsAt = Date.now();
+  const d = await apiJson('/api/perf/runs?limit=50');
+  perfRuns = d.error ? [] : d.runs;
+  perfSel = perfSel.filter(id => perfRuns.some(r => r.run_id === id));
+  const el = document.getElementById('perf-history'); if (el && perfLast) el.innerHTML = perfHistoryPanel(perfLast);
+}
+function perfToggle(id) {
+  perfSel = perfSel.includes(id) ? perfSel.filter(x => x !== id) : perfSel.length >= 4 ? perfSel : [...perfSel, id];
+  const el = document.getElementById('perf-history'); if (el) el.innerHTML = perfHistoryPanel(perfLast);
+}
+async function perfDeleteRun(id) {
+  if (!confirm(`Delete run ${id} and its samples from the DuckDB history?`)) return;
+  const d = await apiJson(`/api/perf/runs/${encodeURIComponent(id)}/delete`, { method: 'POST' });
+  if (d.error) { alert(d.error); return; }
+  perfSel = perfSel.filter(x => x !== id); perfRuns = null; loadPerfRuns();
+}
+
+async function showPerfCompare(ids) {
+  setView('perf'); clearTimeout(perfTimer);
+  const list = (ids || perfSel.join(',')).split(',').filter(Boolean);
+  setHash('perf/compare/' + list.map(encodeURIComponent).join(','));
+  out.innerHTML = '<div class="panel muted">Loading runs…</div>';
+  const d = await apiJson('/api/perf/compare?ids=' + encodeURIComponent(list.join(',')));
+  if (!location.hash.startsWith('#perf/compare')) return;
+  if (d.error) { out.innerHTML = `<div class="panel FAILED">${esc(d.error)}</div>`; return; }
+  const runs = d.runs.map((r, i) => ({ ...r, color: SERIES[i], letter: 'ABCD'[i] }));
+  const legend = `<div class="legend">${runs.map(r => `<span><span class="swatch" style="background:${r.color}"></span><b>${r.letter}</b> ${esc(runName(r))}
+      <span class="muted">${new Date(r.started_at).toISOString().slice(0, 16).replace('T', ' ')}</span></span>`).join('')}</div>`;
+  // rows: [label, value(r), formatted(r), better: 'high' | 'low' | null]
+  const rows = [
+    ['flow', r => r.flow, r => esc(r.flow) + (r.coordinator_impl === 'rust' ? ' <span class="badge">Rust</span>' : ' <span class="badge">Java</span>'), null],
+    ['preset', r => r.preset, r => esc(r.preset), null],
+    ['coordinators / workers', null, r => `${r.coordinators} / ${r.workers}`, null],
+    ['load', null, r => `${num(r.rate)} instances/s on <span class="mono">${esc(r.machine)}</span>`, null],
+    ['lock keys', null, r => esc(lockLabel(r.lock_mode)), null],
+    ['chaos', null, r => r.chaos ? `every ${r.chaos_every_sec} s${r.chaos_kafka ? ' (+Kafka)' : ''} · ${fmt(r.disruptions)} disruptions` : (r.disruptions ? fmt(r.disruptions) + ' manual' : '–'), null],
+    ['status', null, r => esc(r.status), null],
+    ['completions / s (mean)', r => r.avg_completed_per_sec, r => num(r.avg_completed_per_sec), 'high'],
+    ['completions / s (peak)', r => r.peak_completed_per_sec, r => num(r.peak_completed_per_sec), 'high'],
+    ['events processed / s', r => r.avg_processed_per_sec, r => num(r.avg_processed_per_sec), 'high'],
+    ['completed', r => r.completed, r => fmt(r.completed || 0), 'high'],
+    ['event latency p50 (median)', r => r.latency_p50, r => ms(r.latency_p50), 'low'],
+    ['event latency p95 (mean)', r => r.latency_p95, r => ms(r.latency_p95), 'low'],
+    ['event latency p99 (worst)', r => r.latency_p99_max, r => ms(r.latency_p99_max), 'low'],
+    ['instance lifetime p50', r => r.lifetime_p50, r => ms(r.lifetime_p50), 'low'],
+    ['errors', r => r.errored, r => fmt(r.errored || 0), 'low'],
+    ['rejected', r => r.rejected, r => fmt(r.rejected || 0), 'low'],
+  ];
+  const best = (f, dir) => { const vs = runs.map(f).filter(v => v !== null && v !== undefined); return vs.length < 2 ? null : dir === 'high' ? Math.max(...vs) : Math.min(...vs); };
+  const table = `<table class="cmp"><tr><th></th>${runs.map(r => `<th class="run"><span class="swatch" style="background:${r.color}"></span>${r.letter}</th>`).join('')}</tr>
+    ${rows.map(([label, val, show, dir]) => { const b = dir ? best(val, dir) : null;
+      return `<tr><td class="muted">${label}</td>${runs.map(r => `<td class="num ${b !== null && val(r) === b ? 'best' : ''}">${show(r)}</td>`).join('')}</tr>`; }).join('')}</table>`;
+  const ser = (key) => runs.map(r => ({ label: r.letter, color: r.color, pts: r.series.filter(x => x[key] !== null && x[key] !== undefined).map(x => [x.t_sec, x[key]]),
+    marks: r.marks.filter(m => m.action.startsWith('CHAOS') || m.action === 'KILL' || m.action === 'STOP').map(m => [Math.max(0, Math.round((m.ts - (r.series[0]?.ts || m.ts) + (r.series[0]?.t_sec || 0) * 1000) / 1000)), m.action + ' ' + m.target.replace('concert-temporal-', '')]) }));
+  out.innerHTML = `<div id="perf-cmp"><div class="crumbs"><a onclick="showPerf()">Performance</a><span class="sep">›</span><h2>Compare ${runs.length} runs</h2>
+      <span class="spacer"></span><button class="ghost" onclick="showPerf()">Back</button></div>
+    <div class="panel">${legend}${table}
+      <div class="note">Best value per metric in bold. Latency figures summarise the 10 s samples' percentiles, not individual events.</div></div>
+    <div class="panel"><div class="charts">
+      ${lineChart('c-done', 'Completions / s', r => num(r) + '/s', ser('completed_per_sec'))}
+      ${lineChart('c-proc', 'Events processed / s', r => num(r) + '/s', ser('processed_per_sec'))}
+      ${lineChart('c-p95', 'Event latency p95', r => ms(r), ser('latency_p95'))}</div>
+      <div class="note">x: seconds since the load started (10 s samples; the load ends, then 30 s of drain). Ticks under a chart are chaos and manual kills / stops of that run.</div></div></div>`;
+}
+
+const perfChartData = {};
+/** A line chart of up to four runs: one y axis, 2px lines, end labels, a crosshair tooltip. */
+function lineChart(id, title, fmtv, series) {
+  const W = 560, H = 210, L = 52, R = 22, T = 10, B = 34;
+  const all = series.flatMap(s => s.pts);
+  if (!all.length) return `<div class="chart"><h4>${esc(title)}</h4><div class="muted">No samples.</div></div>`;
+  const xmax = Math.max(10, ...all.map(p => p[0]));
+  const raw = Math.max(...all.map(p => p[1])) || 1;
+  const mag = 10 ** Math.floor(Math.log10(raw)), step = [1, 2, 2.5, 5, 10].map(f => f * mag).find(st => raw / st <= 4) || mag * 10;
+  const ymax = Math.ceil(raw / step) * step;
+  const x = t => L + (t / xmax) * (W - L - R), y = v => T + (1 - v / ymax) * (H - T - B);
+  const yt = []; for (let v = 0; v <= ymax + 1e-9; v += step) yt.push(v);
+  const xs = [30, 60, 120, 300, 600, 900].find(st => xmax / st <= 6) || 1800, xt = []; for (let t = 0; t <= xmax; t += xs) xt.push(t);
+  const lines = series.map(s => s.pts.length ? `<path d="${s.pts.map((p, i) => (i ? 'L' : 'M') + x(p[0]).toFixed(1) + ' ' + y(p[1]).toFixed(1)).join(' ')}"
+      fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>` : '').join('');
+  const ends = series.map(s => { const p = s.pts.at(-1); return p ? `<text class="end" x="${x(p[0]) + 4}" y="${y(p[1]) + 4}">${esc(s.label)}</text>` : ''; }).join('');
+  const ticks = series.map((s, i) => s.marks.map(([t, what]) => `<line x1="${x(Math.min(t, xmax))}" x2="${x(Math.min(t, xmax))}" y1="${H - B + 4 + i * 3}" y2="${H - B + 9 + i * 3}"
+      stroke="${s.color}" stroke-width="2"><title>${esc(s.label + ': ' + what)}</title></line>`).join('')).join('');
+  perfChartData[id] = { series, x, xmax, L, R, W, fmtv };
+  return `<div class="chart" id="${id}"><h4>${esc(title)}</h4>
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)} over time, ${series.length} runs">
+      <g class="axis">${yt.map(v => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end">${esc(fmtv(v))}</text>`).join('')}
+        ${xt.map(t => `<text x="${x(t)}" y="${H - B + 22}" text-anchor="middle">${t}s</text>`).join('')}</g>
+      ${lines}${ends}${ticks}
+      <line class="xh" x1="0" x2="0" y1="${T}" y2="${H - B}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3" style="display:none"/>
+      <rect x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent" onmousemove="chartHover(event,'${id}')" onmouseleave="chartHover(null,'${id}')"/>
+    </svg><div class="tip"></div></div>`;
+}
+function chartHover(e, id) {
+  const el = document.getElementById(id), c = perfChartData[id]; if (!el || !c) return;
+  const tip = el.querySelector('.tip'), xh = el.querySelector('.xh');
+  if (!e) { tip.style.display = 'none'; xh.style.display = 'none'; return; }
+  const svg = el.querySelector('svg'), box = svg.getBoundingClientRect(), sx = c.W / box.width;
+  const px = (e.clientX - box.left) * sx, t = Math.max(0, Math.min(c.xmax, (px - c.L) / (c.W - c.L - c.R) * c.xmax));
+  const near = s => s.pts.reduce((b, p) => !b || Math.abs(p[0] - t) < Math.abs(b[0] - t) ? p : b, null);
+  const rows = c.series.map(s => { const p = near(s); return p ? `<div><span class="swatch" style="background:${s.color}"></span>${esc(s.label)} ${esc(c.fmtv(p[1]))} <span class="muted">at ${p[0]}s</span></div>` : ''; }).join('');
+  xh.setAttribute('x1', c.x(t)); xh.setAttribute('x2', c.x(t)); xh.style.display = '';
+  tip.innerHTML = rows; tip.style.display = 'block';
+  const left = (e.clientX - el.getBoundingClientRect().left) + 14;
+  tip.style.left = Math.min(left, el.clientWidth - tip.offsetWidth - 4) + 'px'; tip.style.top = '28px';
+}
+
 function route() {
   const [hv, hid, hextra] = location.hash.slice(1).split('/');
   if (hv === 'analytics') showAnalytics(hid || 'duckdb', hextra ? decodeURIComponent(hextra) : undefined);
@@ -1723,7 +1896,7 @@ function route() {
   else if (hv === 'diagrams') showDiagrams(hid ? decodeURIComponent(hid) : undefined);
   else if (hv === 'model') showModel(hid ? decodeURIComponent(location.hash.slice('#model/'.length)) : undefined, !!hid);
   else if (hv === 'flow' && hid) go('flow', location.hash.slice('#flow/'.length).split('/').map(decodeURIComponent).join('/'));
-  else if (hv === 'perf') showPerf();
+  else if (hv === 'perf') { if (hid === 'compare') showPerfCompare(decodeURIComponent(hextra || '')); else showPerf(); }
   else if (hv === 'event' && !hid) { setView('event'); showRecent(); }
   else if (hv && hid) go(hv, decodeURIComponent(hid)); else showFlows();
 }

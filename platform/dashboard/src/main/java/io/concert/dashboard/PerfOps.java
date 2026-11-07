@@ -59,11 +59,31 @@ final class PerfOps {
                             "INGEST_PARALLEL_GROUPS", "16"),
                     "Small worker slots and coordinator parallelism: shows backpressure and queueing."));
 
+    /**
+     * How events are serialized: {@code serial} with the catalog's lock keys (e.g. an order's account) through the lock
+     * workflows; {@code entity} with only their entity's key, still through the lock workflows; {@code direct} with only
+     * their entity's key and no lock workflows at all (the coordinators' {@code DIRECT_SM_TYPES}: dispatched straight to
+     * the entity, ordered by the shard). Events that workers emit (chains) always take the lock workflows.
+     */
+    static final List<String> LOCK_MODES = List.of("serial", "entity", "direct");
+
+    /** Metrics sample period: consecutive windows of this length, so counts add up over a run. */
+    static final int SAMPLE_SEC = 10;
+    /** After the load ends, samples continue this long (the backlog drains), then the run completes. */
+    static final int DRAIN_SEC = 30;
+
     /** One timeline entry. */
     record Mark(long ts, String action, String target, String detail) {}
 
     /** The current run's settings and timeline. */
     static final class Run {
+        final String runId;
+        final String coordinatorImpl;
+        final String lockMode;
+        final Map<String, String> tuning;
+        final PerfStore store;
+        volatile String status = "running";
+        volatile long loadStartedAt;
         final String flow;
         final String machine;
         final Preset preset;
@@ -78,8 +98,14 @@ final class PerfOps {
         volatile boolean kafkaStoppedByUs;
         final List<Mark> timeline = new ArrayList<>();
 
-        Run(String flow, String machine, Preset preset, int coordinators, int workers, double rate, int durationSec,
-                boolean chaos, int chaosEverySec, boolean chaosKafka) {
+        Run(String flow, String coordinatorImpl, String machine, Preset preset, int coordinators, int workers, double rate,
+                int durationSec, boolean chaos, int chaosEverySec, boolean chaosKafka, String lockMode, Map<String, String> tuning,
+                PerfStore store) {
+            this.runId = "perf-" + flow + "-" + java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+            this.coordinatorImpl = coordinatorImpl;
+            this.lockMode = lockMode;
+            this.tuning = Map.copyOf(tuning);
+            this.store = store;
             this.flow = flow;
             this.machine = machine;
             this.preset = preset;
@@ -93,9 +119,17 @@ final class PerfOps {
         }
 
         synchronized void mark(String action, String target, String detail) {
-            timeline.add(new Mark(System.currentTimeMillis(), action, target, detail));
+            Mark m = new Mark(System.currentTimeMillis(), action, target, detail);
+            timeline.add(m);
             if (timeline.size() > 200) {
                 timeline.remove(0);
+            }
+            if (store != null) {
+                try {
+                    store.addMark(runId, m.ts(), action, target, detail);
+                } catch (java.sql.SQLException | RuntimeException e) {
+                    log.warn("perf mark of {} not stored: {}", runId, e.getMessage());
+                }
             }
         }
 
@@ -106,12 +140,17 @@ final class PerfOps {
 
     private final FlowOps ops;
     private final FlowGenerator generator;
+    private final FlowMetrics metrics;
+    /** Past runs (DuckDB); {@code null} when the file can't be opened: runs still work, nothing is kept. */
+    private final PerfStore store;
     private volatile Run run;
     private volatile Thread chaosThread;
 
-    PerfOps(FlowOps ops, FlowGenerator generator) {
+    PerfOps(FlowOps ops, FlowGenerator generator, FlowMetrics metrics, PerfStore store) {
         this.ops = ops;
         this.generator = generator;
+        this.metrics = metrics;
+        this.store = store;
     }
 
     // ---------------------------------------------------------------- status
@@ -119,6 +158,8 @@ final class PerfOps {
     Map<String, Object> view() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("presets", PRESETS);
+        m.put("lockModes", LOCK_MODES);
+        m.put("store", store == null ? null : store.file().toString());
         List<Map<String, Object>> flows = new ArrayList<>();
         for (FlowRegistry.Flow f : ops.registry().all()) {
             if (f.machines().isEmpty()) {
@@ -158,6 +199,10 @@ final class PerfOps {
 
     private Map<String, Object> runView(Run r) {
         Map<String, Object> m = new LinkedHashMap<>();
+        m.put("runId", r.runId);
+        m.put("status", r.status);
+        m.put("lockMode", r.lockMode);
+        m.put("tuning", r.tuning);
         m.put("flow", r.flow);
         m.put("machine", r.machine);
         m.put("preset", r.preset);
@@ -207,7 +252,10 @@ final class PerfOps {
      * starts. {@code coordinators}, {@code workers} and {@code rate} override the preset's when above 0.
      */
     Map<String, Object> start(String flowId, String presetId, String machine, int coordinators, int workers, double rate,
-            int durationSec, boolean chaos, int chaosEverySec, boolean chaosKafka, boolean stopAnalytics) {
+            int durationSec, boolean chaos, int chaosEverySec, boolean chaosKafka, boolean stopAnalytics, String lockMode) {
+        if (!LOCK_MODES.contains(lockMode)) {
+            throw new IllegalArgumentException("lock mode must be one of " + LOCK_MODES + ": " + lockMode);
+        }
         FlowRegistry.Flow f = ops.registry().get(flowId);
         if (f.machines().isEmpty()) {
             throw new IllegalArgumentException(flowId + " has no state machine to load");
@@ -224,13 +272,27 @@ final class PerfOps {
         int c = coordinators > 0 ? coordinators : p.coordinators();
         int w = workers > 0 ? workers : p.workers();
         double r = rate > 0 ? rate : p.rate();
-        Run next = new Run(f.id(), m, p, Math.min(c, 8), Math.min(w, 8), Math.min(r, 500), Math.max(30, Math.min(durationSec, 3600)),
-                chaos, Math.max(5, chaosEverySec), chaosKafka);
+        Map<String, String> tuning = new java.util.TreeMap<>(p.tuning());
+        if (lockMode.equals("direct")) {
+            tuning.put("DIRECT_SM_TYPES", String.join(",", f.machines()));
+        }
+        Run next = new Run(f.id(), f.coordinatorImpl(), m, p, Math.min(c, 8), Math.min(w, 8), Math.min(r, 200),
+                Math.max(30, Math.min(durationSec, 3600)), chaos, Math.max(5, chaosEverySec), chaosKafka, lockMode, tuning, store);
         return ops.submit(JOB, "start", job -> {
-            endRun(job);
+            endRun(job, "stopped");
             run = next;
+            if (store != null) {
+                try {
+                    store.startRun(next.runId, f.id(), f.coordinatorImpl(), m, p.id(), next.coordinators, next.workers, next.rate,
+                            next.durationSec, lockMode, chaos, next.chaosEverySec, chaosKafka,
+                            io.concert.common.Json.write(tuning), next.startedAt);
+                    job.log("run " + next.runId + " is recorded in " + store.file());
+                } catch (java.sql.SQLException | RuntimeException e) {
+                    job.log("run not recorded: " + e.getMessage());
+                }
+            }
             next.mark("START", f.id(), p.label().split(":")[0] + " preset: " + next.coordinators + " coordinator(s), " + next.workers
-                    + " worker(s), " + next.rate + " instances/s on " + m);
+                    + " worker(s), " + next.rate + " instances/s on " + m + ", lock mode " + lockMode);
             List<FlowRegistry.Flow> others = ops.registry().all().stream().filter(x -> !x.id().equals(f.id())).toList();
             job.log("one flow at a time: stopping every other flow");
             ops.stopFlows(others, job);
@@ -240,11 +302,13 @@ final class PerfOps {
                 args.addAll(ANALYTICS);
                 ops.compose().compose(ANALYTICS_PROFILES, args, job::log, 300);
             }
-            ops.bringUp(f, job, next.coordinators, next.workers, p.tuning());
+            ops.bringUp(f, job, next.coordinators, next.workers, tuning);
             waitForInstances(f, next, job);
             job.log("load: " + next.rate + " instances/s on " + m + " for " + next.durationSec + " s");
-            generator.start(m, next.rate, next.durationSec, false);
-            next.mark("LOAD", m, next.rate + "/s for " + next.durationSec + " s");
+            generator.start(m, next.rate, next.durationSec, false, !lockMode.equals("serial"));
+            next.loadStartedAt = System.currentTimeMillis();
+            next.mark("LOAD", m, next.rate + "/s for " + next.durationSec + " s" + (lockMode.equals("serial") ? "" : ", entity key only"));
+            Thread.ofVirtual().name("perf-sampler").start(() -> sampleLoop(next));
             if (next.chaosOn) {
                 startChaos(next);
                 job.log("chaos: a random victim every " + next.chaosEverySec + " s" + (next.chaosKafka ? " (Kafka included)" : ""));
@@ -254,14 +318,15 @@ final class PerfOps {
 
     /** Stops the load and chaos and brings back what is down; the flow keeps running. */
     Map<String, Object> stop() {
-        return ops.submit(JOB, "stop", this::endRun);
+        return ops.submit(JOB, "stop", job -> endRun(job, "stopped"));
     }
 
-    private void endRun(FlowOps.Job job) {
+    private void endRun(FlowOps.Job job, String status) {
         Run r = run;
-        if (r == null) {
+        if (r == null || !"running".equals(r.status)) {
             return;
         }
+        r.status = status;
         r.chaosOn = false;
         Thread t = chaosThread;
         if (t != null) {
@@ -269,8 +334,15 @@ final class PerfOps {
         }
         generator.stop(r.machine);
         restore(r, job);
-        r.mark("STOP", r.flow, "load and chaos stopped");
-        job.log("stopped the run on " + r.flow);
+        r.mark(status.equals("completed") ? "END" : "STOP", r.flow, status.equals("completed") ? "load done and drained" : "load and chaos stopped");
+        if (store != null) {
+            try {
+                store.endRun(r.runId, System.currentTimeMillis(), status);
+            } catch (java.sql.SQLException | RuntimeException e) {
+                job.log("run end not recorded: " + e.getMessage());
+            }
+        }
+        job.log((status.equals("completed") ? "completed" : "stopped") + " the run " + r.runId);
     }
 
     /** Starts every stopped replica of the run's flow, and Kafka if this run stopped it. */
@@ -358,6 +430,13 @@ final class PerfOps {
             r.chaosOn = true;
             startChaos(r);
             r.mark("CHAOS", r.flow, "on, every " + r.chaosEverySec + " s");
+            if (store != null) {
+                try {
+                    store.setChaos(r.runId, true);
+                } catch (java.sql.SQLException | RuntimeException e) {
+                    log.warn("chaos flag of {} not stored: {}", r.runId, e.getMessage());
+                }
+            }
         } else if (!on && r.chaosOn) {
             r.chaosOn = false;
             Thread t = chaosThread;
@@ -375,6 +454,117 @@ final class PerfOps {
             throw new IllegalStateException("no performance run: start one first");
         }
         return r;
+    }
+
+    // ---------------------------------------------------------------- samples and history
+
+    /**
+     * Every {@link #SAMPLE_SEC} seconds while the run is current: the machine's metrics over the last window, the number
+     * of running instances and Kafka's state, stored as one sample. {@link #DRAIN_SEC} seconds after the load ends the
+     * run completes (chaos stops, whatever is down comes back).
+     */
+    private void sampleLoop(Run r) {
+        FlowRegistry.Flow f = ops.registry().get(r.flow);
+        long next = r.loadStartedAt + SAMPLE_SEC * 1000L;
+        long loadEndedAt = 0;
+        try {
+            while (run == r && "running".equals(r.status)) {
+                long wait = next - System.currentTimeMillis();
+                if (wait > 0) {
+                    Thread.sleep(wait);
+                }
+                next += SAMPLE_SEC * 1000L;
+                if (run != r || !"running".equals(r.status)) {
+                    return;
+                }
+                boolean loading = generator.status(r.machine).get("run") instanceof Map<?, ?> g && Boolean.TRUE.equals(g.get("running"));
+                if (!loading && loadEndedAt == 0) {
+                    loadEndedAt = System.currentTimeMillis();
+                }
+                record(r, f, loading);
+                if (!loading && System.currentTimeMillis() - loadEndedAt >= DRAIN_SEC * 1000L) {
+                    ops.submit(JOB, "complete", job -> endRun(job, "completed"));
+                    return;
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException e) {
+            log.warn("perf sampler of {} ended: {}", r.runId, e.getMessage());
+        }
+    }
+
+    private void record(Run r, FlowRegistry.Flow f, boolean loading) {
+        if (store == null) {
+            return;
+        }
+        try {
+            Map<String, Object> v = metrics.flowView(r.machine, SAMPLE_SEC);
+            Map<?, ?> mach = (Map<?, ?>) v.getOrDefault("machine", Map.of());
+            Map<?, ?> pub = (Map<?, ?>) v.getOrDefault("publisher", Map.of());
+            Map<?, ?> coord = (Map<?, ?>) v.getOrDefault("coordinator", Map.of());
+            Map<?, ?> work = (Map<?, ?>) v.getOrDefault("worker", Map.of());
+            int up = (int) instances(f).stream().filter(i -> "running".equals(i.get("state"))).count();
+            boolean kafkaUp = "running".equals(ops.containersOrEmptyFresh().getOrDefault("kafka", Map.of()).get("state"));
+            long now = System.currentTimeMillis();
+            store.addSample(r.runId, new PerfStore.Sample(now, (int) ((now - r.loadStartedAt) / 1000), loading,
+                    dbl(pub.get("perSec")), dbl(coord.get("perSec")), dbl(work.get("perSec")), dbl(mach.get("completedPerSec")),
+                    lng(mach.get("completed")), lng(work.get("errored")), lng(work.get("rejected")), dbl(mach.get("latencyP50")),
+                    dbl(mach.get("latencyP95")), dbl(mach.get("latencyP99")), dbl(mach.get("lifetimeP50")), dbl(mach.get("lifetimeP95")),
+                    lng(coord.get("lockWaits")), up, kafkaUp));
+        } catch (java.sql.SQLException | RuntimeException e) {
+            log.warn("perf sample of {} not stored: {}", r.runId, e.getMessage());
+        }
+    }
+
+    private static Double dbl(Object o) {
+        return o instanceof Number n ? n.doubleValue() : null;
+    }
+
+    private static Long lng(Object o) {
+        return o instanceof Number n ? n.longValue() : null;
+    }
+
+    /** Past runs with their summaries, newest first. */
+    Map<String, Object> history(int limit) {
+        requireStore();
+        try {
+            return Map.of("runs", store.runs(Math.max(1, Math.min(limit, 500))), "store", store.file().toString());
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("reading past runs: " + e.getMessage(), e);
+        }
+    }
+
+    /** Up to four runs side by side: settings, summary, samples and timeline. */
+    Map<String, Object> compare(List<String> runIds) {
+        requireStore();
+        if (runIds.isEmpty() || runIds.size() > 4) {
+            throw new IllegalArgumentException("compare 1 to 4 runs, got " + runIds.size());
+        }
+        try {
+            return Map.of("runs", store.compare(runIds));
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("reading runs: " + e.getMessage(), e);
+        }
+    }
+
+    Map<String, Object> deleteRun(String runId) {
+        requireStore();
+        Run r = run;
+        if (r != null && r.runId.equals(runId) && "running".equals(r.status)) {
+            throw new IllegalStateException(runId + " is running: stop it first");
+        }
+        try {
+            return Map.of("deleted", store.delete(runId));
+        } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("deleting " + runId + ": " + e.getMessage(), e);
+        }
+    }
+
+    private void requireStore() {
+        if (store == null) {
+            throw new IllegalStateException("past runs are not kept: the DuckDB file (PERF_DB) could not be opened");
+        }
     }
 
     // ---------------------------------------------------------------- chaos

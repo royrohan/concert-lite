@@ -33,9 +33,12 @@ final class DockerCompose {
             "EVENT_DOMAINS", "DEEPHAVEN_PSK", "KINESIS_SHARDS", "TRADING_ORDERS", "TRADING_RATE", "DOCKER_HOST", "HOME",
             "COORDINATOR_TARGET");
 
-    /** Variables a caller may set for one compose call: the Temporal / worker tuning of the Performance presets. */
+    /**
+     * Variables a caller may set for one compose call: the Temporal / worker tuning of the Performance presets, and the
+     * coordinators' {@code DIRECT_SM_TYPES} (its "direct" lock mode).
+     */
     static final List<String> TUNING_ENV = List.of("WORKFLOW_TASK_TIMEOUT_MS", "WORKER_WF_SLOTS", "WORKER_LA_SLOTS",
-            "ORCH_WF_POLLERS_MAX", "INGEST_PARALLEL_GROUPS");
+            "ORCH_WF_POLLERS_MAX", "INGEST_PARALLEL_GROUPS", "DIRECT_SM_TYPES");
 
     private final Path repo;
     private final List<String> files;
