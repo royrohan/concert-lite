@@ -1,0 +1,27 @@
+ecosystem library -> showcases/library (1 state machine(s): loan)
+  created   showcases/library/src/main/pure/loan.pure
+  created   showcases/library/src/main/pure/concert/concert.pure
+  created   showcases/library/src/main/java/io/concert/eco/library/LibraryModels.java
+  created   showcases/library/src/main/java/io/concert/eco/library/LoanSpec.java
+  created   showcases/library/src/main/java/io/concert/eco/library/LoanMachine.java
+  created   showcases/library/src/main/java/io/concert/eco/library/LibraryMachines.java
+  created   showcases/library/src/main/java/io/concert/eco/library/LibraryWorkerMain.java
+  created   showcases/library/src/main/resources/META-INF/services/io.concert.sdk.MachineCatalog
+  created   showcases/library/src/test/java/io/concert/eco/library/LibraryGeneratedTest.java
+  created   showcases/library/src/main/java/io/concert/eco/library/LibraryEvents.java
+  created   showcases/library/samples/loan/borrow.json
+  created   showcases/library/samples/loan/cancel.json
+  created   showcases/library/samples/loan/renew.json
+  created   showcases/library/samples/loan/return.json
+  created   showcases/library/samples/loan/lose.json
+  created   showcases/library/samples/flows/loan-happy-path.json
+  created   showcases/library/build.gradle.kts
+  created   showcases/library/compose.yml
+  created   showcases/library/send
+  created   showcases/library/send-flow
+  created   showcases/library/README.md
+  created   infra/deephaven/app.d/ecosystems/library.py
+  created   showcases/library/ecosystem.json
+  updated   settings.gradle.kts
+  0 file(s) unchanged
+next: ./deploy-concert-ecosystem library --store spanner   (or ./gradlew :library:build)

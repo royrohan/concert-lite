@@ -1,0 +1,21 @@
+{
+  "name" : "loan-happy-path",
+  "description" : "REQUESTED -borrow-> BORROWED -return-> RETURNED",
+  "events" : [ {
+    "smType" : "loan",
+    "instanceKey" : "LOAN-1001",
+    "eventType" : "borrow",
+    "payload" : {
+      "memberId" : "MEMBER-ID-1001",
+      "bookId" : "BOOK-ID-1001",
+      "dueDate" : "2026-01-15"
+    }
+  }, {
+    "smType" : "loan",
+    "instanceKey" : "LOAN-1001",
+    "eventType" : "return",
+    "payload" : {
+      "condition" : "condition-1"
+    }
+  } ]
+}

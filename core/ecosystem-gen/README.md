@@ -22,6 +22,9 @@ compose service with the `coordinator-rs` image target (`platform/coordinator-rs
 ```
 
 Both scripts are thin wrappers (bash 3.2 compatible) over `EcosystemCli` (`generate`, `check`, `summary`).
+The Gradle task `generateEcosystems` (group `concert`, clickable in the IDE's Gradle panel) runs `generate` for every
+`examples/<name>` directory, or for one with `-Pecosystem=<name>`. Step by step, with a worked example:
+[Getting started](../../docs/getting-started/README.md).
 
 ## Declaring a state machine
 
@@ -226,6 +229,9 @@ without a payload it sends `samples/events/<EventType>.json`. Flow files mix bot
 
 ## Examples
 
+- `examples/library` → `showcases/library`: one machine (`loan`), built step by step in
+  [Getting started](../../docs/getting-started/README.md); unit test `LoanMachineTest`, integration test `LoanFlowIT`
+  (`./gradlew :library:integrationTest` against the deployed stack).
 - `examples/order-events` → `showcases/order-events`: event style only, domains `orders` and `inventory` (handlers
   implemented by hand; extra flows with expectations in `samples/event-flows/order-*.json`, `payment-poison.json`).
 - `examples/insurance` → `showcases/insurance`: Policy, Claim, Payout (stubs filled in by hand).

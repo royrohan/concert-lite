@@ -45,3 +45,10 @@ subprojects {
         }
     }
 }
+
+// The IDE's Gradle panel lists this under the root project: Tasks > concert > generateEcosystems.
+tasks.register("generateEcosystems") {
+    group = "concert"
+    description = "Generates showcases/<name> from every examples/<name> (or -Pecosystem=<name>)"
+    dependsOn(":ecosystem-gen:generateEcosystems")
+}

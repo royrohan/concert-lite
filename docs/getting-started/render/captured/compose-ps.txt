@@ -1,0 +1,12 @@
+SERVICE               STATUS
+dashboard             Up About a minute
+dsql                  Up 6 minutes (healthy)
+kafka                 Up 6 minutes (healthy)
+library-coordinator   Up About a minute
+library-worker        Up About a minute
+localstack            Up About a minute (healthy)
+samples-coordinator   Up About a minute
+temporal              Up 5 minutes (healthy)
+temporal-db           Up 6 minutes (healthy)
+temporal-ui           Up 6 minutes
+worker                Up About a minute

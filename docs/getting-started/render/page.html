@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --bg: #1b1d21; --panel: #23262c; --panel2: #2b2f36; --line: #353a42; --text: #d6d9de; --muted: #8b929c;
+    --accent: #4f9bf7; --ins: rgba(70, 180, 110, .22); --ins-bar: #46b46e; --sel: rgba(79, 155, 247, .28);
+    --kw: #cf8ef4; --str: #9fd28a; --com: #7d8590; --num: #e9b26b; --type: #6fc3df; --ann: #f0c674; --stereo: #f28b82;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 "DejaVu Sans", "Liberation Sans", sans-serif; }
+  #frame { width: 1000px; height: 620px; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+  header { padding: 14px 20px 10px; background: #15171a; border-bottom: 1px solid var(--line); }
+  header .row { display: flex; align-items: baseline; gap: 12px; }
+  header .badge { background: var(--accent); color: #0b1220; font-weight: 700; border-radius: 6px; padding: 2px 9px; font-size: 14px; }
+  header h1 { font-size: 19px; margin: 0; font-weight: 700; color: #f2f4f7; }
+  header .dots { margin-left: auto; display: flex; gap: 5px; }
+  header .dots i { width: 9px; height: 9px; border-radius: 50%; background: #3a4048; display: block; }
+  header .dots i.on { background: var(--accent); }
+  header p { margin: 6px 0 0; color: #b5bbc4; font-size: 13.5px; line-height: 1.45; }
+  main { flex: 1; display: flex; min-height: 0; position: relative; }
+  code, .mono { font-family: "DejaVu Sans Mono", "Liberation Mono", monospace; }
+
+  /* editor */
+  .tree { width: 210px; background: var(--panel); border-right: 1px solid var(--line); padding: 8px 0; font-size: 12.5px; overflow: hidden; }
+  .tree div { padding: 2px 10px; white-space: nowrap; color: #c3c8cf; }
+  .tree div.dir { color: #9aa3ad; }
+  .tree div.on { background: var(--sel); color: #fff; }
+  .tree div.new { color: #8fd19e; }
+  .ed { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .tabs { height: 32px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; }
+  .tabs span { padding: 7px 14px; font-size: 12.5px; color: #c9ced6; background: var(--bg); border-right: 1px solid var(--line); border-top: 2px solid var(--accent); }
+  .code { flex: 1; overflow: hidden; position: relative; font-size: 13px; line-height: 19px; padding-top: 6px; }
+  .code .ln { display: flex; white-space: pre; }
+  .code .no { width: 44px; text-align: right; padding-right: 12px; color: #5c636d; flex: none; }
+  .code .tx { flex: 1; padding-left: 6px; border-left: 3px solid transparent; }
+  .code .ln.ins .tx { background: var(--ins); border-left-color: var(--ins-bar); }
+  .code .ln.fold .tx { color: var(--muted); font-style: italic; }
+  .caret { display: inline-block; width: 2px; height: 15px; background: #e6e6e6; vertical-align: -2px; margin-left: 1px; }
+  .kw { color: var(--kw); } .str { color: var(--str); } .com { color: var(--com); font-style: italic; }
+  .num { color: var(--num); } .type { color: var(--type); } .ann { color: var(--ann); } .stereo { color: var(--stereo); }
+
+  /* terminal */
+  .term { flex: 1; background: #0f1113; padding: 14px 18px; font-size: 13px; line-height: 19px; overflow: hidden; display: flex; flex-direction: column; justify-content: flex-end; }
+  .term.top { justify-content: flex-start; }
+  .term .l { white-space: pre-wrap; word-break: break-all; color: #c9d1d9; }
+  .term .cmd { color: #f2f4f7; } .term .cmd b { color: #6ee7a8; font-weight: 400; }
+  .term .ok { color: #6ee7a8; } .term .warn { color: #f0c674; } .term .dim { color: #7d8590; }
+  .termbar { height: 28px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); padding: 6px 12px; }
+
+  /* gradle tool window */
+  .gradle { width: 300px; background: var(--panel); border-left: 1px solid var(--line); font-size: 12.5px; }
+  .gradle .hd { padding: 7px 12px; border-bottom: 1px solid var(--line); color: #c9ced6; font-weight: 700; }
+  .gradle .n { padding: 3px 12px; white-space: nowrap; color: #c3c8cf; }
+  .gradle .n.on { background: var(--sel); color: #fff; }
+  .console { flex: none; height: 230px; border-top: 1px solid var(--line); display: flex; flex-direction: column; }
+
+  /* browser */
+  .browser { flex: 1; display: flex; flex-direction: column; background: #e9ebee; }
+  .browser .bar { height: 34px; background: #dfe2e6; display: flex; align-items: center; padding: 0 12px; gap: 8px; }
+  .browser .bar i { width: 11px; height: 11px; border-radius: 50%; background: #c4c8ce; display: block; }
+  .browser .url { flex: 1; margin-left: 10px; background: #fff; border-radius: 6px; padding: 4px 10px; font-size: 12.5px; color: #3b4048; }
+  .browser .view { flex: 1; overflow: hidden; position: relative; background: #fff; }
+  .browser .view img { width: 100%; display: block; }
+  .box { position: absolute; border: 3px solid #f2994a; border-radius: 8px; box-shadow: 0 0 0 4px rgba(242, 153, 74, .25); }
+
+  .cursor { position: absolute; width: 18px; height: 24px; z-index: 10; }
+  .click { position: absolute; width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--accent); margin: -17px 0 0 -17px; z-index: 9; opacity: .8; }
+</style>
+</head>
+<body>
+<div id="frame"></div>
+<script>
+const KW = new Set(('Class Enum Profile import package public private protected static final class abstract extends implements ' +
+  'return new void if else for while switch case default null true false throw throws try catch this super int long boolean ' +
+  'var record interface enum instanceof').split(' '));
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+/** A small highlighter for Java, Kotlin and Pure: comments, strings, stereotypes, annotations, keywords, types, numbers. */
+function highlight(line) {
+  const re = /(\/\/.*$|\/\*.*?\*\/|^\s*\*.*$)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(<<[^>]*>>)|(@[A-Za-z]+)|(\b[A-Za-z_][A-Za-z0-9_]*\b)|(\b\d[\d.]*\b)/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(line))) {
+    out += esc(line.slice(last, m.index));
+    const [t] = m;
+    if (m[1]) out += `<span class="com">${esc(t)}</span>`;
+    else if (m[2]) out += `<span class="str">${esc(t)}</span>`;
+    else if (m[3]) out += `<span class="stereo">${esc(t)}</span>`;
+    else if (m[4]) out += `<span class="ann">${esc(t)}</span>`;
+    else if (m[5]) out += KW.has(t) ? `<span class="kw">${t}</span>` : /^[A-Z]/.test(t) ? `<span class="type">${t}</span>` : t;
+    else out += `<span class="num">${t}</span>`;
+    last = m.index + t.length;
+  }
+  return out + esc(line.slice(last));
+}
+
+function header(s) {
+  const dots = Array.from({ length: s.total }, (_, i) => `<i class="${i < s.step ? 'on' : ''}"></i>`).join('');
+  return `<header><div class="row"><span class="badge">Step ${s.step} of ${s.total}</span><h1>${esc(s.title)}</h1>
+    <div class="dots">${dots}</div></div><p>${s.caption}</p></header>`;
+}
+
+function editor(e) {
+  const tree = (e.tree || []).map(t => `<div class="${t.cls || ''}" style="padding-left:${10 + (t.depth || 0) * 14}px">${esc(t.name)}</div>`).join('');
+  const rows = Math.floor((620 - 120 - 32 - 6) / 19);
+  const top = Math.max(0, Math.min(e.scroll || 0, Math.max(0, e.lines.length - rows)));
+  const body = e.lines.slice(top, top + rows).map((l, i) => {
+    const n = top + i;
+    const cls = (e.ins || []).includes(n) ? 'ins' : (l.fold ? 'fold' : '');
+    const text = l.fold ? esc(l.text) : highlight(typeof l === 'string' ? l : l.text);
+    const caret = n === e.caret ? '<span class="caret"></span>' : '';
+    return `<div class="ln ${cls}"><span class="no">${l.fold ? '⋯' : (l.no ?? n + 1)}</span><span class="tx">${text}${caret}</span></div>`;
+  }).join('');
+  return `${tree ? `<div class="tree">${tree}</div>` : ''}<div class="ed"><div class="tabs"><span>${esc(e.tab)}</span></div>
+    <div class="code mono">${body}</div></div>`;
+}
+
+function termLines(lines) {
+  return lines.map(l => l.cmd !== undefined
+    ? `<div class="l cmd"><b>$</b> ${esc(l.cmd)}${l.caret ? '<span class="caret"></span>' : ''}</div>`
+    : `<div class="l ${l.cls || ''}">${esc(l.text)}</div>`).join('');
+}
+
+function terminal(t) {
+  return `<div class="ed"><div class="termbar mono">${esc(t.title || 'Terminal — concert-lite')}</div>
+    <div class="term mono ${t.top ? 'top' : ''}">${termLines(t.lines)}</div></div>`;
+}
+
+function gradle(g) {
+  const nodes = g.nodes.map((n, i) => `<div class="n ${i === g.selected ? 'on' : ''}" data-i="${i}" style="padding-left:${12 + n.depth * 14}px">${esc(n.name)}</div>`).join('');
+  return `<div class="ed">${editor({ ...g.editor, tree: null }).replace(/^/, '')}
+      <div class="console"><div class="termbar mono">Run: concert-lite [generateEcosystems]</div><div class="term mono">${termLines(g.console)}</div></div></div>
+    <div class="gradle"><div class="hd">Gradle</div>${nodes}</div>`;
+}
+
+function browser(b) {
+  return `<div class="browser"><div class="bar"><i></i><i></i><i></i><div class="url mono">${esc(b.url)}</div></div>
+    <div class="view"><img src="${b.img}" style="margin-top:${-(b.scroll || 0)}px">
+    ${b.box ? `<div class="box" style="left:${b.box.x}px;top:${b.box.y - (b.scroll || 0)}px;width:${b.box.w}px;height:${b.box.h}px"></div>` : ''}</div></div>`;
+}
+
+const CURSOR = `<svg viewBox="0 0 18 24"><path d="M1 1 L1 19 L6 14.5 L9.5 22 L12.5 20.6 L9 13.3 L15.5 13.3 Z" fill="#fff" stroke="#111" stroke-width="1.3"/></svg>`;
+
+window.render = s => {
+  let body = '';
+  if (s.view === 'editor') body = editor(s.editor);
+  else if (s.view === 'terminal') body = terminal(s.terminal);
+  else if (s.view === 'gradle') body = gradle(s.gradle);
+  else if (s.view === 'browser') body = browser(s.browser);
+  document.getElementById('frame').innerHTML = header(s) + `<main>${body}</main>`;
+  if (!s.cursor) return;
+  // the cursor glides from `from` to the element `sel` (t = 0..1), or sits at x / y
+  const main = document.querySelector('main'), m = main.getBoundingClientRect();
+  let { x, y } = s.cursor;
+  if (s.cursor.sel) {
+    const r = document.querySelector(s.cursor.sel).getBoundingClientRect();
+    const to = { x: r.left - m.left + 40, y: r.top - m.top + r.height / 2 - 4 }, from = s.cursor.from || to;
+    const t = s.cursor.t ?? 1, e = t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
+    x = from.x + (to.x - from.x) * e; y = from.y + (to.y - from.y) * e;
+  }
+  main.insertAdjacentHTML('beforeend', (s.cursor.click ? `<div class="click" style="left:${x + 2}px;top:${y + 2}px"></div>` : '') +
+    `<div class="cursor" style="left:${x}px;top:${y}px">${CURSOR}</div>`);
+};
+</script>
+</body>
+</html>
