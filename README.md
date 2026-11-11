@@ -13,6 +13,8 @@ its schedule. There is no bespoke lease, peer or outbox protocol: failover, retr
 
 **New here? [Getting started](docs/getting-started/README.md)** walks through your first flow in eight animated steps:
 Pure model, state machine, generate, implement, tests, integration test, deploy, run.
+[Coordinator and worker specification](docs/spec/coordinator-worker.md) is the normative contract (lock protocol,
+multi-key chains, entity workflow, Sagas, Postgres / DSQL store) for reimplementing either side.
 [External side effects](docs/external-side-effects.md) shows a worker that charges a REST service and publishes to
 Kafka, with idempotent writes and a Saga, checked by chaos scenarios where commits succeed but their answer is lost.
 
