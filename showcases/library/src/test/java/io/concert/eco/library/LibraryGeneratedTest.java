@@ -17,6 +17,7 @@ import io.concert.model.runtime.ModelObject;
 import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.sdk.EntitySnapshotPublisher;
 import io.concert.sdk.StateMachineSpec;
+import io.concert.sdk.WorkerActivities;
 import io.concert.sink.EntitySnapshot;
 import io.concert.store.InMemoryStateStore;
 import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
@@ -71,6 +72,11 @@ class LibraryGeneratedTest {
                 Worker w = env.newWorker(TaskQueues.stateMachine(type));
                 w.registerWorkflowImplementationTypes(machine.impl());
                 w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), (EntitySnapshotPublisher) snapshots::add);
+                // fakes of the machine's own activities (WorkerActivities.forTests), if it calls any
+                List<Object> own = WorkerActivities.loadForTests(type);
+                if (!own.isEmpty()) {
+                    w.registerActivitiesImplementations(own.toArray());
+                }
             });
             env.start();
             WorkflowClient client = env.getWorkflowClient();

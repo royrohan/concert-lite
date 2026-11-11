@@ -1,0 +1,6 @@
+{
+  "accountId" : "ACCOUNT-ID-1001",
+  "amount" : 1250.00,
+  "currency" : "USD",
+  "memo" : "memo-1"
+}

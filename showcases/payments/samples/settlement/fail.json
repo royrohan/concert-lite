@@ -1,0 +1,10 @@
+{
+  "ledgerRef" : "LEDGER-REF-1001",
+  "ledgerAttempts" : 1,
+  "ledgerReplayed" : true,
+  "kafkaPartition" : 1,
+  "kafkaOffset" : 1,
+  "kafkaAttempts" : 1,
+  "reason" : "sample reason",
+  "refunded" : true
+}

@@ -5,6 +5,7 @@ import io.concert.common.Env;
 import io.concert.common.TemporalClients;
 import io.concert.sdk.EntitySnapshotPublisher;
 import io.concert.sdk.MachineCatalog;
+import io.concert.sdk.WorkerActivities;
 import io.concert.sdk.WorkerBootstrap;
 import io.concert.sink.SnapshotCodec;
 import io.concert.store.StateStore;
@@ -38,7 +39,10 @@ public final class TradingGenRsWorkerMain {
         List<WorkerFactory> factories = new ArrayList<>();
         for (String type : types.split(",")) {
             MachineCatalog.Machine machine = TradingGenRsMachines.get(type.trim());
-            factories.add(WorkerBootstrap.start(client, store, machine.smType(), machine.impl(), snapshots));
+            // your activities (WorkerActivities providers in META-INF/services), next to the snapshot publisher
+            List<Object> activities = new ArrayList<>(List.of(snapshots));
+            activities.addAll(WorkerActivities.load(machine.smType()));
+            factories.add(WorkerBootstrap.start(client, store, machine.smType(), machine.impl(), activities.toArray()));
             log.info("worker up for sm-{}", machine.smType());
         }
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
