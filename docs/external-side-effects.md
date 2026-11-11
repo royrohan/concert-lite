@@ -144,4 +144,41 @@ Tests:
 
 ## Results
 
-<!-- results -->
+One run of `scripts/payments-chaos.sh` on the local stack (Docker, Postgres store, 2 payments workers). Each
+scenario had 40 payments (80 for `ledger-restart`), every 10th over the limit, with faults on 40% of ledger requests.
+Columns:
+- **repeats answered**: retries the ledger answered from its idempotency store instead of committing again;
+- **Kafka records / keys**: records written, and distinct (payment, type) pairs.
+
+| scenario | settled | declined | failed | duplicate charges | faults | repeats answered | ledger retries | Kafka records / keys | Kafka retries | violations |
+|---|---|---|---|---|---|---|---|---|---|---|
+| baseline | 36 | 4 | 0 | 0 | 0 | 0 | 0 | 36 / 36 | 0 | 0 |
+| commit-then-500 | 36 | 4 | 0 | 0 | 42 | 42 | 39 | 36 / 36 | 0 | 0 |
+| commit-then-timeout | 36 | 4 | 0 | 0 | 22 | 22 | 20 | 36 / 36 | 0 | 0 |
+| commit-then-drop | 36 | 4 | 0 | 0 | 27 | 27 | 26 | 36 / 36 | 0 | 0 |
+| fail-before-commit | 36 | 4 | 0 | 0 | 19 | 0 | 18 | 36 / 36 | 0 | 0 |
+| kafka-ack-loss | 35 | 4 | 1 | 0 | – | 0 | 0 | 65 / 37 | 17 | 0 |
+| worker-kill | 36 | 4 | 0 | 0 | – | 0 | 0 | 36 / 36 | 0 | 0 |
+| ledger-restart | 72 | 8 | 0 | 0 | 3 kills | 5 | 34 | 72 / 72 | 0 | 0 |
+| kafka-pause | 36 | 4 | 0 | 0 | – | 0 | 0 | 40 / 36 | 37 | 0 |
+| kafka-outage | 14 | 4 | 22 | 0 | – | 0 | 0 | 40 / 40 | 0 | 0 |
+| storm | 36 | 4 | 0 | 0 | 24 | 24 | 23 | 44 / 36 | 8 | 0 |
+| **control-no-idempotency** | 36 | 4 | 0 | **24** | 24 | 0 | 24 | 36 / 36 | 0 | **36** (expected) |
+
+What the results show:
+- **Ambiguous commits never become double charges.** Under 500s, late answers, dropped connections and restarts,
+  every charge that committed without an answer was retried and answered from the store ("repeats answered" matches
+  the faults). The control run turns the keys off: the same faults become 24 double charges.
+- **Kafka is at least once; the keys make it once.** Lost acks and frozen brokers rewrite records: 65 records for 37
+  keys, and 44 for 36. Distinct keys always match the outcomes.
+- **The Saga leaves nothing half done.**
+  - In `kafka-outage`, 22 payments could not publish within their 40 s budget. All were refunded and reversed
+    (a reversal for each, plus the 4 settlement records that had been written before the broker froze).
+  - In `kafka-ack-loss`, one payment kept losing its ack until the budget ran out, and was undone the same way.
+- **No payment was lost or stuck**, through every worker kill and ledger restart.
+
+Limits of the run:
+- `worker-kill` kills land between calls more often than inside one (calls take milliseconds). It shows that no
+  payment is lost; mid-call crashes are better covered by `ledger-restart`, whose kills hit the window between commit
+  and answer on purpose.
+- The Kafka ack loss is simulated in the worker after the real write; the other faults are real.
