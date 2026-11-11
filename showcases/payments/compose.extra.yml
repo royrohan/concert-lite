@@ -7,6 +7,13 @@ services:
     image: concert-temporal/payments-worker
     entrypoint: ["/app/bin/ledger-service"]
     ports: ["8097:8097"]
+    environment:
+      # charges and stored answers in the platform's Postgres (ledger_* tables): they survive a restart of the ledger
+      LEDGER_JDBC_URL: jdbc:postgresql://dsql:5432/concert
+      LEDGER_DB_USER: concert
+      LEDGER_DB_PASSWORD: concert
+    depends_on:
+      dsql: { condition: service_healthy }
     restart: unless-stopped
 
   payments-worker:
@@ -21,3 +28,7 @@ services:
   # the flow publishes to Kafka (topic payments.settled), with or without the analytics profile
   kafka:
     profiles: [analytics, payments]
+
+  # the ledger's database, with or without STORE_KIND=postgres
+  dsql:
+    profiles: [postgres, payments]

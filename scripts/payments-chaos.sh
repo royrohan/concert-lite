@@ -20,6 +20,9 @@
 #   worker-kill           kill -9 a payments worker every KILL_EVERY s, mid-activity
 #   kafka-pause           Kafka frozen for 15 s (publishes retry until it is back)
 #   kafka-outage          Kafka frozen for 70 s, past the 40 s publish budget: the Saga refunds and reverses
+#   ledger-restart        the ledger answers 400 ms after committing and is killed -9 every LEDGER_KILL_EVERY s, so
+#                         kills land between commit and answer; it restarts with its charges and stored answers in
+#                         Postgres, and the retry of a commit whose answer died with the process is replayed
 #   storm                 commit-then-drop + kafka-ack-loss + worker-kill together
 #   control-no-idempotency  commit-then-500 with the ledger's idempotency keys OFF: double charges are expected
 #                         (the run passes when the verifier finds them; it shows what the keys prevent)
@@ -34,8 +37,9 @@ WORKERS=${WORKERS:-2}
 KILL_EVERY=${KILL_EVERY:-6}
 SKIP_DEPLOY=${SKIP_DEPLOY:-0}
 SKIP_BUILD=${SKIP_BUILD:-0}
+LEDGER_KILL_EVERY=${LEDGER_KILL_EVERY:-4}
 ALL=(baseline commit-then-500 commit-then-timeout commit-then-drop fail-before-commit kafka-ack-loss worker-kill
-  kafka-pause kafka-outage storm control-no-idempotency)
+  ledger-restart kafka-pause kafka-outage storm control-no-idempotency)
 SCENARIOS=("$@")
 [ ${#SCENARIOS[@]} -eq 0 ] && SCENARIOS=("${ALL[@]}")
 
@@ -58,7 +62,7 @@ CHECK="$ROOT/showcases/payments/build/install/payments/bin/payments-chaos"
 
 say() { echo "$*" | tee -a "$LOG"; }
 chaos() { curl -sf -X POST "$LEDGER/chaos" -d "$1" >/dev/null || say "  (could not set chaos $1)"; }
-reset() { chaos '{"mode":"none","rate":0,"idempotency":true,"kafkaAckLossRate":0}'; }
+reset() { chaos '{"mode":"none","rate":0,"idempotency":true,"kafkaAckLossRate":0,"latencyMs":0}'; }
 
 if [ "$SKIP_DEPLOY" != 1 ]; then
   say "==> deploying the payments flow"
@@ -89,6 +93,23 @@ kill_loop() {
   done
 }
 
+# kill -9 the ledger every LEDGER_KILL_EVERY s and start it 3 s later, until $OUT/stop-kills exists
+ledger_kill_loop() {
+  while [ ! -f "$OUT/stop-kills" ]; do
+    sleep "$LEDGER_KILL_EVERY"
+    [ -f "$OUT/stop-kills" ] && break
+    l=$(dc ps -q payments-ledger)
+    [ -n "$l" ] || continue
+    echo "  $(date +%T) kill -9 ledger" >> "$LOG"
+    docker kill -s KILL "$l" >/dev/null 2>&1
+    sleep 3
+    docker start "$l" >/dev/null 2>&1
+    # chaos settings live in the ledger's memory: set the post-commit delay again
+    for _ in $(seq 1 30); do curl -sf "$LEDGER/health" >/dev/null && break; sleep 0.5; done
+    chaos '{"latencyMs":400}'
+  done
+}
+
 # freeze Kafka for $1 s after a 5 s head start
 pause_kafka() {
   sleep 5
@@ -115,6 +136,7 @@ for s in "${SCENARIOS[@]}"; do
       chaos "{\"mode\":\"$s\",\"rate\":$FAULT_RATE}"; run "$s" ;;
     kafka-ack-loss) chaos "{\"kafkaAckLossRate\":$FAULT_RATE}"; run "$s" ;;
     worker-kill) kill_loop & k=$!; run "$s"; touch "$OUT/stop-kills"; wait $k ;;
+    ledger-restart) chaos '{"latencyMs":400}'; ledger_kill_loop & k=$!; run "$s" --count $((COUNT * 2)) --timeout 400; touch "$OUT/stop-kills"; wait $k ;;
     kafka-pause) pause_kafka 15 & p=$!; run "$s"; wait $p ;;
     kafka-outage) pause_kafka 70 & p=$!; run "$s" --timeout 400; wait $p ;;
     storm)

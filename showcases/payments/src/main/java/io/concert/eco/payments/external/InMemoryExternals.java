@@ -26,7 +26,7 @@ public final class InMemoryExternals {
         @Override
         public Receipt charge(ChargeRequest r) {
             requests.incrementAndGet();
-            if (r.amount().compareTo(LedgerService.LIMIT) > 0) {
+            if (r.amount().compareTo(LedgerStore.LIMIT) > 0) {
                 throw ApplicationFailure.newNonRetryableFailure("insufficient funds", "Declined");
             }
             int attempt = Activity.getExecutionContext().getInfo().getAttempt();

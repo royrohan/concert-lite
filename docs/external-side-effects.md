@@ -57,6 +57,10 @@ retry repeats the write. Exactly-once *effect* comes from the receiver deduplica
   still have committed, so its refund is registered first. A refund when nothing was charged is a no-op, which makes
   compensation safe to run. In the same way, a reversal record is registered before the publish. A Kafka record
   cannot be taken back, only answered with a REVERSED record.
+- **The receiver's commit and its stored answer are one transaction.** The ledger keeps both in Postgres
+  (`ledger_*` tables) and writes them together under a per-key lock. A crash therefore never leaves a charge without its
+  stored answer: after a restart a key is either unknown, so the retry commits it, or known, so the retry gets the
+  stored answer. The `ledger-restart` scenario kills the ledger between commit and answer to check exactly this.
 - **Compensations retry until they succeed** (`setMaximumAttempts(0)`). A refund must not be given up on, so a payment
   can wait in SETTLING until the systems it needs come back.
 
@@ -72,7 +76,8 @@ Machines create the stubs as fields (`Workflow.newActivityStub(...)`) and call t
 
 `showcases/payments/compose.extra.yml` is the hand-written companion of the generated `compose.yml`.
 `./deploy-concert-ecosystem` and the dashboard add it automatically. It adds three things:
-- the ledger service;
+- the ledger service, storing its state in the platform's Postgres (`LEDGER_JDBC_URL`; without it the ledger keeps
+  state in memory);
 - the worker's `LEDGER_URL`;
 - Kafka for the `payments` profile, so the flow runs with `--no-analytics` too.
 
@@ -101,6 +106,23 @@ and the topic:
 | FAILED | no live charge (refunded); a reversal for any settlement record that was written |
 | any | an outcome (none stuck in NEW / SETTLING); at most one ledger commit |
 
+Scenarios:
+
+| scenario | fault |
+|---|---|
+| `baseline` | none |
+| `commit-then-500` | the ledger commits, then answers 500 (on `FAULT_RATE` = 40% of requests, retries included) |
+| `commit-then-timeout` | the ledger commits, then answers after 8 s; the worker gives up after 4 s |
+| `commit-then-drop` | the ledger commits, then drops the connection without answering |
+| `fail-before-commit` | the ledger answers 503 without committing |
+| `kafka-ack-loss` | Kafka writes the record and the ack is lost (simulated in the worker after the real write) |
+| `worker-kill` | `kill -9` a payments worker every 6 s |
+| `ledger-restart` | the ledger answers 400 ms after committing and is `kill -9`'d every 4 s, then restarted (80 payments) |
+| `kafka-pause` | Kafka frozen (`docker pause`) for 15 s: publishes retry until it is back |
+| `kafka-outage` | Kafka frozen for 70 s, past the 40 s publish budget: the Saga refunds and reverses |
+| `storm` | commit-then-drop and ack loss (30% each) plus worker kills |
+| `control-no-idempotency` | commit-then-500 with the ledger's idempotency keys **off**: double charges are expected, and the run passes when the verifier finds them |
+
 Faults can be switched by hand too:
 
 ```bash
@@ -112,8 +134,13 @@ curl -X POST localhost:8097/chaos -d '{"kafkaAckLossRate":0.5}'
 ```
 
 ```bash
-curl -X POST localhost:8097/chaos -d '{"mode":"none","rate":0,"kafkaAckLossRate":0,"idempotency":true}'
+curl -X POST localhost:8097/chaos -d '{"mode":"none","rate":0,"kafkaAckLossRate":0,"idempotency":true,"latencyMs":0}'
 ```
+
+Tests:
+- `./gradlew :payments:test`: the machine against in-memory fakes (lost answers, lost acks, decline, Saga), and the
+  ledger over HTTP.
+- `./gradlew :payments:integrationTest`: the Postgres ledger across a restart (needs the local stack's Postgres).
 
 ## Results
 

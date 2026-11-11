@@ -132,8 +132,19 @@ public final class PaymentsChaosCheck {
 
     private static Map<String, JsonNode> ledger(String prefix) throws Exception {
         String url = Env.get("LEDGER_URL", "http://localhost:8097") + "/charges?prefix=" + prefix;
-        HttpResponse<String> r = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).build(),
-                HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> r = null;
+        // the ledger may be down for a moment (the ledger-restart scenario kills it): wait for it
+        for (int attempt = 1; r == null; attempt++) {
+            try {
+                r = HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofSeconds(10)).build(),
+                        HttpResponse.BodyHandlers.ofString());
+            } catch (java.io.IOException e) {
+                if (attempt >= 60) {
+                    throw e;
+                }
+                Thread.sleep(1000);
+            }
+        }
         Map<String, JsonNode> out = new HashMap<>();
         Json.MAPPER.readTree(r.body()).forEach(n -> out.put(n.path("paymentId").asText(), n));
         return out;

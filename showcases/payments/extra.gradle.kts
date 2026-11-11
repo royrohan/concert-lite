@@ -31,3 +31,19 @@ extensions.configure<DistributionContainer> {
         }
     }
 }
+
+// Integration tests (@Tag("integration")) need the local stack's Postgres: `test` skips them,
+// `integrationTest` runs only them.
+tasks.named<Test>("test") {
+    useJUnitPlatform { excludeTags("integration") }
+}
+
+tasks.register<Test>("integrationTest") {
+    group = "verification"
+    description = "Runs the @Tag(\"integration\") tests against the local stack"
+    val test = tasks.named<Test>("test").get()
+    testClassesDirs = test.testClassesDirs
+    classpath = test.classpath
+    useJUnitPlatform { includeTags("integration") }
+    outputs.upToDateWhen { false }
+}
