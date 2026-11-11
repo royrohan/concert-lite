@@ -108,9 +108,13 @@ final class FlowRegistry {
         return f == null ? Flows.stream("") : f.stream();
     }
 
-    /** Every compose override of a generated ecosystem, so each compose call sees the same project. */
+    /**
+     * Every compose override of a generated ecosystem, so each compose call sees the same project: its generated
+     * {@code compose.yml}, then its hand-written {@code compose.extra.yml} (DockerCompose skips files that do not exist).
+     */
     List<String> composeFiles() {
-        return flows.values().stream().map(Flow::composeFile).filter(java.util.Objects::nonNull).distinct().toList();
+        return flows.values().stream().map(Flow::composeFile).filter(java.util.Objects::nonNull).distinct()
+                .flatMap(f -> java.util.stream.Stream.of(f, f.replaceFirst("compose\\.yml$", "compose.extra.yml"))).distinct().toList();
     }
 
     private static Map<String, Flow> build(Path repo, List<MachineCatalog> machines, List<EventCatalog> events) {

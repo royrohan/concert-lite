@@ -1,0 +1,23 @@
+# Yours (not generated): the payments flow's external systems. ./deploy-concert-ecosystem and the dashboard add this
+# file after the generated compose.yml whenever it exists.
+services:
+  # the sample ledger REST service the worker charges (chaos: POST http://localhost:8097/chaos)
+  payments-ledger:
+    profiles: [payments]
+    image: concert-temporal/payments-worker
+    entrypoint: ["/app/bin/ledger-service"]
+    ports: ["8097:8097"]
+    restart: unless-stopped
+
+  payments-worker:
+    environment:
+      LEDGER_URL: http://payments-ledger:8097
+      # its own Kafka setting: KAFKA_BOOTSTRAP (snapshots for the analytics sinks) is empty with --no-analytics
+      PAYMENTS_KAFKA_BOOTSTRAP: kafka:9092
+    depends_on:
+      payments-ledger: { condition: service_started }
+      kafka: { condition: service_healthy }
+
+  # the flow publishes to Kafka (topic payments.settled), with or without the analytics profile
+  kafka:
+    profiles: [analytics, payments]

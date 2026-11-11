@@ -207,6 +207,24 @@ event-style envelope (`style: "event"`, lock keys rendered from the type's templ
 without a payload it sends `samples/events/<EventType>.json`. Flow files mix both styles: an entry with
 `"style": "event"` takes `eventType`, `payload` and optionally `at` / `id`.
 
+## Calling external systems (activities)
+
+A machine that calls other systems (REST services, Kafka, ...) does so through Temporal activities: create the stubs as
+fields of your `<Root>Machine` (`Workflow.newActivityStub(...)`) and call them from `onTransition`. Register their
+implementations with a `io.concert.sdk.WorkerActivities` provider, listed in
+`src/main/resources/META-INF/services/io.concert.sdk.WorkerActivities`:
+- the generated worker registers `create(smType)` on `sm-<smType>`;
+- the generated test registers `forTests(smType)` (fakes).
+
+Services the flow needs go in `compose.extra.yml` next to the generated `compose.yml`. It is yours: never generated.
+`./deploy-concert-ecosystem` and the dashboard add it whenever it exists.
+
+The worked example is `examples/payments`, explained in
+[External side effects](../../docs/external-side-effects.md):
+- a REST charge and a Kafka publish with idempotency keys;
+- a Saga for compensation;
+- chaos scenarios for commits whose answer is lost.
+
 ## How it plugs into the platform
 
 - **Dashboard**: modules provide their machines through the `io.concert.sdk.MachineCatalog` SPI and their event
@@ -229,6 +247,9 @@ without a payload it sends `samples/events/<EventType>.json`. Flow files mix bot
 
 ## Examples
 
+- `examples/payments` → `showcases/payments`: a machine that calls a REST service and Kafka from a transition
+  (activities, idempotency keys, Saga), with `scripts/payments-chaos.sh`; see
+  [External side effects](../../docs/external-side-effects.md).
 - `examples/library` → `showcases/library`: one machine (`loan`), built step by step in
   [Getting started](../../docs/getting-started/README.md); unit test `LoanMachineTest`, integration test `LoanFlowIT`
   (`./gradlew :library:integrationTest` against the deployed stack).

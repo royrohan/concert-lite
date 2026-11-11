@@ -380,6 +380,7 @@ final class JavaSources {
                 import io.concert.common.TemporalClients;
                 import io.concert.sdk.EntitySnapshotPublisher;
                 import io.concert.sdk.MachineCatalog;
+                import io.concert.sdk.WorkerActivities;
                 import io.concert.sdk.WorkerBootstrap;
                 import io.concert.sink.SnapshotCodec;
                 import io.concert.store.StateStore;
@@ -410,7 +411,10 @@ final class JavaSources {
                 + "        List<WorkerFactory> factories = new ArrayList<>();\n"
                 + "        for (String type : types.split(\",\")) {\n"
                 + "            MachineCatalog.Machine machine = " + m + ".get(type.trim());\n"
-                + "            factories.add(WorkerBootstrap.start(client, store, machine.smType(), machine.impl(), snapshots));\n"
+                + "            // your activities (WorkerActivities providers in META-INF/services), next to the snapshot publisher\n"
+                + "            List<Object> activities = new ArrayList<>(List.of(snapshots));\n"
+                + "            activities.addAll(WorkerActivities.load(machine.smType()));\n"
+                + "            factories.add(WorkerBootstrap.start(client, store, machine.smType(), machine.impl(), activities.toArray()));\n"
                 + "            log.info(\"worker up for sm-{}\", machine.smType());\n"
                 + "        }\n"
                 + "        Runtime.getRuntime().addShutdownHook(new Thread(() -> {\n"
@@ -777,6 +781,7 @@ final class JavaSources {
                 import io.concert.sdk.EntityPersistenceActivitiesImpl;
                 import io.concert.sdk.EntitySnapshotPublisher;
                 import io.concert.sdk.StateMachineSpec;
+                import io.concert.sdk.WorkerActivities;
                 import io.concert.sink.EntitySnapshot;
                 import io.concert.store.InMemoryStateStore;
                 import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
@@ -835,6 +840,11 @@ final class JavaSources {
                                 Worker w = env.newWorker(TaskQueues.stateMachine(type));
                                 w.registerWorkflowImplementationTypes(machine.impl());
                                 w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), (EntitySnapshotPublisher) snapshots::add);
+                                // fakes of the machine's own activities (WorkerActivities.forTests), if it calls any
+                                List<Object> own = WorkerActivities.loadForTests(type);
+                                if (!own.isEmpty()) {
+                                    w.registerActivitiesImplementations(own.toArray());
+                                }
                             });
                             env.start();
                             WorkflowClient client = env.getWorkflowClient();

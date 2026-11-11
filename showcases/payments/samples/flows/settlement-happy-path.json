@@ -1,0 +1,17 @@
+{
+  "name": "settlement-happy-path",
+  "description": "NEW -settle-> SETTLING (then chained: the machine charges the ledger, publishes to Kafka and sends itself confirm, decline or fail)",
+  "events": [
+    {
+      "smType": "settlement",
+      "instanceKey": "SETTLEMENT-1001",
+      "eventType": "settle",
+      "payload": {
+        "accountId": "ACCOUNT-ID-1001",
+        "amount": 1250.0,
+        "currency": "USD",
+        "memo": "settlement of invoice 1001"
+      }
+    }
+  ]
+}

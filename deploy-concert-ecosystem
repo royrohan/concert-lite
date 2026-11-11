@@ -42,7 +42,9 @@ case $store in
   *) usage ;;
 esac
 
-dc() { docker compose -f docker-compose.yml -f "$override" "$@"; }
+# showcases/<name>/compose.extra.yml (yours, not generated) adds services and settings, e.g. an external system the worker calls
+extra="showcases/$name/compose.extra.yml"
+dc() { if [ -f "$extra" ]; then docker compose -f docker-compose.yml -f "$override" -f "$extra" "$@"; else docker compose -f docker-compose.yml -f "$override" "$@"; fi; }
 
 # wait_until <description> <seconds> <command...>
 wait_until() {
@@ -103,7 +105,7 @@ else
 fi
 export STORE_KIND=$store
 export COMPOSE_PROFILES="$profiles,$name"
-echo "==> docker compose -f docker-compose.yml -f $override up -d --build   (STORE_KIND=$STORE_KIND COMPOSE_PROFILES=$COMPOSE_PROFILES)"
+echo "==> docker compose -f docker-compose.yml -f $override$([ -f "$extra" ] && echo " -f $extra") up -d --build   (STORE_KIND=$STORE_KIND COMPOSE_PROFILES=$COMPOSE_PROFILES)"
 dc up -d --build
 
 echo "==> health"
