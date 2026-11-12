@@ -18,6 +18,7 @@ import io.concert.sdk.reconcile.ReconcileWorkflowImpl;
 import io.concert.sdk.reconcile.Reconciler;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Map;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -31,37 +32,34 @@ import org.slf4j.LoggerFactory;
 public final class WorkerBootstrap {
     private WorkerBootstrap() {}
 
+    /** As {@link #start}; {@code activitySlots} caps concurrent transitions in this worker (benchmarks). */
+    public static WorkerFactory startWithSlots(
+            WorkflowClient client, StateStore store, String smType, Class<? extends AbstractStateMachine> impl,
+            int activitySlots, Object... extraActivities) {
+        System.setProperty("WORKER_ACTIVITY_SLOTS", Integer.toString(activitySlots));
+        return start(client, store, smType, impl, extraActivities);
+    }
+
     public static WorkerFactory start(
             WorkflowClient client, StateStore store, String smType, Class<? extends AbstractStateMachine> impl,
             Object... extraActivities) {
-        return startWithSlots(client, store, smType, impl, Env.getInt("WORKER_LA_SLOTS", 2000), extraActivities);
-    }
-
-    /**
-     * @param localActivitySlots max concurrent local activities (persistence + {@code onTransition}
-     *     work) in this worker; with simulated work it sets the worker's capacity
-     */
-    public static WorkerFactory startWithSlots(
-            WorkflowClient client, StateStore store, String smType, Class<? extends AbstractStateMachine> impl,
-            int localActivitySlots, Object... extraActivities) {
         WorkerFactory factory = WorkerFactory.newInstance(client, WorkerTuning.factoryOptions());
+        // Activities only: the ApplyTransition activity is the type's whole entity path (no entity workflows).
         Worker worker = factory.newWorker(TaskQueues.stateMachine(smType), WorkerTuning.workerOptions(
-                        Env.getInt("WORKER_WF_POLLERS_MAX", 64), Env.getInt("WORKER_ACTIVITY_POLLERS_MAX", 4))
-                .setMaxConcurrentLocalActivityExecutionSize(localActivitySlots)
+                        Env.getInt("WORKER_WF_POLLERS_MAX", 64), Env.getInt("WORKER_ACTIVITY_POLLERS_MAX", 64))
+                .setMaxConcurrentActivityExecutionSize(Env.getInt("WORKER_ACTIVITY_SLOTS", 1000))
                 .build());
-        worker.registerWorkflowImplementationTypes(impl);
-        worker.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store));
+        TraceWriter traces = new TraceWriter(store);
         if (extraActivities.length > 0) {
             worker.registerActivitiesImplementations(extraActivities);
         }
         EventEnqueueActivities enqueue = Arrays.stream(extraActivities).filter(a -> a instanceof EventEnqueueActivities)
                 .map(a -> (EventEnqueueActivities) a).findFirst().orElse(null);
         if (enqueue == null) {
-            // outbox delivery of the events entity transitions emit (event-style or other entities)
-            enqueue = new EventEnqueueActivitiesImpl(client, new TraceWriter(store));
+            // outbox delivery of the events transitions emit (event-style or other entities)
+            enqueue = new EventEnqueueActivitiesImpl(client, traces);
             worker.registerActivitiesImplementations(enqueue);
         }
-        OutboxSweeper.start(store, smType, enqueue);
         EntitySnapshotPublisher publisher = Arrays.stream(extraActivities)
                 .filter(a -> a instanceof EntitySnapshotPublisher).map(a -> (EntitySnapshotPublisher) a)
                 .findFirst().orElse(null);
@@ -69,6 +67,9 @@ public final class WorkerBootstrap {
             publisher = EntitySnapshotPublisher.fromEnv();
             worker.registerActivitiesImplementations(publisher);
         }
+        worker.registerActivitiesImplementations(
+                new TransitionActivitiesImpl(store, Map.of(smType, impl), enqueue, publisher, traces));
+        OutboxSweeper.start(store, smType, enqueue);
         boolean reconcile = registerReconcile(worker, store, smType, impl, publisher);
         factory.start();
         if (reconcile && publisher != EntitySnapshotPublisher.logging() && Env.getBool("RECONCILE_SCHEDULE", true)) {

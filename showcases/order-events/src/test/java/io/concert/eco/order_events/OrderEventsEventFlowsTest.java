@@ -31,7 +31,6 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
@@ -85,7 +84,7 @@ class OrderEventsEventFlowsTest {
                         OrderEventsEventTypes.handlers(domain), EventWorkerBootstrap.Options.defaults().withPublisher(EntitySnapshotPublisher.logging()));
             }
             env.start();
-            try (IngestDispatcher dispatcher = new IngestDispatcher(store, traces, dispatch, Set.of(), 64)) {
+            try (IngestDispatcher dispatcher = new IngestDispatcher(store, traces, dispatch, 64)) {
                 int n = 0;
                 for (Path flow : flows) {
                     JsonNode f = Json.MAPPER.readTree(Files.readString(flow));

@@ -7,12 +7,10 @@ import io.concert.common.TaskQueues;
 import io.concert.common.TraceRow;
 import io.concert.common.WorkflowIds;
 import io.concert.common.api.DispatchActivities;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.EventOutcome;
 import io.concert.common.api.LockRequest;
 import io.concert.common.api.ProcessRequest;
 import io.concert.common.api.TransitionResult;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.store.InMemoryStateStore;
 import io.concert.store.TraceWriter;
 import io.temporal.client.WorkflowClient;
@@ -40,11 +38,6 @@ class ForwardReleaseRaceTest {
 
         SlowForwards(DispatchActivitiesImpl real) {
             this.real = real;
-        }
-
-        @Override
-        public TransitionResult dispatchToEntity(EventEnvelope event, Map<String, Long> lockWaitMs) {
-            return real.dispatchToEntity(event, lockWaitMs);
         }
 
         @Override
@@ -84,23 +77,24 @@ class ForwardReleaseRaceTest {
     private TraceWriter traces;
     private IngestDispatcher dispatcher;
     private WorkflowClient client;
+    private InMemoryStateStore store;
 
     @BeforeEach
     void setUp() {
         System.setProperty("TEMPORAL_SEARCH_ATTRIBUTES", "false");
         env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build());
         client = env.getWorkflowClient();
-        InMemoryStateStore store = new InMemoryStateStore();
+        store = new InMemoryStateStore();
         traces = new TraceWriter(store, 100_000, 500, 10);
         DispatchActivitiesImpl real = new DispatchActivitiesImpl(client, traces);
         Worker orch = env.newWorker(TaskQueues.ORCHESTRATION);
         orch.registerWorkflowImplementationTypes(KeyLockWorkflowImpl.class);
         orch.registerActivitiesImplementations(new SlowForwards(real));
         Worker ledger = env.newWorker(TaskQueues.stateMachine("ledger"));
-        ledger.registerWorkflowImplementationTypes(OrchestrationFlowTest.Ledger.class);
-        ledger.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store));
+        ledger.registerActivitiesImplementations(new io.concert.sdk.TransitionActivitiesImpl(
+                store, java.util.Map.of("ledger", OrchestrationFlowTest.Ledger.class), null, null, null));
         env.start();
-        dispatcher = new IngestDispatcher(store, traces, real, Set.of(), 64);
+        dispatcher = new IngestDispatcher(store, traces, real, 64);
     }
 
     @AfterEach
@@ -120,7 +114,7 @@ class ForwardReleaseRaceTest {
         long count = 0;
         while (System.currentTimeMillis() < deadline && count < 2) {
             try {
-                String data = client.newWorkflowStub(EntityWorkflow.class, WorkflowIds.entity("ledger", "R")).snapshot().data();
+                String data = store.loadState(WorkflowIds.entity("ledger", "R")).map(io.concert.common.api.SmStateRow::data).orElse(null);
                 count = data == null ? 0 : io.concert.common.Json.read(data, com.fasterxml.jackson.databind.JsonNode.class)
                         .get("count").asLong();
             } catch (RuntimeException notYet) {

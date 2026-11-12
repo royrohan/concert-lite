@@ -18,7 +18,7 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
 6. [Coordinator: intake](#6-coordinator-intake)
 7. [Coordinator: the lock workflow](#7-coordinator-the-lock-workflow)
 8. [Coordinator: dispatch to entities](#8-coordinator-dispatch-to-entities)
-9. [Worker: the entity workflow](#9-worker-the-entity-workflow)
+9. [Worker: the transition activity](#9-worker-the-transition-activity)
 10. [Worker: chained events and the outbox](#10-worker-chained-events-and-the-outbox)
 11. [External side effects (out of scope, parked)](#11-external-side-effects-out-of-scope-parked)
 12. [State store: Postgres and Aurora DSQL](#12-state-store-postgres-and-aurora-dsql)
@@ -60,12 +60,12 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
                 │                           │
                 │  KeyLockWorkflow per key  │   K0 ─▶ K1 ─▶ … ─▶ Kn-1   (FIFO chain, global key order)
                 │  last key: dispatch ──────┼──────────┐
-                └───────────────────────────┘          │ UpdateWithStart handle(event), update id = event id
+                └───────────────────────────┘          │ ApplyTransition(event) activity
                                                        ▼
-                ┌───────────────────────────┐  sm-<smType> task queue
+                ┌───────────────────────────┐  sm-<smType> task queue (activities only)
                 │          WORKER           │
-                │ EntityWorkflow per entity │  (load) ─▶ decide ─▶ commit ONE transaction:
-                │ smType:instanceKey        │    sm_state (version-checked) + applied_event + outbox
+                │ no workflow per entity    │  load ─▶ decide ─▶ commit ONE transaction:
+                │ (plain machine objects)   │    sm_state (version-checked) + applied_event + outbox
                 └─────────────┬─────────────┘  ─▶ deliver outbox to lock chains (sweeper catches leftovers)
                               ▼
                      Postgres / Aurora DSQL  (source of truth for entities)
@@ -77,7 +77,8 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
   entity state, and **MUST NOT** change entity state. One implementation serves every flow.
 - **Worker:** the only component that decides transitions and changes entity state. Each transition is one database
   transaction (§9.3).
-- **Temporal:** holds all durable orchestration state: lock queues, event order, pending deliveries.
+- **Temporal:** holds all durable orchestration state: lock queues, event order, pending deliveries. It holds **no
+  entity state**: there is no workflow per entity, only the lock workflows and one activity per event.
 - **The store:** holds the entities (`sm_state`), the record of applied events, the outbox of emitted events, the
   dedupe set and traces.
 
@@ -92,16 +93,14 @@ means the default flow).
 | item | format | example |
 |---|---|---|
 | entity key | `<smType>:<instanceKey>` | `settlement:PAY-7` |
-| entity workflow id | the entity key | `settlement:PAY-7` |
 | lock workflow id | default flow: `lock:<key>`; else `lock:<flow>:<key>` | `lock:payments:account:9` |
 | orchestration task queue | default flow: `orchestration`; else `orchestration-<flow>` | `orchestration-payments` |
 | worker task queue | `sm-<smType>` | `sm-settlement` |
 | child (emitted) event id | `<parentEventId>.<n>`, `n` from 1 in emission order | `e-42.1` |
 | `acquire` update id | `<requestId>@<lockKey>` | `e-42@account:9` |
-| `handle` update id | the event id | `e-42` |
 
 - `smType` **MUST** be unique across everything that shares a Temporal namespace. Two worker implementations polling
-  the same `sm-<smType>` queue would each handle the other's events.
+  the same `sm-<smType>` queue would each run the other's transitions.
 - Workflow ids double as idempotency keys and **MUST** be derived exactly as above.
 - Ids **MUST** fit Temporal's id length limit (the reference deployment sets `limit.maxIDLength` to 255).
 
@@ -123,7 +122,7 @@ Every event is an `EventEnvelope`, carried as JSON in Temporal payloads (Appendi
 | `scheduledAtMillis` | int64 | event style only; omitted when 0 |
 | `parentEventId` | string | set on emitted events; omitted when null |
 | `causationRoot` | string | the first event of an emission chain; omitted when null |
-| `direct` | bool | entity style, single key: bypass locks (§6.3); omitted when false |
+| `direct` | bool | removed: ignored if present (every entity event takes its locks); omitted when false |
 
 - Readers **MUST** ignore unknown fields; they **MUST NOT** be rejected. Forwarding them is optional: the Rust
   coordinator passes them through unchanged, while the Java one drops them. Producers therefore **MUST NOT** rely on
@@ -166,14 +165,10 @@ are claimed again, and Temporal's idempotent ids absorb the repeats.
 
 ### 6.1 Submitting an event
 
-| event | submission |
-|---|---|
-| entity style, single key, and (`direct` or `smType` in `DIRECT_SM_TYPES`) | direct dispatch (§6.3) |
-| otherwise | `acquire` on `lock:<K0>` with a first request (§7.2) |
+Every event is submitted as an `acquire` on `lock:<K0>` with a first request (§7.2), including single-key events.
 
-A submission returns as soon as the order is fixed. For a lock that is when the `acquire` update is **ACCEPTED**;
-for a direct dispatch it is when the entity's `handle` update is **ACCEPTED**. The coordinator **MUST NOT** wait for
-the transition itself. Submitting a group sequentially to ACCEPTED is what preserves per-`K0` source order.
+A submission returns as soon as the order is fixed: when the `acquire` update is **ACCEPTED**. The coordinator **MUST
+NOT** wait for the transition itself. Submitting a group sequentially to ACCEPTED is what preserves per-`K0` source order.
 
 ### 6.2 Enqueue with start
 
@@ -190,14 +185,12 @@ Handling the response:
   makes 5 attempts with 20 ms × attempt backoff, and a retry starts a fresh run.
 - **Any other update failure:** an error.
 
-### 6.3 Direct dispatch
+### 6.3 Direct dispatch (removed)
 
-A type whose events never share keys with multi-key events **MAY** skip locks. The coordinator then sends the
-entity's `handle` UpdateWithStart (§8.1) and waits for **ACCEPTED** only.
-
-The entity's update ordering keeps such events in order per instance. They are not mutually exclusive with
-multi-key events on the same entity, which is why a type **MUST** be listed in `DIRECT_SM_TYPES` (or an event marked
-`direct`) only when that cannot happen.
+Earlier versions let a type listed in `DIRECT_SM_TYPES`, or an event marked `direct`, skip locks and rely on the
+entity workflow's update order. Without entity workflows nothing else orders an entity's events, so direct dispatch
+was removed: the lock on the entity key is what serializes them. Implementations **MUST** ignore `direct` and
+`DIRECT_SM_TYPES`.
 
 ## 7. Coordinator: the lock workflow
 
@@ -315,7 +308,7 @@ A lock **MUST** drain its pending releases before it completes or continues-as-n
 
 | call | kind | start-to-close | schedule-to-close | retry |
 |---|---|---|---|---|
-| dispatch to entity | local | 30 s | 1 h | 50 ms to 10 s; not on `EntityRejected` |
+| dispatch to entity (`ApplyTransition`, §8) | regular, on `sm-<smType>` | 30 s | 1 h | 50 ms to 10 s; not on `UnknownMachine` |
 | forward (`acquire` on the next key) | local | 30 s | 1 h | 50 ms to 10 s |
 | release lower keys | regular | 30 s | none | 50 ms to 10 s, unlimited |
 
@@ -332,30 +325,29 @@ A reimplementation that does not support event style **MUST** still keep `headBl
 
 ### 8.1 The call
 
-**UpdateWithStart** `handle(event)` on the entity workflow:
+The last lock of the chain calls the **`ApplyTransition`** activity with `(event, lockWaitMs)`, where `lockWaitMs`
+maps each key to how long the event waited for it:
 
 | setting | value |
 |---|---|
-| workflow id | `<smType>:<instanceKey>` |
+| activity type | `ApplyTransition` (interface `TransitionActivities`) |
 | task queue | `sm-<smType>` |
-| id conflict policy | `USE_EXISTING` |
-| workflow task timeout | `WORKFLOW_TASK_TIMEOUT_MS` |
-| search attributes | `SmType`, `InstanceKey` (keyword) |
-| start input | `EntityInit.fresh(smType, instanceKey)` |
-| update id | the **event id** |
-| wait stage | **COMPLETED** from a lock; **ACCEPTED** for direct dispatch |
+| kind | **regular** activity (not local: it runs on the worker that owns the type) |
+| start-to-close | 30 s |
+| schedule-to-close | 1 h |
+| retry | 50 ms to 10 s backoff; not on `UnknownMachine` |
 
 - The result is a `TransitionResult` (§9.1). A *rejected* transition is a normal result, not an error.
-- A validator rejection (`WorkflowUpdateException`) is deterministic. The dispatcher **MUST** surface it as a
-  non-retryable failure of type `EntityRejected`.
-- A repeated dispatch with the same update id attaches to the same update and returns its result. This includes a
-  retry of the local activity after a coordinator crash, or a call that times out while the update is still running.
+- A retry, after a worker crash, a lost reply or a timeout, runs the activity again. The store recognizes an event
+  that already committed (`applied_event`) and returns its stored result, so the event is **applied once** however
+  often the activity runs.
+- The lock holds every key of the event while the activity runs. That is what serializes an entity's events: there
+  is no other ordering on the worker side, so every entity event **MUST** take at least its own entity key.
 
 ### 8.2 Long transitions
 
-A transition normally takes one database transaction. A store outage makes the commit retry (§9.4), and the
-dispatch's 30 s start-to-close can then pass. The dispatch is retried, re-attaching to the running update, until
-its 1 h schedule-to-close.
+A transition normally takes one database transaction. A store outage makes the activity fail and retry; it is
+retried until its 1 h schedule-to-close. Past that the lock records `FAILED` and moves on (§13.3).
 
 ### 8.3 Traces
 
@@ -365,26 +357,23 @@ Dispatch writes trace rows asynchronously:
 
 Tracing **MUST NOT** add latency to the workflows, and **MAY** be sampled (§12.5).
 
-## 9. Worker: the entity workflow
+## 9. Worker: the transition activity
 
-One workflow per entity, workflow type `EntityWorkflow`, on `sm-<smType>`. Every state machine type implements this
-same interface; the task queue selects the implementation.
+A worker for type `T` polls `sm-T` for **activities only** and implements `ApplyTransition`. There is no workflow per
+entity: the machine is a plain object, created for one event from the stored row and discarded after it.
 
 ### 9.1 Interface and types
 
 | member | kind | input / output |
 |---|---|---|
-| `run` | workflow method | `EntityInit` |
-| `handle` | update | `EventEnvelope` → `TransitionResult` |
-| `handle` validator | update validator | rejects an empty `eventType`, and an event whose `<smType>:<instanceKey>` is not this workflow's id |
-| `snapshot` | query | `EntitySnapshot{workflowId, smType, instanceKey, state, data, version, handled, recent[]}` |
-
-`EntityInit`:
-- `{smType, instanceKey, state, data, version, recent[], createdAtMillis}`;
-- `state == null` means a new entity;
-- `recent` holds up to 50 `TransitionRecord{eventId, eventType, from, to, accepted, tsMillis}`.
+| `ApplyTransition` | activity | `(EventEnvelope, Map<lockKey, waitedMs>)` → `TransitionResult` |
 
 `TransitionResult`: `{eventId, fromState, toState, accepted, message, version}`.
+
+Failures:
+- `UnknownMachine` (non-retryable): this worker has no machine for the event's `smType`;
+- `TransitionConflict` (retryable): the entity kept changing under the event (10 conflicts in a row);
+- anything else (store unreachable, ...) is retryable, and the retry starts again from the load.
 
 ### 9.2 The transition table
 
@@ -393,78 +382,66 @@ A type declares:
 - edges `FROM -eventType-> TO`, each with an optional payload type;
 - terminal states. These default to states without outgoing edges.
 
-Edges **MUST** be deterministic: built once and never changed at runtime. A change that alters existing behavior
-needs Temporal versioning (`getVersion`) like any workflow code change.
+Machine code is ordinary code, not workflow code: it needs no Temporal determinism and no versioning. A change to a
+type's rules applies to the next event.
 
 ### 9.3 DB-truth
 
-The entity lives in the state store (§12), not in the workflow. Each event is **one database transaction** that
-writes, together or not at all:
+The entity lives in the state store (§12), and only there. Each event is **one database transaction** that writes,
+together or not at all:
 - the new `sm_state` row, conditional on the version the decision was made on;
 - an `applied_event` record of the event and its result;
 - `outbox` rows for the events the transition emitted (§10).
 
-The workflow orders the events and runs the decision code on a **cached copy** of the entity. The commit's version
-check detects a stale copy, and the `applied_event` primary key detects a redelivered event. Implementations **MUST
-NOT** treat workflow memory as the entity's state: it is a cache, valid only while commits from it succeed.
+The version check detects a concurrent writer, and the `applied_event` primary key detects a redelivered event.
 
 ### 9.4 Handling an event
 
-Updates **MUST** be decided strictly in update-acceptance order, even when a decision yields:
-
-1. **Ticket.** On entry, before any yield, take ticket `t`. Wait until `run` has set up and `served == t`. An update
-   can arrive in the same workflow task as the start, so the wait for `run` matters.
-2. **Load, if the cache is not valid.** A fresh run, or a run after a redelivery, has no valid cache. Call
-   `loadEntity(workflowId, eventId)`: it returns the stored row (none for a new entity, whose cache is then the initial
-   state at version 0) and, if this event was applied before, its stored result. A stored result is the answer: go to
-   step 6.
-3. **Decide** on the cache. Look up `next(state, eventType)`:
+1. **Load** the entity's row (`loadEntity`, one SELECT). No row means a new entity: the initial state at version 0.
+2. **Decide** on a fresh machine bound to the row and to the transition's timestamp (`now()`, read once per
+   attempt). Look up `next(state, eventType)`:
    - **No edge:** the result is rejected (`no transition from S on E`).
    - **Edge `S → T`:** call the type's decision. It either rejects with a reason, or accepts with new data and the
      events it emits.
-4. **Commit** with `commitTransition` (§12.4), carrying:
-   - the expected version (the cache's);
+3. **Commit** with `commitTransition` (§12.4), carrying:
+   - the expected version (the loaded row's);
    - the result: accepted with `version + 1`, or rejected with the unchanged version;
    - for an accepted result, the new row and the emitted events;
    - a trace row (`TRANSITION` or `REJECTED`, best effort).
 
-   It is a local activity: start-to-close 10 s, schedule-to-close **1 h** (a store outage is waited out, as long as
-   the lock's dispatch waits), backoff 100 ms to 10 s. The outcome decides what happens next:
-   - **COMMITTED:** apply the result to the cache.
-   - **ALREADY_APPLIED:** the event was applied before (a redelivery). Its stored result is the answer, and the cache
-     is marked invalid (it may be behind the store).
-   - **CONFLICT:** the store holds a newer version. Replace the cache with the returned row and go back to step 3.
-     After 10 conflicts in a row the update fails (`TransitionConflict`); entity events are serialized, so even one
-     conflict is unusual.
-5. **Release the ticket** (`served += 1`), so the next event can be decided.
-6. **After commit**, only if this call committed the transition (not for ALREADY_APPLIED):
-   - start the outbox delivery of the emitted events (§10);
-   - run the post-commit hooks (e.g. terminal-state handling).
-7. **Return** the `TransitionResult`. The update completes, the lock chain is released, and the next event on these
-   keys may start.
+   The outcome decides what happens next:
+   - **COMMITTED:** go on to step 4.
+   - **ALREADY_APPLIED:** the event was applied before (a redelivery or an activity retry). Return its stored result;
+     do nothing else.
+   - **CONFLICT:** the store holds a newer version. Go back to step 1. After 10 conflicts in a row the activity fails
+     with `TransitionConflict` and is retried; entity events are serialized by the lock, so even one conflict is
+     unusual.
+4. **After commit**, only if this attempt committed the transition:
+   - deliver the emitted events (§10). A failed delivery is logged and left to the sweeper; it **MUST NOT** fail the
+     activity;
+   - run the post-commit hooks (e.g. terminal-state snapshots). A failed hook is logged; it **MUST NOT** fail the
+     activity, since the transition is already committed.
+5. **Return** the `TransitionResult`. The lock chain is released, and the next event on these keys may start.
+
+The redelivery lookup is folded into the commit: a fresh event costs one SELECT and one transaction.
 
 Rules:
-- Decisions **MUST** be deterministic: no I/O, no wall clock (use workflow time), no randomness.
-- Decisions **MUST NOT** perform side effects. They run before the commit, are not part of it, and may run more than
-  once for one event (after a conflict). Effects on other entities are emitted events (§10). Calls to external
-  systems are out of scope (§11).
+- Decisions **MUST NOT** perform side effects: they run before the commit, are not part of it, and may run more than
+  once for one event (after a conflict, or when the activity is retried). Effects on other entities are emitted
+  events (§10). Calls to external systems are out of scope (§11).
+- Decisions **SHOULD** take time only from `now()`, so that one attempt sees one timestamp.
 - A **rejection** leaves state, data and version unchanged. It is still recorded in `applied_event`, so a redelivery
-  gets the same rejection, and it is committed only on the version it was decided on.
+  gets the same rejection, and it is committed only on the version it was decided on. A rejected first event creates
+  no `sm_state` row.
 - For typed (model) machines the decision also covers:
   - binding the payload to the edge's payload type; JSON that does not bind is a rejection;
   - validating payload multiplicities;
   - validating the entity data after the transition. Invalid data rejects the event.
 
-### 9.5 Continue-as-new
+### 9.5 Continue-as-new (removed)
 
-`run` waits until all of the following hold, then continues-as-new with
-`{state, data, version, recent, createdAtMillis}`:
-- the run has handled **500** events, or Temporal suggests continuing;
-- every update handler has finished;
-- no work the run started is still pending: outbox deliveries, and any asynchronous activities.
-
-The carried state is the cache. It is passed as null (a fresh load) when the cache was marked invalid. Redeliveries
-across continue-as-new are recognized by the store (`applied_event`), not by Temporal update ids.
+There are no entity workflows, so there is nothing to continue-as-new on the worker side. Temporal's history per
+event is the lock workflows' events plus one activity.
 
 ## 10. Worker: chained events and the outbox
 
@@ -478,10 +455,9 @@ Rules:
   nothing.
 - Child ids are `<eventId>.<n>`, with `parentEventId` set and `causationRoot` inherited. Replays, retries and
   redeliveries therefore produce the same ids.
-- **Fast path:** right after commit, the workflow delivers the new rows with a **regular activity**
-  (`EventEmitDeliverOutbox`, unlimited retries). It sends `acquire` of a first request on each child's `K0` (§6.2
-  rules; a duplicate is success), then marks the rows sent.
-  - It **MUST NOT** be a local activity: the emitting entity is inside an update that a lock chain is waiting on.
+- **Fast path:** right after commit, the transition activity delivers the new rows itself. It sends `acquire` of a
+  first request on each child's `K0` (§6.2 rules; a duplicate is success), then marks the rows sent. A failure is
+  left to the sweeper.
 - **Sweeper:** every worker sweeps its own type's outbox rows (`workflow_id LIKE '<smType>:%'`) that are still unsent
   after `OUTBOX_SWEEP_AFTER_SECONDS` (30), every `OUTBOX_SWEEP_SECONDS` (10). It delivers them the same way. This
   covers a worker that died between commit and delivery.
@@ -663,27 +639,26 @@ Notes:
 |---|---|---|
 | intake to lock | at least once; duplicates dropped | `processed_event` claim; re-claim of `RECEIVED`; `acquire` validator and recent window (4000) |
 | lock to lock (forward) | at least once, deduplicated | `acquire` update id `<id>@<key>` and the validator |
-| lock to entity | at least once; **applied once** | `handle` update id = event id within a run; `applied_event` across runs and after |
+| lock to entity | at least once; **applied once** | `ApplyTransition` activity retries; `applied_event` recognizes an event already committed |
 | transition to store | **atomic**: state, applied event and outbox together, or nothing | one transaction, conditional on the expected version (§12.4) |
 | entity to emitted event | at least once; **applied once**; exists only if the transition committed | outbox in the transition's transaction; fast path and sweeper; lock dedupe and the target's `applied_event` |
 
 ### 13.2 Ordering
 
-- **Per entity:** transitions are applied in the order their `handle` updates were accepted (§9.4).
+- **Per entity:** transitions are applied one at a time, in the order the entity key's lock grants them (§7.3, §8.1).
 - **Same first key:** events with the same `K0`, submitted in one source order, are applied in that order (§6, §7.3).
 - **Shared later key only:** events that share a key but have different `K0` are **mutually exclusive** but not
   ordered by source. Their relative order is the order in which their chains reach the shared key. Design entities so
   their events share `K0` (§5).
-- **Direct types:** ordered per instance by update acceptance, but not exclusive with multi-key events.
 
 ### 13.3 Crashes
 
 | failure | effect |
 |---|---|
 | coordinator process killed | workflow tasks time out (`WORKFLOW_TASK_TIMEOUT_MS`, 2 s) and move to another coordinator. Local activities in flight are re-run; their calls are idempotent |
-| worker process killed | entity workflow tasks and local activities move to another worker. A transaction that committed before the kill is found on retry (ALREADY_APPLIED, or the same commit is re-sent and refused as already applied); one that did not commit is redone. Outbox rows committed but not delivered are delivered by a sweeper |
+| worker process killed | the `ApplyTransition` activity times out (30 s start-to-close) and is retried on another worker. A transaction that committed before the kill is recognized on retry (ALREADY_APPLIED); one that did not commit is redone. Outbox rows committed but not delivered are delivered by a sweeper |
 | whole tier down | work queues durably in Temporal until a process returns; nothing is lost |
-| store unavailable | dedupe fails the batch, which the adapter retries. Transitions wait: the commit retries for up to 1 h, and nothing is half written. Past 1 h the `handle` update fails and the lock records `FAILED` and moves on. The event is then not applied, consistently: no state, no applied record, no outbox rows |
+| store unavailable | dedupe fails the batch, which the adapter retries. Transitions wait: the commit retries for up to 1 h, and nothing is half written. Past 1 h the `ApplyTransition` activity fails and the lock records `FAILED` and moves on. The event is then not applied, consistently: no state, no applied record, no outbox rows |
 | Temporal restarted | clients and pollers reconnect; all orchestration state is in Temporal's persistence |
 
 **Hot keys.** A key shared by many events keeps many updates in flight on its lock: an `acquire` per waiting event,
@@ -694,15 +669,16 @@ the key livelocks.
 
 | setting | value | why |
 |---|---|---|
-| `frontend.enableUpdateWorkflowExecution` | true | all lock and entity interactions are updates |
+| `frontend.enableUpdateWorkflowExecution` | true | all lock interactions are updates |
 | `frontend.enableExecuteMultiOperation` | true | UpdateWithStart |
 | `history.maxInFlightUpdates` | ≥ 500 (reference) | hot lock keys |
 | `limit.maxIDLength` | ≥ 255 | composite workflow and update ids |
 | `system.enableEagerWorkflowStart`, `system.enableActivityEagerExecution` | true (recommended) | latency: releases and first starts run on the calling worker |
-| search attributes | `SmType`, `InstanceKey` (Keyword), `LockKeys` (KeywordList), `EventId` (Keyword) | set on workflow start: entities get `SmType` and `InstanceKey`, locks get `LockKeys`. They must be registered on the namespace; `TEMPORAL_SEARCH_ATTRIBUTES=false` turns them off (tests) |
+| search attributes | `SmType`, `InstanceKey` (Keyword), `LockKeys` (KeywordList), `EventId` (Keyword) | set on workflow start: locks get `LockKeys` (`SmType` and `InstanceKey` were set on entity workflows, which no longer exist). They must be registered on the namespace; `TEMPORAL_SEARCH_ATTRIBUTES=false` turns them off (tests) |
 
-Worker settings: virtual workflow threads, a large workflow cache (`WORKER_WORKFLOW_CACHE`, 50 000), and sticky
-schedule-to-start `STICKY_SCHEDULE_TO_START_MS` (1 s).
+Coordinator settings: virtual workflow threads, a large workflow cache (`WORKER_WORKFLOW_CACHE`, 50 000), and sticky
+schedule-to-start `STICKY_SCHEDULE_TO_START_MS` (1 s). Entity workers run activities only: `WORKER_ACTIVITY_SLOTS`
+(1000) concurrent transitions per process.
 
 **One implementation per queue.** Workflow histories are not portable between SDKs. A queue **MUST** be served by one
 implementation at a time. The Rust coordinator enforces this by refusing to start while a running workflow on its
@@ -720,11 +696,11 @@ queue was last worked on by another implementation (`COORDINATOR_ALLOW_FOREIGN_R
 | `STORE_POOL_SIZE` | 32 | both | connection pool |
 | `STORE_INIT_SCHEMA` | true | both | apply the schema on start |
 | `LOCK_IDLE_SECONDS` | 600 | coordinator | idle lock shutdown |
-| `DIRECT_SM_TYPES` | empty | coordinator | types dispatched without locks (§6.3) |
 | `INGEST_PARALLEL_GROUPS` | 256 | coordinator | parallel `K0` groups per batch |
 | `DEDUPE_TTL_HOURS` | 24 | coordinator | `processed_event` retention |
 | `ORCH_WF_POLLERS_MAX` / `ORCH_ACTIVITY_POLLERS_MAX` | 64 / 8 | coordinator | poller autoscaling ceilings |
-| `WORKER_WF_POLLERS_MAX` / `WORKER_ACTIVITY_POLLERS_MAX` | 64 / 4 | worker | |
+| `WORKER_ACTIVITY_POLLERS_MAX` | 64 | worker | activity poller ceiling on `sm-<smType>` |
+| `WORKER_ACTIVITY_SLOTS` | 1000 | worker | concurrent `ApplyTransition` activities |
 | `WORKER_WF_SLOTS` / `WORKER_LA_SLOTS` | 1000 / 2000 | both | concurrent workflow tasks / local activities |
 | `WORKFLOW_TASK_TIMEOUT_MS` | 2000 | both | failover speed (stock Temporal: 10 000) |
 | `STICKY_SCHEDULE_TO_START_MS` | 1000 | both | failover speed (stock: 5000) |
@@ -738,8 +714,9 @@ queue was last worked on by another implementation (`COORDINATOR_ALLOW_FOREIGN_R
 A conforming implementation **SHOULD** pass the existing suites:
 - **Unit and Temporal test-server suites:**
   - the lock protocol: `OrchestrationFlowTest` and `ForwardReleaseRaceTest` (`platform/orchestration`);
-  - the entity workflow: `AbstractStateMachineTest` (including a redelivery after continue-as-new, a stale cache and
-    a store outage), `ModelStateMachineTest`, `OutboxSweeperTest` and `LockTemplatesTest` (`core/worker-sdk`);
+  - the transition activity: `AbstractStateMachineTest` (order, redelivery, a concurrent writer, a store outage),
+    `ModelStateMachineTest`, `EntitySnapshotPublishTest`, `OutboxSweeperTest` and `LockTemplatesTest`
+    (`core/worker-sdk`); `MachineHarness` applies events to machines the same way, for machine tests;
   - the store: `StateStoreContract`, run by `InMemoryStateStoreTest` and `PostgresStoreTest` (`platform/store`).
     It covers the atomic commit, redelivery, version conflicts, rejections, a concurrent race with exactly one
     winner, and the outbox lifecycle;
@@ -762,6 +739,11 @@ A conforming implementation **SHOULD** pass the existing suites:
 
   The first run (`dbtruth1`) found a coordinator bug: dropped lock releases (§7.5), now fixed.
 
+  With the transition activity (no entity workflows): `RUN_ID=nowf1`, same settings (one SIGTERM and two `kill -9`
+  of coordinators, one `kill -9` of a worker, 3 store freezes of 3 to 5 s): PASS, 7200 `applied_event` records, 1200
+  outbox rows all sent. A killed worker's in-flight transitions wait for the activity's 30 s start-to-close before
+  they are retried elsewhere, so the backlog drains more slowly after a worker kill than with entity workflows.
+
 ## 17. Known limitations
 
 - **Redelivery window.** `applied_event` recognizes redeliveries for `APPLIED_EVENT_RETENTION_HOURS` (default 7
@@ -771,8 +753,10 @@ A conforming implementation **SHOULD** pass the existing suites:
   commit, in commit order. A row left behind is delivered by the sweeper up to about 40 s later, possibly after
   events emitted by later transitions. Each emitted event is applied once, but a target entity should not depend on
   the arrival order of events from different source transitions.
-- **One database round trip per event**, plus one load when a run starts or a cache is invalidated. Throughput per
-  entity is bounded by the store's transaction latency.
+- **Two database round trips per event**: the load and the commit transaction. Throughput per entity is bounded by
+  the store's latency.
+- **The Rust coordinator is not compatible yet.** It still dispatches to entity workflows (UpdateWithStart
+  `handle`), which Java workers no longer run. It needs to call `ApplyTransition` instead (§8.1).
 - **No external side effects** inside transitions (§11).
 - **Postgres or DSQL only** for entity workers (§12.1).
 
@@ -799,11 +783,7 @@ absent optional fields **MAY** be omitted.
 {"lockKey":"settlement:PAY-7","queue":[{…}],"headForwardedAtMillis":0,"recentRequestIds":["e-40","e-41"],"idleSeconds":600,"headBlocked":false}
 ```
 
-`EntityInit` and `TransitionResult`:
-
-```json
-{"smType":"settlement","instanceKey":"PAY-7","state":"SETTLING","data":"{…}","version":1,"recent":[],"createdAtMillis":1767225600100}
-```
+`TransitionResult`:
 
 ```json
 {"eventId":"e-42","fromState":"NEW","toState":"SETTLING","accepted":true,"message":null,"version":1}

@@ -7,7 +7,6 @@ import io.concert.common.api.SmStateRow;
 import io.concert.orchestration.DispatchActivitiesImpl;
 import io.concert.orchestration.IngestDispatcher;
 import io.concert.orchestration.KeyLockWorkflowImpl;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.sdk.EntitySnapshotPublisher;
 import io.concert.sdk.ModelStateMachineTest.TicketMachine;
 import io.concert.sink.EntitySnapshot;
@@ -74,16 +73,15 @@ final class EventFixture implements AutoCloseable {
         EventWorkerBootstrap.registerOn(env.newWorker(TaskQueues.events(Shop.SHOP)), client, store, Shop.shopHandlers(), options);
         EventWorkerBootstrap.registerOn(env.newWorker(TaskQueues.events(Shop.STOCK)), client, store, Shop.stockHandlers(), options);
 
-        Worker ticket = env.newWorker(TaskQueues.stateMachine("ticket"));
-        ticket.registerWorkflowImplementationTypes(TicketMachine.class);
-        ticket.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), EntitySnapshotPublisher.logging());
-        Worker eticket = env.newWorker(TaskQueues.stateMachine("eticket"));
-        eticket.registerWorkflowImplementationTypes(Shop.EmittingTicketMachine.class);
-        eticket.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), EntitySnapshotPublisher.logging(),
-                new EventEnqueueActivitiesImpl(client, traces));
+        // entity types: the ApplyTransition activity on each type's queue (entities live in the store)
+        EventEnqueueActivitiesImpl enqueue = new EventEnqueueActivitiesImpl(client, traces);
+        env.newWorker(TaskQueues.stateMachine("ticket")).registerActivitiesImplementations(new io.concert.sdk.TransitionActivitiesImpl(
+                store, java.util.Map.of("ticket", TicketMachine.class), enqueue, EntitySnapshotPublisher.logging(), traces));
+        env.newWorker(TaskQueues.stateMachine("eticket")).registerActivitiesImplementations(new io.concert.sdk.TransitionActivitiesImpl(
+                store, java.util.Map.of("eticket", Shop.EmittingTicketMachine.class), enqueue, EntitySnapshotPublisher.logging(), traces));
 
         env.start();
-        dispatcher = new IngestDispatcher(store, traces, dispatch, Set.of(), 64);
+        dispatcher = new IngestDispatcher(store, traces, dispatch, 64);
     }
 
     /** Replays a processor history with the same processor config as the live workers (it decides CAN points). */

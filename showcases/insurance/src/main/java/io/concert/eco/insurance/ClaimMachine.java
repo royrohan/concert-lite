@@ -13,7 +13,6 @@ import io.concert.eco.insurance.model.insurance.RejectClaim;
 import io.concert.eco.insurance.model.insurance.WithdrawClaim;
 import io.concert.sdk.ModelStateMachine;
 import io.concert.sdk.StateMachineSpec;
-import io.temporal.workflow.Workflow;
 import java.time.Instant;
 
 /**
@@ -30,7 +29,7 @@ import java.time.Instant;
  * </pre>
  *
  * <p>{@code onTransition} mutates the data in place; reject an event with {@code reject("reason")}. Take time
- * from {@code Workflow.currentTimeMillis()} (workflow code must be deterministic).
+ * from {@code now()}, the transition's timestamp (decisions may run more than once: no side effects).
  */
 public class ClaimMachine extends ModelStateMachine<Claim> {
 
@@ -52,7 +51,7 @@ public class ClaimMachine extends ModelStateMachine<Claim> {
     @Override
     protected void onTransition(String from, String to, Claim claim, Object payload, EventEnvelope event) {
         claim.setStatus(ClaimStatus.valueOf(to));
-        Instant now = Instant.ofEpochMilli(Workflow.currentTimeMillis());
+        Instant now = Instant.ofEpochMilli(now());
         switch (payload) {
             case FileClaim cmd -> {
                 if (cmd.getClaimed().getAmount().signum() <= 0) {

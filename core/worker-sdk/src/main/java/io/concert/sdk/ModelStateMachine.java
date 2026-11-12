@@ -10,13 +10,7 @@ import io.concert.sdk.events.EventCatalog;
 import io.concert.sdk.events.EventEmissions;
 import io.concert.sdk.events.EventEnqueueActivities;
 import io.concert.sink.EntitySnapshot;
-import io.temporal.activity.ActivityOptions;
-import io.temporal.common.RetryOptions;
-import io.temporal.workflow.Async;
-import io.temporal.workflow.Promise;
-import io.temporal.workflow.Workflow;
 import java.io.UncheckedIOException;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,14 +41,12 @@ import java.util.Map;
  * A rejected event leaves state, data and version unchanged ({@code TransitionResult.accepted} is
  * false, its message and the {@code REJECTED} trace list the reasons). Activities already called by
  * {@code onTransition} are not undone. Everything here is deterministic ({@link ModelJson} output is),
- * so it is safe in workflow code; take time from {@code Workflow.currentTimeMillis()}.
+ * so it is safe in workflow code; take time from {@code now()}.
  *
  * <p><b>Completed-entity snapshots.</b> After an accepted transition into a terminal state has been
- * persisted, the entity's final data is published through the {@link EntitySnapshotPublisher}
- * activity (Kafka topic {@code entity-snapshots}, consumed by the analytics sinks). It is a regular
- * activity on the entity's own task queue with unlimited retries, so the workflow history acts as the
- * outbox. It is started asynchronously (the update completes without waiting for Kafka) and the run
- * waits for it before continuing as new.
+ * committed, the entity's final data is published through the {@link EntitySnapshotPublisher} (Kafka topic
+ * {@code entity-snapshots}, consumed by the analytics sinks). A failed publish is logged; the reconciliation job
+ * republishes what the sinks miss.
  *
  * <p><b>Emitting event-style events (interop).</b> {@code onTransition} may call {@link #emit},
  * {@link #emitAt} or {@link #emitEntity}. The events are buffered and, only if the transition is accepted,
@@ -66,27 +58,6 @@ import java.util.Map;
  * @param <D> the generated class of the aggregate root
  */
 public abstract class ModelStateMachine<D extends ModelObject> extends AbstractStateMachine {
-
-    /** {@code Workflow.getVersion} change id of the snapshot publish, so runs started before it replay. */
-    static final String SNAPSHOT_CHANGE_ID = "entity-snapshot-publish";
-
-    /**
-     * Retries forever with backoff 1 s .. 60 s: a snapshot must eventually reach Kafka, however long it
-     * is down. 30 s start-to-close stays above the producer's own send timeout.
-     */
-    private final EntitySnapshotPublisher snapshots = Workflow.newActivityStub(EntitySnapshotPublisher.class,
-            ActivityOptions.newBuilder()
-                    .setStartToCloseTimeout(Duration.ofSeconds(30))
-                    .setRetryOptions(RetryOptions.newBuilder()
-                            .setInitialInterval(Duration.ofSeconds(1))
-                            .setBackoffCoefficient(2)
-                            .setMaximumInterval(Duration.ofSeconds(60))
-                            .setMaximumAttempts(0)
-                            .build())
-                    .build());
-
-    /** Snapshot publishes started by this run; it may not continue-as-new before they complete. */
-    private final List<Promise<Void>> pendingSnapshots = new ArrayList<>();
 
     /** The event being decided (emits are only allowed then) and what it emitted so far. */
     private EventEnvelope emitParent;
@@ -170,7 +141,7 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
     protected final String emitAt(Instant at, Object event) {
         EventEnvelope parent = requireEmitParent();
         return addEmit(EventEmissions.event(parent, emitBuffer.size() + 1, event, null,
-                at == null ? 0 : at.toEpochMilli(), Workflow.currentTimeMillis()));
+                at == null ? 0 : at.toEpochMilli(), now()));
     }
 
     /** Emits an entity-style event to {@code smType:instanceKey} (another state machine). */
@@ -178,7 +149,7 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
             List<String> extraLockKeys) {
         EventEnvelope parent = requireEmitParent();
         return addEmit(EventEmissions.entity(parent, emitBuffer.size() + 1, smType, instanceKey, eventType, payload,
-                extraLockKeys, Workflow.currentTimeMillis()));
+                extraLockKeys, now()));
     }
 
     private EventEnvelope requireEmitParent() {
@@ -248,7 +219,7 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
                 String key = ChainEmissions.render(em.keyTemplate(), source, em);
                 List<String> locks = LockTemplates.render(em.lockTemplates(), key, emitted);
                 addEmit(EventEmissions.entity(event, emitBuffer.size() + 1, em.smType(), key, em.eventType(),
-                        io.concert.common.Json.write(emitted), locks, Workflow.currentTimeMillis()));
+                        io.concert.common.Json.write(emitted), locks, now()));
             } catch (IllegalArgumentException e) {
                 return Decision.reject(e.getMessage());
             }
@@ -271,26 +242,13 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
     }
 
     /**
-     * Starts the snapshot publish of a terminal transition without waiting for it. A terminal state
-     * has no outgoing transitions, so state, data and version are final: this is the entity's
-     * current (and last) version, which matters because the compacted topic keeps only the latest
-     * record per key.
+     * Publishes the snapshot of a terminal transition (egress). A terminal state has no outgoing transitions, so
+     * state, data and version are final: this is the entity's last version, which matters because the compacted
+     * topic keeps only the latest record per key. A failure is logged by the caller; reconciliation repairs it.
      */
     private void publishSnapshot(TransitionResult result) {
-        if (Workflow.getVersion(SNAPSHOT_CHANGE_ID, Workflow.DEFAULT_VERSION, 1) == Workflow.DEFAULT_VERSION) {
-            return; // the terminal transition happened before this code existed: replay it unchanged
-        }
-        long created = createdAtMillis();
-        long completed = lastAcceptedMillis() > 0 ? lastAcceptedMillis() : Workflow.currentTimeMillis();
-        EntitySnapshot snapshot = new EntitySnapshot(Workflow.getInfo().getWorkflowId(), smType(), result.toState(),
-                result.version(), created > 0 ? Instant.ofEpochMilli(created) : null, Instant.ofEpochMilli(completed),
-                currentData());
-        pendingSnapshots.add(Async.procedure(snapshots::publish, snapshot));
-    }
-
-    @Override
-    protected boolean hasPendingWork() {
-        return pendingSnapshots.stream().anyMatch(p -> !p.isCompleted());
+        snapshots().publish(new EntitySnapshot(entityId(), smType(), result.toState(), result.version(), null,
+                Instant.ofEpochMilli(now()), currentData()));
     }
 
     /** Typed machines use {@link #onTransition(String, String, ModelObject, Object, EventEnvelope)}. */

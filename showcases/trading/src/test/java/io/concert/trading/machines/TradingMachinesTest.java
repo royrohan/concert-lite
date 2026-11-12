@@ -6,15 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.concert.common.EventEnvelope;
-import io.concert.common.TaskQueues;
 import io.concert.common.WorkflowIds;
-import io.concert.common.api.EntityInit;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.TransitionResult;
 import io.concert.marketdata.PriceModel;
 import io.concert.model.runtime.ModelJson;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.sdk.EntitySnapshotPublisher;
+import io.concert.sdk.MachineHarness;
 import io.concert.sink.EntitySnapshot;
 import io.concert.store.InMemoryStateStore;
 import io.concert.trading.TradingEvents;
@@ -36,16 +33,6 @@ import io.concert.trading.order.Fill;
 import io.concert.trading.order.FillStatus;
 import io.concert.trading.order.Order;
 import io.concert.trading.order.OrderStatus;
-import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
-import io.temporal.client.UpdateOptions;
-import io.temporal.client.WithStartWorkflowOperation;
-import io.temporal.client.WorkflowClient;
-import io.temporal.client.WorkflowOptions;
-import io.temporal.client.WorkflowUpdateStage;
-import io.temporal.testing.TestEnvironmentOptions;
-import io.temporal.testing.TestWorkflowEnvironment;
-import io.temporal.testing.WorkflowReplayer;
-import io.temporal.worker.Worker;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -56,57 +43,32 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.LockSupport;
-import java.util.function.BooleanSupplier;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * The four trading machines on a Temporal test server with an in-memory store. The orchestrator is
- * simulated: each event goes to its entity workflow with UpdateWithStart, one at a time, in the order
- * the generator emits them (which keeps every entity's events in order, as the lock manager would).
+ * The four trading machines, applied as the worker applies them, on an in-memory store. The orchestrator is
+ * simulated: events are applied one at a time, in the order the generator emits them (which keeps every
+ * entity's events in order, as the lock manager would).
  */
 class TradingMachinesTest {
 
     private static final long START = Instant.parse("2026-10-05T14:30:00Z").toEpochMilli();
 
-    private TestWorkflowEnvironment env;
     private InMemoryStateStore store;
-    private WorkflowClient client;
+    private MachineHarness harness;
     private final List<EntitySnapshot> snapshots = new CopyOnWriteArrayList<>();
     private final AtomicLong eventIds = new AtomicLong();
 
     @BeforeEach
     void setUp() {
-        System.setProperty("TEMPORAL_SEARCH_ATTRIBUTES", "false");
-        env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build());
         store = new InMemoryStateStore();
-        TradingMachines.ALL.forEach((type, m) -> {
-            Worker w = env.newWorker(TaskQueues.stateMachine(type));
-            w.registerWorkflowImplementationTypes(m.impl());
-            w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store),
-                    (EntitySnapshotPublisher) snapshots::add);
-        });
-        env.start();
-        client = env.getWorkflowClient();
-    }
-
-    @AfterEach
-    void tearDown() {
-        env.close();
+        harness = new MachineHarness(store).snapshots((EntitySnapshotPublisher) snapshots::add);
+        TradingMachines.ALL.forEach((type, m) -> harness.register(type, m.impl()));
     }
 
     private TransitionResult send(EventEnvelope e) {
-        EntityWorkflow wf = client.newWorkflowStub(EntityWorkflow.class, WorkflowOptions.newBuilder()
-                .setWorkflowId(WorkflowIds.entity(e.smType(), e.instanceKey()))
-                .setTaskQueue(TaskQueues.stateMachine(e.smType()))
-                .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
-                .build());
-        return WorkflowClient.executeUpdateWithStart(wf::handle, e,
-                UpdateOptions.<TransitionResult>newBuilder().setUpdateId(e.eventId())
-                        .setWaitForStage(WorkflowUpdateStage.COMPLETED).build(),
-                new WithStartWorkflowOperation<>(wf::run, EntityInit.fresh(e.smType(), e.instanceKey())));
+        return harness.apply(e);
     }
 
     private TransitionResult send(String smType, String eventType, OrderEvent payload) {
@@ -120,16 +82,6 @@ class TradingMachinesTest {
 
     private String state(String entityKey) {
         return store.loadState(entityKey).orElseThrow().state();
-    }
-
-    private static void await(String what, long timeoutMs, BooleanSupplier condition) {
-        long deadline = System.currentTimeMillis() + timeoutMs;
-        while (!condition.getAsBoolean()) {
-            if (System.currentTimeMillis() > deadline) {
-                throw new AssertionError("timed out waiting for " + what);
-            }
-            LockSupport.parkNanos(20_000_000);
-        }
     }
 
     // ---------------------------------------------------------------- generated flow end to end
@@ -227,8 +179,6 @@ class TradingMachinesTest {
         assertTrue(filledOrders > 10, "filled orders: " + filledOrders);
 
         // Exactly one snapshot per entity (all end terminal), matching the stored final state and data.
-        await("snapshots", 20_000, () -> snapshots.size() >= entities.size());
-        LockSupport.parkNanos(300_000_000);
         assertEquals(entities.size(), snapshots.size());
         Map<String, EntitySnapshot> byId = new HashMap<>();
         for (EntitySnapshot s : snapshots) {
@@ -371,8 +321,6 @@ class TradingMachinesTest {
         assertEquals(OrderStatus.FILLED, o.getStatus());
         assertEquals(100L, o.getAllocatedQty());
         assertEquals(t(60), o.getCompletedAt());
-        await("order snapshot", 10_000, () -> !snapshots.isEmpty());
-        LockSupport.parkNanos(300_000_000);
         assertEquals(1, snapshots.size());
         EntitySnapshot s = snapshots.getFirst();
         assertEquals("trading_order:O6", s.entityId());
@@ -382,14 +330,16 @@ class TradingMachinesTest {
     }
 
     @Test
-    void historiesReplayDeterministically() throws Exception {
+    void aRedeliveredEventReturnsItsStoredResultAndChangesNothing() {
         working("O7", Side.BUY, OrderType.LIMIT, "101.00", 100);
-        assertTrue(send(TradingFlows.ORDER, "fill", fill("O7", 1, Side.BUY, 40, "100.10")).accepted());
-        assertFalse(send(TradingFlows.ORDER, "fill", fill("O7", 2, Side.BUY, 40, "101.50")).accepted());
-        assertTrue(send(TradingFlows.ORDER, "complete_fill", fill("O7", 2, Side.BUY, 60, "100.30")).accepted());
-        assertTrue(send(TradingFlows.ORDER, "allocate", alloc("O7", 1, 100, "100.22")).accepted());
-        assertTrue(send(TradingFlows.ORDER, "close", close("O7", 100, 1)).accepted());
-        await("order snapshot", 10_000, () -> !snapshots.isEmpty());
-        WorkflowReplayer.replayWorkflowExecution(client.fetchHistory("trading_order:O7"), TradingOrderMachine.class);
+        EventEnvelope fill = TradingEvents.envelope(TradingFlows.ORDER, "fill", "x-fill-O7", fill("O7", 1, Side.BUY, 40, "100.10"), t(30).toEpochMilli());
+        TransitionResult first = send(fill);
+        assertTrue(first.accepted(), first.message());
+        String data = store.loadState("trading_order:O7").orElseThrow().data();
+
+        assertEquals(first, send(fill)); // e.g. the activity's commit landed but its reply was lost
+
+        assertEquals(first.version(), store.loadState("trading_order:O7").orElseThrow().version());
+        assertEquals(data, store.loadState("trading_order:O7").orElseThrow().data());
     }
 }

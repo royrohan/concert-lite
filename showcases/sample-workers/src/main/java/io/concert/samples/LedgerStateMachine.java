@@ -40,7 +40,7 @@ public class LedgerStateMachine extends SampleStateMachine {
             if (p.path("chain").asBoolean(false)) {
                 receipts.put(event.eventId(), java.util.List.of(io.concert.sdk.events.EventEmissions.entity(event, 1, TYPE,
                         event.instanceKey() + "-R", "append", "{\"seq\":" + p.path("seq").asLong() + ",\"receipt\":true}",
-                        java.util.List.of(), io.temporal.workflow.Workflow.currentTimeMillis())));
+                        java.util.List.of(), now())));
             }
         }
         return super.decide(fromState, toState, currentData, event);

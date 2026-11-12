@@ -114,21 +114,21 @@ public class OrderStateMachine extends SampleModelStateMachine<Order> {
                 if (pay.getShippingAddress() != null) {
                     order.setShippingAddress(pay.getShippingAddress());
                 }
-                order.setPaymentMethod(pay.getMethod()).setPaidAt(now());
+                order.setPaymentMethod(pay.getMethod()).setPaidAt(nowInstant());
                 simulateWork(pay.getWorkMs());
             }
             case ShipCommand ship -> {
-                order.setCarrier(ship.getCarrier()).setTrackingNumber(ship.getTrackingNumber()).setShippedAt(now());
+                order.setCarrier(ship.getCarrier()).setTrackingNumber(ship.getTrackingNumber()).setShippedAt(nowInstant());
                 simulateWork(ship.getWorkMs());
             }
             case DeliverCommand deliver -> {
-                order.setSignedBy(deliver.getSignedBy()).setDeliveredAt(now());
+                order.setSignedBy(deliver.getSignedBy()).setDeliveredAt(nowInstant());
                 simulateWork(deliver.getWorkMs());
             }
             case CancelCommand cancel -> {
                 order.setCancelReason(cancel.getReason());
                 if (to.equals("CANCELLED")) {
-                    order.setCancelledAt(now());
+                    order.setCancelledAt(nowInstant());
                 }
                 simulateWork(cancel.getWorkMs());
             }
@@ -136,7 +136,7 @@ public class OrderStateMachine extends SampleModelStateMachine<Order> {
                 if (order.getTotal() != null && !Moneys.atMost(refund.getAmount(), order.getTotal())) {
                     reject("refund of " + Moneys.format(refund.getAmount()) + " exceeds order total " + Moneys.format(order.getTotal()));
                 }
-                order.setRefunded(Moneys.copy(refund.getAmount())).setCancelledAt(now());
+                order.setRefunded(Moneys.copy(refund.getAmount())).setCancelledAt(nowInstant());
                 simulateWork(refund.getWorkMs());
             }
             case null, default -> throw new IllegalStateException("unexpected payload for " + event.eventType() + ": " + payload);

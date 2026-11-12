@@ -25,7 +25,6 @@ import software.amazon.awssdk.services.kinesis.KinesisClient;
 public final class OrchestrationWorker implements AutoCloseable {
 
     public record Settings(
-            Set<String> directSmTypes,
             int maxParallelGroups,
             long idlePollMillis,
             long checkpointEveryMillis,
@@ -33,7 +32,7 @@ public final class OrchestrationWorker implements AutoCloseable {
             int activityPollers) {
 
         public static Settings defaults() {
-            return new Settings(Set.of(), 256, 20, 500, 64, 8);
+            return new Settings(256, 20, 500, 64, 8);
         }
     }
 
@@ -46,7 +45,7 @@ public final class OrchestrationWorker implements AutoCloseable {
         this.client = client;
         this.traces = new TraceWriter(store);
         DispatchActivitiesImpl dispatch = new DispatchActivitiesImpl(client, traces);
-        this.dispatcher = new IngestDispatcher(store, traces, dispatch, s.directSmTypes(), s.maxParallelGroups());
+        this.dispatcher = new IngestDispatcher(store, traces, dispatch, s.maxParallelGroups());
 
         this.factory = WorkerFactory.newInstance(client, WorkerTuning.factoryOptions());
         Worker worker = factory.newWorker(TaskQueues.orchestration(),

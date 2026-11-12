@@ -1,5 +1,6 @@
 package io.concert.orchestration;
 
+import io.concert.common.TaskQueues;
 import io.concert.common.TraceRow;
 import io.concert.common.api.DispatchActivities;
 import io.concert.common.api.EventOutcome;
@@ -8,6 +9,7 @@ import io.concert.common.api.LockRequest;
 import io.concert.common.api.LockSnapshot;
 import io.concert.common.api.LockState;
 import io.concert.common.api.ProcessRequest;
+import io.concert.common.api.TransitionActivities;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.activity.LocalActivityOptions;
 import io.temporal.common.RetryOptions;
@@ -19,8 +21,10 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import org.slf4j.Logger;
 
 /**
@@ -28,7 +32,8 @@ import org.slf4j.Logger;
  * owns the key:
  *
  * <ul>
- *   <li>last key of its chain: dispatched to the entity right here (local activity), earlier locks
+ *   <li>last key of its chain: applied to its entity right here (the {@code ApplyTransition} activity on the type's
+ *       queue), earlier locks
  *       of the chain are released, and it is popped. An event-style event is dispatched to its processor
  *       instead; if the processor answers ERROR_BLOCKING the head stays (and the chain's lower keys stay
  *       held) until the processor sends {@code unblock} after an operator retry or skip;
@@ -62,6 +67,27 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
                             .setDoNotRetry(EntityRejectedException.TYPE)
                             .build())
                     .build());
+
+    /**
+     * Entity transitions: the {@code ApplyTransition} activity on the event's type queue {@code sm-<smType>}, run by
+     * that type's worker (entity state lives in the store; there is no entity workflow). A regular activity, so this
+     * lock's workflow task completes while the transition runs and acquires keep being accepted. Retried for an hour
+     * (store outages); a retry of a transition that committed returns its stored result.
+     */
+    private final Map<String, TransitionActivities> transitions = new HashMap<>();
+
+    private TransitionActivities transitions(String smType) {
+        return transitions.computeIfAbsent(smType, type -> Workflow.newActivityStub(TransitionActivities.class,
+                ActivityOptions.newBuilder()
+                        .setTaskQueue(TaskQueues.stateMachine(type))
+                        .setStartToCloseTimeout(Duration.ofSeconds(30))
+                        .setScheduleToCloseTimeout(Duration.ofHours(1))
+                        .setRetryOptions(RetryOptions.newBuilder()
+                                .setInitialInterval(Duration.ofMillis(50))
+                                .setMaximumInterval(Duration.ofSeconds(10))
+                                .build())
+                        .build()));
+    }
 
     /**
      * Releases go to <em>lower</em> keys, so they must not block this workflow task: a local activity
@@ -188,7 +214,7 @@ public class KeyLockWorkflowImpl implements KeyLockWorkflow {
             } else {
                 long now = Workflow.currentTimeMillis();
                 try {
-                    dispatch.dispatchToEntity(head.event(), head.waitsIncludingCurrent(now));
+                    transitions(head.event().smType()).applyTransition(head.event(), head.waitsIncludingCurrent(now));
                 } catch (ActivityFailure e) {
                     // Rejected by the entity or retries exhausted: record it and keep the key moving.
                     log.warn("dispatch of {} on {} failed: {}", id, lockKey, e.getMessage());

@@ -11,16 +11,8 @@ import java.util.Map;
 public interface DispatchActivities {
 
     /**
-     * UpdateWithStart on the entity workflow, waiting for the transition to complete. Also records
-     * LOCK_GRANTED / DONE trace rows asynchronously, so tracing costs the workflows nothing.
-     *
-     * @param lockWaitMs how long the caller waited for each lock key
-     */
-    TransitionResult dispatchToEntity(EventEnvelope event, Map<String, Long> lockWaitMs);
-
-    /**
      * Event style: UpdateWithStart {@code process} on the event's processor ({@code evproc:<domain>:<firstKey>}),
-     * waiting for the outcome. Records LOCK_GRANTED trace rows like {@link #dispatchToEntity}.
+     * waiting for the outcome. Records LOCK_GRANTED trace rows.
      */
     EventOutcome dispatchToProcessor(ProcessRequest request);
 

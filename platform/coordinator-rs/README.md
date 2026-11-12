@@ -1,5 +1,11 @@
 # coordinator-rs: the coordinator in Rust
 
+> **Not compatible with the current Java workers.** The Java side no longer runs entity workflows: the last lock
+> calls the `ApplyTransition(event, lockWaitMs)` activity on `sm-<type>` instead of UpdateWithStart
+> `EntityWorkflow.handle`, and direct dispatch (`DIRECT_SM_TYPES`) was removed
+> ([spec §8](../../docs/spec/coordinator-worker.md#8-coordinator-dispatch-to-entities)). This coordinator still
+> uses the old contract described below; porting it is pending.
+
 A drop-in replacement for the Java coordinator (`platform/orchestration`), written with the
 [Temporal Rust SDK](https://github.com/temporalio/sdk-rust) (1.1). It does the same job: it reads Kinesis,
 removes duplicate events, serializes events per key through FIFO lock chains and hands each event to its

@@ -1848,8 +1848,7 @@ function perfSetupPanel(p) {
       <div class="note">Replicas run with <span class="mono">docker compose --scale</span>; the tuning applies to this flow's coordinator and worker containers.</div></div>
     <div class="panel"><h3>3. Lock keys</h3>
       <div class="presets" role="radiogroup">${p.lockModes.map(lm => perfLockCard(lm, v('lockMode', 'serial'))).join('')}</div>
-      <div class="note">Events that workers emit (chained machines) always go through the lock workflows. Direct needs each entity's events on one shard:
-        the generator partitions by the entity key in that mode.</div></div>
+      <div class="note">Events that workers emit (chained machines) always take their declared lock keys.</div></div>
     <div class="panel"><h3>4. Chaos and services</h3>
       <div class="perfform">
         <label><input type="checkbox" id="pf-chaos" ${v('chaos', false) ? 'checked' : ''} onchange="perfForm.chaos=this.checked;savePerfForm()"> include chaos: a random coordinator or worker goes down every</label>
@@ -1870,7 +1869,8 @@ function perfSetupPanel(p) {
 const LOCK_MODES = {
   serial: ['Serial keys (as declared)', "Events carry the catalog's lock keys (e.g. an order's account): multi-key events take them in order through the lock workflows. The production setup."],
   entity: ['Entity key only', 'Each event locks its own entity only, still through the lock workflows: no serialization across entities (accounts no longer queue).'],
-  direct: ['No locks (direct)', 'Entity key only, and the coordinators skip the lock workflows (DIRECT_SM_TYPES): events go straight to their entity, ordered by the shard.'],
+  // past runs only: the lock-free mode was removed with entity workflows (every event goes through its entity's lock)
+  direct: ['No locks (direct, removed)', 'Entity key only and no lock workflows. Removed: an entity\'s lock is now what orders its events.'],
 };
 function perfLockCard(lm, cur) {
   const [label, note] = LOCK_MODES[lm] || [lm, ''];

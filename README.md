@@ -14,7 +14,7 @@ its schedule. There is no bespoke lease, peer or outbox protocol: failover, retr
 **New here? [Getting started](docs/getting-started/README.md)** walks through your first flow in eight animated steps:
 Pure model, state machine, generate, implement, tests, integration test, deploy, run.
 [Coordinator and worker specification](docs/spec/coordinator-worker.md) is the normative contract (lock protocol,
-multi-key chains, entity workflow, Sagas, Postgres / DSQL store) for reimplementing either side.
+multi-key chains, the transition activity, Postgres / DSQL store) for reimplementing either side.
 [External side effects](docs/external-side-effects.md) describes the (parked) payments example: a worker calling a REST
 service and Kafka with idempotent writes and a Saga.
 
@@ -32,14 +32,14 @@ service and Kafka with idempotent writes and a Saga.
                 │  batch dedupe in the StateStore (INSERT … ON CONFLICT DO NOTHING / conditional put)
                 ▼
  ┌──────────────── Temporal (task queue "orchestration-<flow>") ─────────────────┐
- │ KeyLockWorkflow lock:<K0> ─forward─▶ lock:<K1> ─ … ─▶ last key: UpdateWithStart │   FIFO per key, keys in
- │                                                    the entity's handle(event)  │   global sorted order
+ │ KeyLockWorkflow lock:<K0> ─forward─▶ lock:<K1> ─ … ─▶ last key: ApplyTransition │   FIFO per key, keys in
+ │                                                    activity on sm-<type>       │   global sorted order
  └────────────────────────────────────────────────────────────────┬──────────────┘
                                                                   ▼
  ┌──────────── Temporal (task queue "sm-<type>", one per state machine type) ────────────┐
- │ EntityWorkflow <type>:<key>: transition (typed Pure model) → onTransition side effects  │
- │   → persist state/data/version ──────────────────────────────▶ StateStore               │
- │   → terminal state? EntitySnapshotPublisher activity           postgres | dsql |         │
+ │ ApplyTransition activity (no workflow per entity): load row → decide (typed Pure model) │
+ │   → ONE transaction: state + applied_event + outbox ─────────▶ StateStore               │
+ │   → deliver outbox; terminal state? EntitySnapshotPublisher    postgres | dsql |         │
  │ ReconcileWorkflow (Schedule reconcile-<type>, hourly)          dynamo | spanner          │
  └──────────────┬──────────────────────────────────────────────────────────────────────────┘
                 ▼
@@ -90,8 +90,8 @@ The dashboard's **Performance** tab measures one flow at a time, on its own:
    - **Serial keys** (default): each event takes its entity key plus the lock keys its model declares (for example
      every order's `account:<id>`), as in production.
    - **Entity key only**: the generator drops the declared lock keys, so each event waits only on its own entity.
-   - **No locks (direct)**: entity key only, and `DIRECT_SM_TYPES` is set to the flow's machines, so the coordinator
-     hands single-key events straight to the worker without a lock workflow.
+   - Past runs may show **No locks (direct)**, a mode that skipped the lock workflow. It was removed with entity
+     workflows: the entity key's lock is now what serializes an entity's events.
 
    Comparing the modes shows what the shared locks cost. The modes change the events the generator publishes; events
    that workers emit (chained machines) keep their lock keys in every mode. In the trading sample data every order
@@ -186,11 +186,11 @@ An event names its entity (`smType` + `instanceKey`), its type, and the **lock k
 * **Updates, not signals.** An update reaches the worker directly; a signal first goes through the history
   transfer queue. Measured here: signal → local activity p50 28 ms, update round trip p50 9 ms. Every lock
   interaction is an update.
-* `DIRECT_SM_TYPES` lets types that never share keys bypass locks.
-* An entity event with `"direct": true` and no extra lock keys does the same on its own: the coordinator (Java and
-  Rust) updates the entity workflow directly. It still applies in order per instance, but it starts no lock workflow
-  and never waits on a lock. The generator's **non-lock events** option sends events this way. Multi-key events on the
-  same entity can interleave with direct events.
+* **No workflow per entity.** The last lock calls the `ApplyTransition` activity on `sm-<type>`. The worker loads the
+  row, decides on a fresh machine object and commits state, an `applied_event` record and outbox rows in one
+  transaction; a retried activity finds its event already applied. Temporal keeps only the lock workflows.
+* Direct dispatch (`DIRECT_SM_TYPES`, `"direct": true`) was removed: every entity event takes at least its entity
+  key's lock. The generator's **non-lock events** option now sends events with only that key.
 
 ### State machines and typed models
 
@@ -287,7 +287,7 @@ stateDiagram-v2
 * `ERROR_BLOCKING` keeps the event's lock keys held, so later events on any of them wait (order is kept) until an
   operator retries or skips it. `ERROR_NON_BLOCKING` parks the event and releases its keys.
 * An event is applied by the processor workflow of its first sorted lock key, `evproc:<domain>:<key>` on task
-  queue `ev-<domain>`, which stays warm like an entity workflow.
+  queue `ev-<domain>`, which stays warm (like a lock workflow).
 
 **Handler API** (`core/worker-sdk/.../events`):
 
@@ -704,7 +704,6 @@ redo more (idempotent) work when a process merely pauses.
 | `DYNAMO_ENDPOINT` / `DYNAMO_TABLE_PREFIX`, `SPANNER_EMULATOR_HOST` / `SPANNER_PROJECT` / `_INSTANCE` / `_DATABASE` | | dynamo, spanner; `STORE_INIT_SCHEMA=true` creates tables |
 | `TRACE_SAMPLE` | `1.0` | fraction of events traced, deterministic per event id |
 | `LOCK_IDLE_SECONDS` | `600` | how long an idle lock workflow stays warm |
-| `DIRECT_SM_TYPES` | — | types allowed to bypass locks (only if they never share keys) |
 | `PERF_DB` | `build/perf/perf-runs.duckdb` (`/data/perf-runs.duckdb` in compose) | DuckDB file with the Performance page's past runs (dashboard) |
 | `DEDUPE_TTL_HOURS` | `24` | |
 | `MD_AUTOSTART` | `true` | marketdata-sim: `false` starts it paused (start it from a flow's Deephaven page or `POST :8091/start?rate=N`) |

@@ -6,7 +6,6 @@ import io.concert.trading.command.FillCommand;
 import io.concert.trading.command.OrderEvent;
 import io.concert.trading.common.OrderType;
 import io.concert.trading.common.Side;
-import io.temporal.workflow.Workflow;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
@@ -23,16 +22,16 @@ import java.util.Objects;
  * payload fields the producer repeats on every event ({@code orderId}, {@code accountId}, ...).
  *
  * <p>Timestamps are event time: the payload's {@code ts} (required by {@code OrderEvent}), falling back
- * to the workflow clock, so replay and re-delivery produce the same data.
+ * to the transition's timestamp.
  */
 abstract class TradingStateMachine<D extends ModelObject> extends ModelStateMachine<D> {
 
     /** Scale of average prices (the analytics stores read at most 6 decimals). */
     static final int PX_SCALE = 6;
 
-    /** Event time of a payload: its {@code ts}, else the (deterministic) workflow clock. */
-    protected static Instant eventTime(OrderEvent p) {
-        return p != null && p.getTs() != null ? p.getTs() : Instant.ofEpochMilli(Workflow.currentTimeMillis());
+    /** Event time of a payload: its {@code ts}, else the transition's timestamp. */
+    protected Instant eventTime(OrderEvent p) {
+        return p != null && p.getTs() != null ? p.getTs() : Instant.ofEpochMilli(now());
     }
 
     /** Rejects unless the payload field equals the entity's value (when both are known). */

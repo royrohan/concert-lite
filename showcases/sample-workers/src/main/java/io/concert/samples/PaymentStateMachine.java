@@ -96,16 +96,16 @@ public class PaymentStateMachine extends SampleModelStateMachine<Payment> {
                 if (!Moneys.atMost(amount, payment.getCaptured())) {
                     reject("refund of " + Moneys.format(amount) + " exceeds captured " + Moneys.format(payment.getCaptured()));
                 }
-                payment.setRefunded(Moneys.copy(amount)).setClosedAt(now());
+                payment.setRefunded(Moneys.copy(amount)).setClosedAt(nowInstant());
                 entry(payment, EntryKind.REFUND, amount, event);
                 simulateWork(refund.getWorkMs());
             }
             case DeclineCommand decline -> {
-                payment.setDeclineReason(decline.getReason()).setClosedAt(now());
+                payment.setDeclineReason(decline.getReason()).setClosedAt(nowInstant());
                 simulateWork(decline.getWorkMs());
             }
             case VoidCommand voided -> {
-                payment.setClosedAt(now());
+                payment.setClosedAt(nowInstant());
                 entry(payment, EntryKind.VOID, payment.getAuthorized(), event);
                 simulateWork(voided.getWorkMs());
             }
@@ -113,7 +113,7 @@ public class PaymentStateMachine extends SampleModelStateMachine<Payment> {
         }
     }
 
-    private static void entry(Payment payment, EntryKind kind, Money amount, EventEnvelope event) {
-        payment.addEntry(new PaymentEntry().setKind(kind).setAmount(Moneys.copy(amount)).setAt(now()).setReference(event.eventId()));
+    private void entry(Payment payment, EntryKind kind, Money amount, EventEnvelope event) {
+        payment.addEntry(new PaymentEntry().setKind(kind).setAmount(Moneys.copy(amount)).setAt(nowInstant()).setReference(event.eventId()));
     }
 }

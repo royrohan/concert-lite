@@ -86,7 +86,9 @@ final class FlowTemporal {
         Map<String, Object> out = new LinkedHashMap<>();
         boolean event = "event".equals(flow.style());
         String smType = event ? flow.id().substring(3) : flow.id();
-        String base = "WorkflowType='" + (event ? "EventProcessorWorkflow" : "EntityWorkflow") + "' AND SmType='" + smType + "'";
+        // entity flows have no entity workflows (entities live in the store): their workflows are the flow's locks
+        String base = event ? "WorkflowType='EventProcessorWorkflow' AND SmType='" + smType + "'"
+                : "WorkflowType='KeyLockWorkflow' AND TaskQueue='" + Flows.orchestrationQueue(eco) + "'";
         out.put("query", base);
         out.put("temporalUi", temporalUi + "/namespaces/" + ns() + "/workflows?query=" + URLEncoder.encode(base, StandardCharsets.UTF_8));
         out.put("locks", locks(lockKeys, eco));

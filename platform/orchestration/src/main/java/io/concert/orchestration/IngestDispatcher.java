@@ -27,8 +27,8 @@ import java.util.concurrent.atomic.AtomicLong;
  *       run sequentially in shard order (that is the per-key ordering guarantee),
  *   <li>for each event, durably enqueue it in Temporal and return (we do not wait for processing):
  *       an {@code acquire} update on the lock of its first sorted key, waiting only for ACCEPTED
- *       (direct types: UpdateWithStart on the entity instead; future-dated event-style events:
- *       UpdateWithStart {@code schedule} on their processor, which enqueues them when due),
+ *       (future-dated event-style events: UpdateWithStart {@code schedule} on their processor, which enqueues
+ *       them when due),
  *   <li>mark the batch DISPATCHED.
  * </ol>
  */
@@ -37,7 +37,6 @@ public final class IngestDispatcher implements AutoCloseable {
     private final StateStore store;
     private final TraceWriter traces;
     private final DispatchActivitiesImpl dispatch;
-    private final Set<String> directSmTypes;
     private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     private final Semaphore inFlight;
 
@@ -48,12 +47,10 @@ public final class IngestDispatcher implements AutoCloseable {
             StateStore store,
             TraceWriter traces,
             DispatchActivitiesImpl dispatch,
-            Set<String> directSmTypes,
             int maxParallelGroups) {
         this.store = store;
         this.traces = traces;
         this.dispatch = dispatch;
-        this.directSmTypes = Set.copyOf(directSmTypes);
         this.inFlight = new Semaphore(maxParallelGroups);
     }
 
@@ -120,8 +117,6 @@ public final class IngestDispatcher implements AutoCloseable {
         if (e.isEventStyle() && e.scheduledAtMillis() > now) {
             // Future-dated: the processor keeps it on a durable timer, holding no locks until it is due.
             dispatch.scheduleEvent(e);
-        } else if (!e.isEventStyle() && e.isSingleKey() && (e.direct() || directSmTypes.contains(e.smType()))) {
-            dispatch.dispatchDirect(e); // ordering is fixed once ACCEPTED; completion is traced async
         } else {
             // Single- and multi-key alike: enqueue on the first sorted key; the lock chain does the rest.
             // Event style too: the last lock of the chain dispatches to the event's processor instead of an entity.

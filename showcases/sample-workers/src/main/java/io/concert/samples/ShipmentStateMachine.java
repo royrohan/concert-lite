@@ -81,19 +81,19 @@ public class ShipmentStateMachine extends SampleModelStateMachine<Shipment> {
                 shipment.setOrderId(pick.getOrderId())
                         .setDestination(pick.getDestination())
                         .setInsuredValue(pick.getInsuredValue())
-                        .setPickedAt(now());
+                        .setPickedAt(nowInstant());
                 simulateWork(pick.getWorkMs());
             }
             case DispatchCommand dispatch -> {
-                shipment.setCarrier(dispatch.getCarrier()).setTrackingNumber(dispatch.getTrackingNumber()).setDispatchedAt(now());
+                shipment.setCarrier(dispatch.getCarrier()).setTrackingNumber(dispatch.getTrackingNumber()).setDispatchedAt(nowInstant());
                 simulateWork(dispatch.getWorkMs());
             }
             case DeliverCommand deliver -> {
-                shipment.setSignedBy(deliver.getSignedBy()).setDeliveredAt(now());
+                shipment.setSignedBy(deliver.getSignedBy()).setDeliveredAt(nowInstant());
                 simulateWork(deliver.getWorkMs());
             }
             case LoseCommand lose -> {
-                shipment.setLossReason(lose.getReason()).setLostAt(now());
+                shipment.setLossReason(lose.getReason()).setLostAt(nowInstant());
                 simulateWork(lose.getWorkMs());
             }
             case null, default -> throw new IllegalStateException("unexpected payload for " + event.eventType() + ": " + payload);

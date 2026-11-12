@@ -7,53 +7,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.concert.common.EventEnvelope;
 import io.concert.common.Json;
-import io.concert.common.TaskQueues;
 import io.concert.common.WorkflowIds;
-import io.concert.common.api.EntityInit;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.TransitionResult;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
-import io.concert.sdk.EntitySnapshotPublisher;
+import io.concert.sdk.MachineHarness;
 import io.concert.store.InMemoryStateStore;
-import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
-import io.temporal.client.UpdateOptions;
-import io.temporal.client.WithStartWorkflowOperation;
-import io.temporal.client.WorkflowClient;
-import io.temporal.client.WorkflowOptions;
-import io.temporal.client.WorkflowUpdateStage;
-import io.temporal.testing.TestEnvironmentOptions;
-import io.temporal.testing.TestWorkflowEnvironment;
-import io.temporal.worker.Worker;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/** The loan machine's rules, on Temporal's test server with an in-memory store. */
+/** The loan machine's rules, applied as the worker applies them, on an in-memory store. */
 class LoanMachineTest {
 
     private static final String BORROW = "{\"memberId\":\"M-1\",\"bookId\":\"B-1\",\"dueDate\":\"2026-12-01\"}";
 
-    private TestWorkflowEnvironment env;
-    private WorkflowClient client;
     private final InMemoryStateStore store = new InMemoryStateStore();
+    private final MachineHarness harness = new MachineHarness(store).register("loan", LoanMachine.class);
     private final AtomicInteger ids = new AtomicInteger();
-
-    @BeforeEach
-    void start() {
-        System.setProperty("TEMPORAL_SEARCH_ATTRIBUTES", "false");
-        env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build());
-        Worker worker = env.newWorker(TaskQueues.stateMachine("loan"));
-        worker.registerWorkflowImplementationTypes(LoanMachine.class);
-        worker.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), (EntitySnapshotPublisher) s -> {});
-        env.start();
-        client = env.getWorkflowClient();
-    }
-
-    @AfterEach
-    void stop() {
-        env.close();
-    }
 
     @Test
     void borrowThenReturnClosesTheLoan() {
@@ -99,14 +67,7 @@ class LoanMachineTest {
         EventEnvelope e = LibraryEvents.envelope("loan", eventType, loanId, payload);
         String eventId = "test-" + ids.incrementAndGet();
         EventEnvelope event = new EventEnvelope(eventId, e.smType(), e.instanceKey(), e.eventType(), e.lockKeys(), e.payload(), 0, 0);
-        EntityWorkflow wf = client.newWorkflowStub(EntityWorkflow.class, WorkflowOptions.newBuilder()
-                .setWorkflowId(WorkflowIds.entity("loan", loanId))
-                .setTaskQueue(TaskQueues.stateMachine("loan"))
-                .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
-                .build());
-        return WorkflowClient.executeUpdateWithStart(wf::handle, event,
-                UpdateOptions.<TransitionResult>newBuilder().setUpdateId(eventId).setWaitForStage(WorkflowUpdateStage.COMPLETED).build(),
-                new WithStartWorkflowOperation<>(wf::run, EntityInit.fresh("loan", loanId)));
+        return harness.apply(event);
     }
 
     private JsonNode data(String loanId) {

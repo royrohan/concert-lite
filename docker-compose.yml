@@ -37,8 +37,6 @@ x-app-env: &app-env
   WORKER_LA_SLOTS: ${WORKER_LA_SLOTS:-2000}
   ORCH_WF_POLLERS_MAX: ${ORCH_WF_POLLERS_MAX:-64}
   INGEST_PARALLEL_GROUPS: ${INGEST_PARALLEL_GROUPS:-256}
-  # coordinators: smTypes whose single-key events skip the lock workflows (the Performance page's "direct" lock mode)
-  DIRECT_SM_TYPES: ${DIRECT_SM_TYPES:-}
   # Completed-entity snapshots. scripts/up.sh without --analytics sets KAFKA_BOOTSTRAP= (empty), so
   # workers use the no-op publisher; when it is set but Kafka is down, publishes retry until it is up.
   KAFKA_BOOTSTRAP: ${KAFKA_BOOTSTRAP-kafka:9092}

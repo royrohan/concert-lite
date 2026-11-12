@@ -37,10 +37,8 @@ import java.util.TreeSet;
  * @param scheduledAtMillis event style: apply no earlier than this (epoch millis); 0 = now
  * @param parentEventId the event whose handler (or entity transition) emitted this one, if any
  * @param causationRoot the first event of the causation chain this one belongs to, if emitted
- * @param direct entity style, single key only: the coordinator updates the entity workflow directly instead of queuing
- *     the event on its entity lock (still in order per instance, but no {@code KeyLockWorkflow}, no lock waits). Like
- *     {@code DIRECT_SM_TYPES} for one event: a multi-key event on the same entity may interleave with it. Omitted on the
- *     wire when false.
+ * @param direct no longer used: direct mode was removed, and such events take their entity lock like any other.
+ *     Still read for producers that set it. Omitted on the wire when false.
  */
 public record EventEnvelope(
         String eventId,

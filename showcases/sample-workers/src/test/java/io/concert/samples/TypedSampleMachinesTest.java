@@ -6,10 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.concert.common.EventEnvelope;
-import io.concert.common.TaskQueues;
-import io.concert.common.WorkflowIds;
-import io.concert.common.api.EntityInit;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.TransitionResult;
 import io.concert.model.runtime.ModelJson;
 import io.concert.samples.model.demo.common.Currency;
@@ -19,78 +15,37 @@ import io.concert.samples.model.demo.order.OrderStatus;
 import io.concert.samples.model.demo.payment.EntryKind;
 import io.concert.samples.model.demo.payment.Payment;
 import io.concert.samples.model.demo.shipment.Shipment;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.sdk.EntitySnapshotPublisher;
+import io.concert.sdk.MachineHarness;
 import io.concert.sink.EntitySnapshot;
 import io.concert.store.InMemoryStateStore;
-import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
-import io.temporal.client.UpdateOptions;
-import io.temporal.client.WithStartWorkflowOperation;
-import io.temporal.client.WorkflowClient;
-import io.temporal.client.WorkflowOptions;
-import io.temporal.client.WorkflowUpdateStage;
-import io.temporal.testing.TestEnvironmentOptions;
-import io.temporal.testing.TestWorkflowEnvironment;
-import io.temporal.worker.Worker;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.locks.LockSupport;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class TypedSampleMachinesTest {
 
-    private TestWorkflowEnvironment env;
     private InMemoryStateStore store;
-    private WorkflowClient client;
+    private MachineHarness harness;
     /** Snapshots published on terminal transitions (the real worker sends them to Kafka). */
     private final List<EntitySnapshot> snapshots = new CopyOnWriteArrayList<>();
 
     @BeforeEach
     void setUp() {
-        System.setProperty("TEMPORAL_SEARCH_ATTRIBUTES", "false");
-        env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build());
         store = new InMemoryStateStore();
-        SampleMachines.ALL.forEach((type, m) -> {
-            Worker w = env.newWorker(TaskQueues.stateMachine(type));
-            w.registerWorkflowImplementationTypes(m.impl());
-            w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), new SimulatedWork.Impl(),
-                    (EntitySnapshotPublisher) snapshots::add);
-        });
-        env.start();
-        client = env.getWorkflowClient();
-    }
-
-    @AfterEach
-    void tearDown() {
-        env.close();
+        harness = new MachineHarness(store).snapshots((EntitySnapshotPublisher) snapshots::add);
+        SampleMachines.ALL.forEach((type, m) -> harness.register(type, m.impl()));
     }
 
     private TransitionResult send(String smType, String key, String eventId, String type, String payload) {
-        EntityWorkflow wf = client.newWorkflowStub(EntityWorkflow.class, WorkflowOptions.newBuilder()
-                .setWorkflowId(WorkflowIds.entity(smType, key))
-                .setTaskQueue(TaskQueues.stateMachine(smType))
-                .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
-                .build());
-        EventEnvelope e = new EventEnvelope(eventId, smType, key, type, List.of(), payload, 0, 0);
-        return WorkflowClient.executeUpdateWithStart(wf::handle, e,
-                UpdateOptions.<TransitionResult>newBuilder().setUpdateId(eventId).setWaitForStage(WorkflowUpdateStage.COMPLETED).build(),
-                new WithStartWorkflowOperation<>(wf::run, EntityInit.fresh(smType, key)));
+        return harness.apply(new EventEnvelope(eventId, smType, key, type, List.of(), payload, 0, 0));
     }
 
-    private EntitySnapshot awaitSnapshot(String entityId) {
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (System.currentTimeMillis() < deadline) {
-            for (EntitySnapshot s : snapshots) {
-                if (s.entityId().equals(entityId)) {
-                    return s;
-                }
-            }
-            LockSupport.parkNanos(20_000_000);
-        }
-        throw new AssertionError("no snapshot for " + entityId + " in " + snapshots);
+    private EntitySnapshot snapshot(String entityId) {
+        return snapshots.stream().filter(s -> s.entityId().equals(entityId)).findFirst()
+                .orElseThrow(() -> new AssertionError("no snapshot for " + entityId + " in " + snapshots));
     }
 
     private <T> T data(String entityKey, Class<T> type) {
@@ -109,7 +64,7 @@ class TypedSampleMachinesTest {
         assertEquals(0, order.getTotal().getAmount().signum());
         assertEquals("TRK-o1", order.getTrackingNumber());
         assertNotNull(order.getDeliveredAt());
-        EntitySnapshot snap = awaitSnapshot("order:o1");
+        EntitySnapshot snap = snapshot("order:o1");
         assertEquals("DELIVERED", snap.state());
         assertEquals(3, snap.version());
         assertEquals(store.loadState("order:o1").orElseThrow().data(), snap.modelJson());
