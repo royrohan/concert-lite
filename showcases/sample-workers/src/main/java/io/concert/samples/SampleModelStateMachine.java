@@ -2,9 +2,6 @@ package io.concert.samples;
 
 import io.concert.model.runtime.ModelObject;
 import io.concert.sdk.ModelStateMachine;
-import io.temporal.activity.LocalActivityOptions;
-import io.temporal.workflow.Workflow;
-import java.time.Duration;
 import java.time.Instant;
 
 /**
@@ -19,8 +16,7 @@ import java.time.Instant;
  */
 public abstract class SampleModelStateMachine<D extends ModelObject> extends ModelStateMachine<D> {
 
-    private final SimulatedWork work = Workflow.newLocalActivityStub(SimulatedWork.class,
-            LocalActivityOptions.newBuilder().setStartToCloseTimeout(Duration.ofSeconds(30)).build());
+    private final SimulatedWork work = new SimulatedWork.Impl(); // stand-in latency of a side effect
 
     /** Runs the simulated side effect of a command, if it asks for one. */
     protected void simulateWork(Long workMs) {
@@ -29,8 +25,8 @@ public abstract class SampleModelStateMachine<D extends ModelObject> extends Mod
         }
     }
 
-    /** The workflow clock as an {@code Instant} (deterministic). */
-    protected static Instant now() {
-        return Instant.ofEpochMilli(Workflow.currentTimeMillis());
+    /** The transition's timestamp ({@link #now()}) as an {@code Instant}. */
+    protected Instant nowInstant() {
+        return Instant.ofEpochMilli(now());
     }
 }

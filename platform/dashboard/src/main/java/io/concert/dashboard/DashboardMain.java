@@ -6,8 +6,6 @@ import io.concert.common.Env;
 import io.concert.common.Flows;
 import io.concert.common.Json;
 import io.concert.common.TemporalClients;
-import io.concert.common.api.EntitySnapshot;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.KeyLockWorkflow;
 import io.concert.sdk.MachineCatalog;
 import io.concert.sdk.StateMachineRegistry;
@@ -260,13 +258,7 @@ public final class DashboardMain {
         out.put("workflowId", workflowId);
         String smType = workflowId.contains(":") ? workflowId.substring(0, workflowId.indexOf(':')) : workflowId;
         String state = null;
-        try {
-            EntitySnapshot snap = client.newWorkflowStub(EntityWorkflow.class, workflowId).snapshot();
-            out.put("live", snap);
-            state = snap.state();
-        } catch (RuntimeException notRunning) {
-            out.put("live", null);
-        }
+        out.put("live", null); // entities live in the store (no entity workflow): the row below is the entity
         store.loadState(workflowId).ifPresent(row -> out.put("projection", row));
         if (state == null && out.get("projection") instanceof io.concert.common.api.SmStateRow row) {
             state = row.state();
@@ -277,7 +269,9 @@ public final class DashboardMain {
         out.put("smType", smType);
         out.put("terminal", spec != null && state != null && spec.isTerminal(state));
         out.put("history", store.traceForWorkflow(workflowId, 100));
-        out.put("temporalUi", temporalUi + "/namespaces/default/workflows/" + workflowId);
+        // its events pass through its lock workflow
+        out.put("temporalUi", temporalUi + "/namespaces/default/workflows?query="
+                + java.net.URLEncoder.encode("LockKeys='" + workflowId + "'", java.nio.charset.StandardCharsets.UTF_8));
         return out;
     }
 

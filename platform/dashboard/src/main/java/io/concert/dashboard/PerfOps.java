@@ -61,11 +61,10 @@ final class PerfOps {
 
     /**
      * How events are serialized: {@code serial} with the catalog's lock keys (e.g. an order's account) through the lock
-     * workflows; {@code entity} with only their entity's key, still through the lock workflows; {@code direct} with only
-     * their entity's key and no lock workflows at all (the coordinators' {@code DIRECT_SM_TYPES}: dispatched straight to
-     * the entity, ordered by the shard). Events that workers emit (chains) always take the lock workflows.
+     * workflows; {@code entity} with only their entity's key, still through the lock workflows. Events that workers emit
+     * (chains) always take their declared keys.
      */
-    static final List<String> LOCK_MODES = List.of("serial", "entity", "direct");
+    static final List<String> LOCK_MODES = List.of("serial", "entity");
 
     /** Metrics sample period: consecutive windows of this length, so counts add up over a run. */
     static final int SAMPLE_SEC = 10;
@@ -273,9 +272,6 @@ final class PerfOps {
         int w = workers > 0 ? workers : p.workers();
         double r = rate > 0 ? rate : p.rate();
         Map<String, String> tuning = new java.util.TreeMap<>(p.tuning());
-        if (lockMode.equals("direct")) {
-            tuning.put("DIRECT_SM_TYPES", String.join(",", f.machines()));
-        }
         Run next = new Run(f.id(), f.coordinatorImpl(), m, p, Math.min(c, 8), Math.min(w, 8), Math.min(r, 200),
                 Math.max(30, Math.min(durationSec, 3600)), chaos, Math.max(5, chaosEverySec), chaosKafka, lockMode, tuning, store);
         return ops.submit(JOB, "start", job -> {

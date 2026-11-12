@@ -12,7 +12,6 @@ import io.concert.eco.library.model.library.ReportLost;
 import io.concert.eco.library.model.library.ReturnBook;
 import io.concert.sdk.ModelStateMachine;
 import io.concert.sdk.StateMachineSpec;
-import io.temporal.workflow.Workflow;
 import java.time.Instant;
 
 /**
@@ -28,7 +27,7 @@ import java.time.Instant;
  * </pre>
  *
  * <p>{@code onTransition} mutates the data in place; reject an event with {@code reject("reason")}. Take time
- * from {@code Workflow.currentTimeMillis()} (workflow code must be deterministic).
+ * from {@code now()}, the transition's timestamp (decisions may run more than once: no side effects).
  */
 public class LoanMachine extends ModelStateMachine<Loan> {
 
@@ -53,7 +52,7 @@ public class LoanMachine extends ModelStateMachine<Loan> {
     @Override
     protected void onTransition(String from, String to, Loan loan, Object payload, EventEnvelope event) {
         loan.setStatus(LoanStatus.valueOf(to));
-        Instant now = Instant.ofEpochMilli(Workflow.currentTimeMillis());
+        Instant now = Instant.ofEpochMilli(now());
         switch (payload) {
             case BorrowBook cmd -> loan.setMemberId(cmd.getMemberId()).setBookId(cmd.getBookId())
                     .setDueDate(cmd.getDueDate()).setBorrowedAt(now);

@@ -15,6 +15,12 @@ public interface EventEnqueueActivities {
     /** Enqueues lock requests (in order) and schedules future-dated events; duplicates are no-ops. */
     void enqueue(EnqueueRequest request);
 
+    /**
+     * Delivers an entity's outbox (DB-truth): enqueues the events a committed transition emitted, then marks their
+     * outbox rows sent. Duplicates are no-ops, so a redelivery (retry, sweeper) is safe.
+     */
+    void deliverOutbox(java.util.List<io.concert.common.EventEnvelope> events, String emittedBy);
+
     /** Sends {@code unblock(requestId)} to {@code lock:<lockKey>}. */
     void unblock(String lockKey, String requestId);
 }

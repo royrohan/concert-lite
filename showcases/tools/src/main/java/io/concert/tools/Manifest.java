@@ -7,7 +7,8 @@ package io.concert.tools;
  * @param accounts multi-key ledgers (odd i) also lock {@code account:<runId>-A<(i/2) % accounts>}
  * @param style {@code entity} (ledger state machines) or {@code event} (DemoEvents {@code Tick}s, keyed state
  *     {@code state:evc:<runId>-K<i>})
- * @param chainedPerKey event style: Ticks sent with {@code chain = true} per key (each emits one ChainTick)
+ * @param chainedPerKey events sent with {@code chain = true} per key: event style, each Tick emits one ChainTick;
+ *     entity style, each append emits one receipt to ledger {@code <runId>-K<i>-R}
  */
 public record Manifest(String runId, int keys, int accounts, long total, long[] perKey, long startedAt, long finishedAt,
         String style, long[] chainedPerKey) {

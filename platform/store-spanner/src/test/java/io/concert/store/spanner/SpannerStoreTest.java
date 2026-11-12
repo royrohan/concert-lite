@@ -35,4 +35,9 @@ class SpannerStoreTest extends StateStoreContract {
     protected StateStore store() {
         return store;
     }
+
+    @Override
+    protected boolean holdsEntityState() {
+        return false; // DB-truth entity state is a Postgres / DSQL feature
+    }
 }

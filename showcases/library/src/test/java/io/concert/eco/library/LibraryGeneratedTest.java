@@ -7,33 +7,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.concert.common.EventEnvelope;
 import io.concert.common.Json;
-import io.concert.common.TaskQueues;
-import io.concert.common.WorkflowIds;
-import io.concert.common.api.EntityInit;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.TransitionResult;
 import io.concert.model.runtime.ModelJson;
 import io.concert.model.runtime.ModelObject;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
-import io.concert.sdk.EntitySnapshotPublisher;
+import io.concert.sdk.MachineHarness;
 import io.concert.sdk.StateMachineSpec;
-import io.concert.sdk.WorkerActivities;
-import io.concert.sink.EntitySnapshot;
-import io.concert.store.InMemoryStateStore;
-import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
-import io.temporal.client.UpdateOptions;
-import io.temporal.client.WithStartWorkflowOperation;
-import io.temporal.client.WorkflowClient;
-import io.temporal.client.WorkflowOptions;
-import io.temporal.client.WorkflowUpdateStage;
-import io.temporal.testing.TestEnvironmentOptions;
-import io.temporal.testing.TestWorkflowEnvironment;
-import io.temporal.worker.Worker;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
@@ -61,61 +43,36 @@ class LibraryGeneratedTest {
         assertTrue(checked > 0, "no samples under " + SAMPLES.toAbsolutePath());
     }
 
+    /** Every flow under samples/flows, applied as the worker applies events (load, decide, one transaction). */
     @Test
     void happyPathFlowsReachTerminalStates() throws IOException {
-        System.setProperty("TEMPORAL_SEARCH_ATTRIBUTES", "false");
-        InMemoryStateStore store = new InMemoryStateStore();
-        List<EntitySnapshot> snapshots = new CopyOnWriteArrayList<>();
-        try (TestWorkflowEnvironment env = TestWorkflowEnvironment.newInstance(
-                TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build())) {
-            LibraryMachines.ALL.forEach((type, machine) -> {
-                Worker w = env.newWorker(TaskQueues.stateMachine(type));
-                w.registerWorkflowImplementationTypes(machine.impl());
-                w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), (EntitySnapshotPublisher) snapshots::add);
-                // fakes of the machine's own activities (WorkerActivities.forTests), if it calls any
-                List<Object> own = WorkerActivities.loadForTests(type);
-                if (!own.isEmpty()) {
-                    w.registerActivitiesImplementations(own.toArray());
-                }
-            });
-            env.start();
-            WorkflowClient client = env.getWorkflowClient();
-            List<Path> flows;
-            try (Stream<Path> s = Files.list(SAMPLES.resolve("flows"))) {
-                flows = s.filter(p -> p.toString().endsWith(".json")).sorted().toList();
-            }
-            assertTrue(!flows.isEmpty(), "no flows");
-            int n = 0;
-            for (Path flow : flows) {
-                String last = null;
-                String smType = null;
-                JsonNode doc = Json.MAPPER.readTree(Files.readString(flow));
-                for (JsonNode e : doc.path("events")) {
-                    JsonNode p = e.get("payload");
-                    EventEnvelope event = LibraryEvents.envelope(e.path("smType").asText(), e.path("eventType").asText(),
-                            e.path("instanceKey").asText(), p == null || p.isNull() ? null : Json.write(p));
-                    TransitionResult r = send(client, event, flow.getFileName() + "-" + n++);
-                    assertTrue(r.accepted(), flow.getFileName() + " " + event.eventType() + " rejected: " + r);
-                    last = r.toState();
-                    smType = event.smType();
-                }
-                // a chained machine's flow stops where the chain (concert::sm.emits) takes over
-                boolean chained = doc.path("description").asText().contains("(then chained");
-                assertTrue(last != null && (chained || LibraryMachines.get(smType).spec().isTerminal(last)),
-                        flow.getFileName() + " ends in non-terminal state " + last);
-            }
+        MachineHarness harness = new MachineHarness();
+        LibraryMachines.ALL.forEach((type, machine) -> harness.register(type, machine.impl()));
+        List<Path> flows;
+        try (Stream<Path> s = Files.list(SAMPLES.resolve("flows"))) {
+            flows = s.filter(p -> p.toString().endsWith(".json")).sorted().toList();
         }
-    }
-
-    private static TransitionResult send(WorkflowClient client, EventEnvelope e, String eventId) {
-        EventEnvelope event = new EventEnvelope(eventId, e.smType(), e.instanceKey(), e.eventType(), e.lockKeys(), e.payload(), 0, 0);
-        EntityWorkflow wf = client.newWorkflowStub(EntityWorkflow.class, WorkflowOptions.newBuilder()
-                .setWorkflowId(WorkflowIds.entity(event.smType(), event.instanceKey()))
-                .setTaskQueue(TaskQueues.stateMachine(event.smType()))
-                .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
-                .build());
-        return WorkflowClient.executeUpdateWithStart(wf::handle, event,
-                UpdateOptions.<TransitionResult>newBuilder().setUpdateId(eventId).setWaitForStage(WorkflowUpdateStage.COMPLETED).build(),
-                new WithStartWorkflowOperation<>(wf::run, EntityInit.fresh(event.smType(), event.instanceKey())));
+        assertTrue(!flows.isEmpty(), "no flows");
+        int n = 0;
+        for (Path flow : flows) {
+            String last = null;
+            String smType = null;
+            JsonNode doc = Json.MAPPER.readTree(Files.readString(flow));
+            for (JsonNode e : doc.path("events")) {
+                JsonNode p = e.get("payload");
+                EventEnvelope sample = LibraryEvents.envelope(e.path("smType").asText(), e.path("eventType").asText(),
+                        e.path("instanceKey").asText(), p == null || p.isNull() ? null : Json.write(p));
+                EventEnvelope event = new EventEnvelope(flow.getFileName() + "-" + n++, sample.smType(), sample.instanceKey(),
+                        sample.eventType(), sample.lockKeys(), sample.payload(), 0, 0);
+                TransitionResult r = harness.apply(event);
+                assertTrue(r.accepted(), flow.getFileName() + " " + event.eventType() + " rejected: " + r);
+                last = r.toState();
+                smType = event.smType();
+            }
+            // a chained machine's flow stops where the chain (concert::sm.emits) takes over
+            boolean chained = doc.path("description").asText().contains("(then chained");
+            assertTrue(last != null && (chained || LibraryMachines.get(smType).spec().isTerminal(last)),
+                    flow.getFileName() + " ends in non-terminal state " + last);
+        }
     }
 }

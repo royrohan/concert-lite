@@ -22,6 +22,65 @@ public final class InMemoryStateStore implements StateStore {
     private final Map<String, String> checkpoints = new ConcurrentHashMap<>();
     private final Map<String, SmStateRow> states = new ConcurrentHashMap<>();
     private final List<TraceRow> traces = new CopyOnWriteArrayList<>();
+    private record Applied(io.concert.common.api.TransitionResult result, long appliedAt) {}
+    private record Outbox(String workflowId, io.concert.common.EventEnvelope event, long createdAt, long sentAt) {}
+    /** DB-truth: applied events by {@code workflowId + '\0' + eventId}, and outbox rows by event id. */
+    private final Map<String, Applied> applied = new ConcurrentHashMap<>();
+    private final Map<String, Outbox> outbox = new java.util.concurrent.ConcurrentSkipListMap<>();
+
+    @Override
+    public io.concert.common.api.EntityLoad loadEntity(String workflowId, String eventId) {
+        Applied a = eventId == null ? null : applied.get(workflowId + "\0" + eventId);
+        return new io.concert.common.api.EntityLoad(states.get(workflowId), a == null ? null : a.result());
+    }
+
+    @Override
+    public synchronized io.concert.common.api.CommitOutcome commitTransition(io.concert.common.api.TransitionCommit t) {
+        String key = t.workflowId() + "\0" + t.eventId();
+        Applied prior = applied.get(key);
+        if (prior != null) {
+            return io.concert.common.api.CommitOutcome.alreadyApplied(prior.result());
+        }
+        SmStateRow current = states.get(t.workflowId());
+        long version = current == null ? 0 : current.version();
+        if (version != t.expectedVersion()) {
+            return io.concert.common.api.CommitOutcome.conflict(current);
+        }
+        applied.put(key, new Applied(t.result(), t.nowMillis()));
+        if (t.result().accepted()) {
+            states.put(t.workflowId(), t.row());
+            t.outbox().forEach(e -> outbox.putIfAbsent(e.eventId(), new Outbox(t.workflowId(), e, t.nowMillis(), 0)));
+        }
+        return io.concert.common.api.CommitOutcome.committed(t.result());
+    }
+
+    @Override
+    public List<io.concert.common.EventEnvelope> pendingOutbox(String workflowIdPrefix, long createdBeforeMillis, int limit) {
+        return outbox.values().stream()
+                .filter(o -> o.sentAt() == 0 && o.createdAt() < createdBeforeMillis && o.workflowId().startsWith(workflowIdPrefix))
+                .sorted(Comparator.comparingLong(Outbox::createdAt)).limit(limit).map(Outbox::event).toList();
+    }
+
+    @Override
+    public void markOutboxSent(Collection<String> eventIds) {
+        long now = System.currentTimeMillis();
+        eventIds.forEach(id -> outbox.computeIfPresent(id, (k, o) -> o.sentAt() > 0 ? o
+                : new Outbox(o.workflowId(), o.event(), o.createdAt(), now)));
+    }
+
+    @Override
+    public int sweepEntityLog(long outboxSentBeforeMillis, long appliedBeforeMillis, int batchSize) {
+        int before = outbox.size() + applied.size();
+        outbox.values().removeIf(o -> o.sentAt() > 0 && o.sentAt() < outboxSentBeforeMillis);
+        applied.values().removeIf(a -> a.appliedAt() < appliedBeforeMillis);
+        return before - outbox.size() - applied.size();
+    }
+
+    /** For tests: whether an outbox event has been marked sent. */
+    public boolean outboxSent(String eventId) {
+        Outbox o = outbox.get(eventId);
+        return o != null && o.sentAt() > 0;
+    }
 
     @Override
     public String kind() {

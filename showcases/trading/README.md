@@ -4,7 +4,7 @@ Equities order flow through concert, joined in the analytics stores with market 
 concert entirely.
 
 ```
-                     ┌──────────────── concert (Kinesis → locks → Temporal entity workflows) ────────────────┐
+                     ┌──────────────── concert (Kinesis → locks → ApplyTransition activity) ─────────────────┐
 TradingLoadGen ────▶ │ trading_order / trading_execution / trading_fill / trading_allocation state machines   │
  (orders, fills)     └───────────────────────── terminal state → entity-snapshots (Kafka) ───────────────────┘
                                                                      │
@@ -158,7 +158,7 @@ stay unchanged):
 | allocation | `allocate`, `confirm` | copies the `AllocateCommand` (`accountId = allocAccountId`); `confirm` must name the same account |
 
 Every event must also name the entity's `orderId` (and the order's `accountId`, symbol and side where
-present). All timestamps are event time, the payload's `ts`, else `Workflow.currentTimeMillis()`.
+present). All timestamps are event time, the payload's `ts`, else `now()` (the transition's timestamp).
 
 ### Running it locally
 

@@ -2,9 +2,14 @@ package io.concert.store;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.concert.common.EventEnvelope;
 import io.concert.common.TraceRow;
+import io.concert.common.api.CommitOutcome;
+import io.concert.common.api.TransitionCommit;
+import io.concert.common.api.TransitionResult;
 import io.concert.common.TraceRow.Stage;
 import io.concert.common.api.SmStateRow;
 import java.util.ArrayList;
@@ -35,6 +40,128 @@ public abstract class StateStoreContract {
     @BeforeEach
     void prefix() {
         p = "t" + UUID.randomUUID().toString().substring(0, 8) + "-";
+    }
+
+    // ---------------------------------------------------------------- DB-truth transitions
+
+    /** Stores that hold entity state (postgres, dsql, memory); others skip these tests. */
+    protected boolean holdsEntityState() {
+        return true;
+    }
+
+    private TransitionCommit accept(String wf, String event, long from, String fromState, String toState, String... emitted) {
+        long v = from + 1;
+        List<EventEnvelope> out = new ArrayList<>();
+        for (String id : emitted) {
+            out.add(new EventEnvelope(id, "child", "c1", "go", List.of(), null, now(), 0));
+        }
+        return new TransitionCommit(wf, event, from, new TransitionResult(event, fromState, toState, true, null, v),
+                new SmStateRow(wf, "order", toState, "{\"n\":" + v + "}", v, event, now()), out, now());
+    }
+
+    private TransitionCommit reject(String wf, String event, long at, String state) {
+        return new TransitionCommit(wf, event, at, new TransitionResult(event, state, state, false, "no", at), null, List.of(), now());
+    }
+
+    @Test
+    void anAcceptedTransitionCommitsStateAppliedEventAndOutboxTogether() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(holdsEntityState());
+        String wf = "order:" + p + "1";
+        CommitOutcome o = store().commitTransition(accept(wf, p + "e1", 0, "NEW", "PAID", p + "e1.1", p + "e1.2"));
+
+        assertEquals(CommitOutcome.Status.COMMITTED, o.status());
+        SmStateRow row = store().loadEntity(wf, p + "e1").row();
+        assertEquals("PAID", row.state());
+        assertEquals(1, row.version());
+        assertTrue(store().loadEntity(wf, p + "e1").applied().accepted());
+        assertEquals(List.of(p + "e1.1", p + "e1.2"),
+                store().pendingOutbox(wf, now() + 1000, 10).stream().map(EventEnvelope::eventId).toList());
+    }
+
+    @Test
+    void aRedeliveredEventGetsItsStoredResultAndWritesNothing() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(holdsEntityState());
+        String wf = "order:" + p + "2";
+        store().commitTransition(accept(wf, p + "e1", 0, "NEW", "PAID"));
+        store().commitTransition(accept(wf, p + "e2", 1, "PAID", "SHIPPED"));
+
+        // e1 again, decided on stale state: refused with what was recorded the first time
+        CommitOutcome again = store().commitTransition(accept(wf, p + "e1", 2, "SHIPPED", "OTHER", p + "e1.9"));
+
+        assertEquals(CommitOutcome.Status.ALREADY_APPLIED, again.status());
+        assertEquals("PAID", again.result().toState());
+        assertEquals(1, again.result().version());
+        assertEquals("SHIPPED", store().loadEntity(wf, null).row().state());
+        assertTrue(store().pendingOutbox(wf, now() + 1000, 10).isEmpty(), "nothing emitted by the redelivery");
+    }
+
+    @Test
+    void aTransitionDecidedOnAStaleVersionConflictsAndWritesNothing() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(holdsEntityState());
+        String wf = "order:" + p + "3";
+        store().commitTransition(accept(wf, p + "e1", 0, "NEW", "PAID"));
+
+        CommitOutcome stale = store().commitTransition(accept(wf, p + "e2", 0, "NEW", "PAID", p + "e2.1"));
+
+        assertEquals(CommitOutcome.Status.CONFLICT, stale.status());
+        assertEquals(1, stale.current().version());
+        assertNull(store().loadEntity(wf, p + "e2").applied(), "the event is not recorded as applied");
+        assertTrue(store().pendingOutbox(wf, now() + 1000, 10).isEmpty());
+        // decided again on the current version, it commits
+        assertEquals(CommitOutcome.Status.COMMITTED, store().commitTransition(accept(wf, p + "e2", 1, "PAID", "SHIPPED")).status());
+    }
+
+    @Test
+    void aRejectionIsRecordedWithoutChangingStateAndOnlyOnTheVersionItWasDecidedOn() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(holdsEntityState());
+        String wf = "order:" + p + "4";
+        assertEquals(CommitOutcome.Status.COMMITTED, store().commitTransition(reject(wf, p + "r0", 0, "NEW")).status());
+        assertNull(store().loadEntity(wf, null).row(), "a rejected first event creates no entity row");
+        store().commitTransition(accept(wf, p + "e1", 0, "NEW", "PAID"));
+
+        assertEquals(CommitOutcome.Status.CONFLICT, store().commitTransition(reject(wf, p + "r1", 0, "NEW")).status());
+        assertEquals(CommitOutcome.Status.COMMITTED, store().commitTransition(reject(wf, p + "r1", 1, "PAID")).status());
+        assertFalse(store().loadEntity(wf, p + "r1").applied().accepted());
+        assertEquals(1, store().loadEntity(wf, null).row().version());
+    }
+
+    @Test
+    void ofConcurrentCommitsFromOneVersionExactlyOneWins() throws Exception {
+        org.junit.jupiter.api.Assumptions.assumeTrue(holdsEntityState());
+        String wf = "order:" + p + "5";
+        store().commitTransition(accept(wf, p + "e0", 0, "NEW", "OPEN"));
+        List<Future<CommitOutcome>> fs = new ArrayList<>();
+        try (var pool = Executors.newFixedThreadPool(8)) {
+            for (int i = 0; i < 8; i++) {
+                String event = p + "c" + i;
+                fs.add(pool.submit(() -> store().commitTransition(accept(wf, event, 1, "OPEN", "S" + event, event + ".1"))));
+            }
+        }
+        long committed = 0;
+        for (Future<CommitOutcome> f : fs) {
+            if (f.get().status() == CommitOutcome.Status.COMMITTED) {
+                committed++;
+            }
+        }
+        assertEquals(1, committed);
+        assertEquals(2, store().loadEntity(wf, null).row().version());
+        assertEquals(1, store().pendingOutbox(wf, now() + 1000, 10).size(), "only the winner's outbox row exists");
+    }
+
+    @Test
+    void outboxRowsAreDeliveredOnceMarkedSentAndSweptLater() {
+        org.junit.jupiter.api.Assumptions.assumeTrue(holdsEntityState());
+        String wf = "order:" + p + "6";
+        store().commitTransition(accept(wf, p + "e1", 0, "NEW", "PAID", p + "e1.1", p + "e1.2"));
+        assertTrue(store().pendingOutbox(wf, now() - 60_000, 10).isEmpty(), "only rows created before the cut-off");
+
+        store().markOutboxSent(List.of(p + "e1.1"));
+        store().markOutboxSent(List.of(p + "e1.1")); // idempotent
+
+        assertEquals(List.of(p + "e1.2"), store().pendingOutbox(wf, now() + 1000, 10).stream().map(EventEnvelope::eventId).toList());
+        store().markOutboxSent(List.of(p + "e1.2"));
+        assertTrue(store().sweepEntityLog(now() + 1000, now() + 1000, 100) >= 3, "two sent rows and the applied record");
+        assertNull(store().loadEntity(wf, p + "e1").applied());
     }
 
     // ---------------------------------------------------------------- dedupe

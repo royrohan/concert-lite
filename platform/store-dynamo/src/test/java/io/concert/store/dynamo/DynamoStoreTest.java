@@ -43,4 +43,9 @@ class DynamoStoreTest extends StateStoreContract {
     protected boolean sweepsSynchronously() {
         return false; // native TTL
     }
+
+    @Override
+    protected boolean holdsEntityState() {
+        return false; // DB-truth entity state is a Postgres / DSQL feature
+    }
 }

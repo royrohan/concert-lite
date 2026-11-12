@@ -136,8 +136,9 @@ case RenewLoan cmd -> {
 }
 ```
 
-This is workflow code, so it must be deterministic: take the time from `Workflow.currentTimeMillis()`, not the
-system clock. Only the worker changes entity state. The coordinator just orders and delivers events.
+This is plain code, run by the worker's `ApplyTransition` activity on a fresh machine for each event, loaded from the
+store and committed in one transaction. Take the time from `now()`, the transition's timestamp, and keep decisions
+free of side effects: a decision may run more than once for one event (after a retry or a conflict). Only the worker changes entity state. The coordinator just orders and delivers events.
 
 ## 5. Write your tests
 

@@ -18,7 +18,7 @@ import io.concert.sdk.StateMachineSpec;
  * </pre>
  *
  * <p>{@code onTransition} mutates the data in place; reject an event with {@code reject("reason")}. Take time
- * from {@code Workflow.currentTimeMillis()} (workflow code must be deterministic).
+ * from {@code now()}, the transition's timestamp (decisions may run more than once: no side effects).
  */
 public class RsTradingFillMachine extends ModelStateMachine<Fill> {
 

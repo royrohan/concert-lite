@@ -6,10 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.concert.common.EventEnvelope;
-import io.concert.common.TaskQueues;
-import io.concert.common.WorkflowIds;
-import io.concert.common.api.EntityInit;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.SmStateRow;
 import io.concert.common.api.TransitionResult;
 import io.concert.model.runtime.LegendModel;
@@ -21,23 +17,10 @@ import io.concert.sdk.model.demo.ticket.Priority;
 import io.concert.sdk.model.demo.ticket.ResolveCommand;
 import io.concert.sdk.model.demo.ticket.Ticket;
 import io.concert.store.InMemoryStateStore;
-import io.temporal.api.enums.v1.WorkflowIdConflictPolicy;
-import io.temporal.client.UpdateOptions;
-import io.temporal.client.WithStartWorkflowOperation;
-import io.temporal.client.WorkflowClient;
-import io.temporal.client.WorkflowOptions;
-import io.temporal.client.WorkflowUpdateHandle;
-import io.temporal.client.WorkflowUpdateStage;
-import io.temporal.testing.TestEnvironmentOptions;
-import io.temporal.testing.TestWorkflowEnvironment;
-import io.temporal.worker.Worker;
-import io.temporal.workflow.Workflow;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -64,11 +47,6 @@ public class ModelStateMachineTest {
         }
 
         @Override
-        protected int continueAsNewAfter() {
-            return 3; // exercise continue-as-new in a short test
-        }
-
-        @Override
         protected Class<Ticket> dataType() {
             return Ticket.class;
         }
@@ -91,15 +69,10 @@ public class ModelStateMachineTest {
                     }
                 }
                 case CommentCommand c -> {
-                    if (c.getText().startsWith("slow")) {
-                        // A durable timer ends the workflow task, so the next update is delivered
-                        // while this one waits; it must not be decided before this one commits.
-                        Workflow.sleep(Duration.ofMillis(300));
-                    }
                     ticket.addComment(new Comment().setAuthor(c.getAuthor()).setText(c.getText()));
                 }
                 case ResolveCommand r -> ticket.setResolution(r.getResolution())
-                        .setResolvedAt(Instant.ofEpochMilli(Workflow.currentTimeMillis()));
+                        .setResolvedAt(Instant.ofEpochMilli(now()));
                 case null -> {
                     switch (event.eventType()) {
                         case "reopen" -> ticket.setResolution(null).setResolvedAt(null).setReopenCount(ticket.getReopenCount() + 1);
@@ -117,44 +90,17 @@ public class ModelStateMachineTest {
         }
     }
 
-    private TestWorkflowEnvironment env;
     private InMemoryStateStore store;
-    private WorkflowClient client;
+    private MachineHarness harness;
 
     @BeforeEach
     void setUp() {
-        System.setProperty("TEMPORAL_SEARCH_ATTRIBUTES", "false");
-        env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build());
         store = new InMemoryStateStore();
-        Worker w = env.newWorker(TaskQueues.stateMachine("ticket"));
-        w.registerWorkflowImplementationTypes(TicketMachine.class);
-        w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store), EntitySnapshotPublisher.logging());
-        env.start();
-        client = env.getWorkflowClient();
-    }
-
-    @AfterEach
-    void tearDown() {
-        env.close();
+        harness = new MachineHarness(store).register("ticket", TicketMachine.class);
     }
 
     private TransitionResult send(String id, String type, String payload) {
-        EntityWorkflow wf = client.newWorkflowStub(EntityWorkflow.class, WorkflowOptions.newBuilder()
-                .setWorkflowId(WorkflowIds.entity("ticket", "t1"))
-                .setTaskQueue(TaskQueues.stateMachine("ticket"))
-                .setWorkflowIdConflictPolicy(WorkflowIdConflictPolicy.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING)
-                .build());
-        EventEnvelope e = new EventEnvelope(id, "ticket", "t1", type, List.of(), payload, 0, 0);
-        return WorkflowClient.executeUpdateWithStart(wf::handle, e,
-                UpdateOptions.<TransitionResult>newBuilder().setUpdateId(id).setWaitForStage(WorkflowUpdateStage.COMPLETED).build(),
-                new WithStartWorkflowOperation<>(wf::run, EntityInit.fresh("ticket", "t1")));
-    }
-
-    private WorkflowUpdateHandle<TransitionResult> startSend(String id, String type, String payload) {
-        EntityWorkflow wf = client.newWorkflowStub(EntityWorkflow.class, WorkflowIds.entity("ticket", "t1"));
-        EventEnvelope e = new EventEnvelope(id, "ticket", "t1", type, List.of(), payload, 0, 0);
-        return WorkflowClient.startUpdate(wf::handle, e,
-                UpdateOptions.<TransitionResult>newBuilder().setUpdateId(id).setWaitForStage(WorkflowUpdateStage.ACCEPTED).build());
+        return harness.apply(new EventEnvelope(id, "ticket", "t1", type, List.of(), payload, 0, 0));
     }
 
     private SmStateRow row() {
@@ -223,18 +169,19 @@ public class ModelStateMachineTest {
         TransitionResult rejected = send("e5", "assign", "{\"assignee\":\"nobody\"}");
         assertFalse(rejected.accepted());
         assertEquals("cannot assign to nobody", rejected.message());
-        assertEquals("OPEN", row().state());
-        assertEquals(0, row().version());
-        assertNull(row().data());
+        // rejections are recorded as applied events but change nothing: the entity has no row yet
+        assertTrue(store.loadState("ticket:t1").isEmpty());
+        assertFalse(store.loadEntity("ticket:t1", "e5").applied().accepted());
         assertTrue(send("e6", "assign", "{\"assignee\":\"ann\"}").accepted());
+        assertEquals(1, row().version());
     }
 
     @Test
-    void continueAsNewKeepsTypedData() {
+    void eachEventIsDecidedOnTheStoredData() {
         send("e1", "assign", "{\"assignee\":\"ann\"}");
         send("e2", "comment", "{\"author\":\"a\",\"text\":\"1\"}");
         send("e3", "resolve", "{\"resolution\":\"fixed\"}");
-        // continue-as-new happened after 3 events; the next run starts from the carried-over JSON
+        // every event runs on a fresh machine instance bound to the committed row
         TransitionResult r = send("e4", "reopen", null);
         assertTrue(r.accepted(), r.message());
         assertEquals(4, r.version());
@@ -243,16 +190,6 @@ public class ModelStateMachineTest {
         assertEquals(1, t.getComments().size());
         assertEquals(1L, t.getReopenCount());
         assertNull(t.getResolution());
-    }
-
-    @Test
-    void yieldingTransitionKeepsAcceptanceOrder() {
-        send("e1", "assign", "{\"assignee\":\"ann\"}");
-        WorkflowUpdateHandle<TransitionResult> first = startSend("e2", "comment", "{\"author\":\"a\",\"text\":\"slow\"}");
-        WorkflowUpdateHandle<TransitionResult> second = startSend("e3", "comment", "{\"author\":\"a\",\"text\":\"fast\"}");
-        assertEquals(2, first.getResult().version());
-        assertEquals(3, second.getResult().version());
-        assertEquals(List.of("slow", "fast"), ticket().getComments().stream().map(Comment::getText).toList());
     }
 
     @Test

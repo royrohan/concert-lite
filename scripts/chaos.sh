@@ -19,6 +19,10 @@
 #                           surviving worker; update ids make the retried transition idempotent
 #   whole tier down      -> work queues durably in Temporal (and Kinesis) until a process comes back
 #   restart Temporal     -> (CHAOS_TEMPORAL=1) clients and pollers reconnect; state is in Postgres
+#   freeze the store     -> (CHAOS_STORE=1, postgres) docker pause the database for DOWN_MIN..DOWN_MAX s: transitions
+#                           (one transaction each: state + applied event + outbox) wait and retry; nothing is half
+#                           committed. Entity-style runs also check the outbox: every CHAIN_EVERY-th append emits a
+#                           receipt to <key>-R, and each receipt ledger must count exactly the chained appends
 set -uo pipefail
 
 DURATION=${DURATION:-180}          # seconds of load
@@ -30,9 +34,11 @@ DOWN_MAX=${DOWN_MAX:-12}
 COORDINATORS=${COORDINATORS:-2}
 WORKERS=${WORKERS:-2}
 CHAOS_TEMPORAL=${CHAOS_TEMPORAL:-0}
+CHAOS_STORE=${CHAOS_STORE:-0}      # 1 = some chaos actions freeze the Postgres store instead
 KEEP=${KEEP:-0}                    # 1 = leave processes running afterwards
 EVENT_STYLE=${EVENT_STYLE:-0}      # 1 = event-style load (workers run the demo event domain, ev-demo)
-CHAIN_EVERY=${CHAIN_EVERY:-5}      # event style: every n-th Tick of a key emits a ChainTick
+CHAIN_EVERY=${CHAIN_EVERY:-5}      # every n-th event of a key emits a chained event (event style: a ChainTick;
+                                   # entity style: a receipt to ledger <key>-R through the outbox)
 RUST_COORDINATOR=${RUST_COORDINATOR:-0}   # 1 = run platform/coordinator-rs instead of the Java coordinator
 SKIP_BUILD=${SKIP_BUILD:-0}
 
@@ -156,6 +162,13 @@ while kill -0 "$LOADGEN_PID" 2>/dev/null; do
   down=$((DOWN_MIN + RANDOM % (DOWN_MAX - DOWN_MIN + 1)))
   roll=$((RANDOM % 100))
   victims=""
+  if [ "$CHAOS_STORE" = "1" ] && [ "$STORE_KIND" = "postgres" ] && [ $((RANDOM % 100)) -lt 30 ]; then
+    mark PAUSE_STORE "dsql-${down}s"
+    (cd "$ROOT" && docker compose pause dsql >/dev/null 2>&1)
+    sleep "$down"
+    (cd "$ROOT" && docker compose unpause dsql >/dev/null 2>&1)
+    continue
+  fi
   if   [ $roll -lt 40 ]; then v=$(random_victim) && { stop_proc "$v" KILL; mark KILL9 "$v"; victims=$v; }
   elif [ $roll -lt 60 ]; then v=$(random_victim) && { stop_proc "$v" TERM; mark SIGTERM "$v"; victims=$v; }
   elif [ $roll -lt 75 ]; then

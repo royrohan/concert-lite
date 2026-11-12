@@ -27,6 +27,30 @@ CREATE TABLE IF NOT EXISTS sm_state (
     updated_at    timestamptz NOT NULL
 );
 
+-- DB-truth: every event applied to an entity (accepted or rejected) with its result, written in the transition's
+-- transaction. A redelivered event finds its row and gets the stored result instead of being applied again.
+CREATE TABLE IF NOT EXISTS applied_event (
+    workflow_id text NOT NULL,
+    event_id    text NOT NULL,
+    accepted    boolean NOT NULL,
+    from_state  text NOT NULL,
+    to_state    text NOT NULL,
+    version     bigint NOT NULL,
+    message     text,
+    applied_at  timestamptz NOT NULL,
+    PRIMARY KEY (workflow_id, event_id)
+);
+
+-- DB-truth: events an accepted transition emitted, written in its transaction, delivered to their lock chains after
+-- commit (sent_at set) by the worker, or by its sweeper if the worker died first.
+CREATE TABLE IF NOT EXISTS outbox (
+    event_id    text PRIMARY KEY,       -- the child event id, <parentEventId>.<n>
+    workflow_id text NOT NULL,          -- the emitting entity
+    envelope    text NOT NULL,          -- the EventEnvelope JSON
+    created_at  timestamptz NOT NULL,
+    sent_at     timestamptz
+);
+
 CREATE TABLE IF NOT EXISTS event_trace (
     trace_id    text PRIMARY KEY,        -- client-generated UUID
     event_id    text NOT NULL,
@@ -45,3 +69,7 @@ CREATE INDEX /*ASYNC*/ IF NOT EXISTS event_trace_workflow_idx ON event_trace (wo
 CREATE INDEX /*ASYNC*/ IF NOT EXISTS event_trace_ts_idx ON event_trace (ts);
 
 CREATE INDEX /*ASYNC*/ IF NOT EXISTS processed_event_received_idx ON processed_event (received_at);
+
+CREATE INDEX /*ASYNC*/ IF NOT EXISTS applied_event_applied_idx ON applied_event (applied_at);
+
+CREATE INDEX /*ASYNC*/ IF NOT EXISTS outbox_created_idx ON outbox (created_at);

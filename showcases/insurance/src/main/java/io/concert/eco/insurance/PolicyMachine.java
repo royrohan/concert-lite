@@ -12,7 +12,6 @@ import io.concert.eco.insurance.model.insurance.Policy;
 import io.concert.eco.insurance.model.insurance.PolicyStatus;
 import io.concert.sdk.ModelStateMachine;
 import io.concert.sdk.StateMachineSpec;
-import io.temporal.workflow.Workflow;
 import java.time.Instant;
 
 /**
@@ -28,7 +27,7 @@ import java.time.Instant;
  * </pre>
  *
  * <p>{@code onTransition} mutates the data in place; reject an event with {@code reject("reason")}. Take time
- * from {@code Workflow.currentTimeMillis()} (workflow code must be deterministic).
+ * from {@code now()}, the transition's timestamp (decisions may run more than once: no side effects).
  */
 public class PolicyMachine extends ModelStateMachine<Policy> {
 
@@ -50,7 +49,7 @@ public class PolicyMachine extends ModelStateMachine<Policy> {
     @Override
     protected void onTransition(String from, String to, Policy policy, Object payload, EventEnvelope event) {
         policy.setStatus(PolicyStatus.valueOf(to));
-        Instant now = Instant.ofEpochMilli(Workflow.currentTimeMillis());
+        Instant now = Instant.ofEpochMilli(now());
         switch (payload) {
             case BindPolicy cmd -> {
                 if (cmd.getEndDate().isBefore(cmd.getStartDate())) {

@@ -236,7 +236,7 @@ final class FlowGenerator implements AutoCloseable {
         final boolean errors;
         /** Entity events carry no lock keys but their entity's (the Performance page's lock modes). */
         final boolean entityKeyOnly;
-        /** Entity events carry no lock keys and the {@code direct} flag: no lock workflow at all ("non-lock events"). */
+        /** Entity events carry no lock keys and the {@code direct} flag ("non-lock events"); the flag is now ignored, so they take only their entity key. */
         final boolean direct;
         final long startedAt = System.currentTimeMillis();
         volatile boolean stopped;

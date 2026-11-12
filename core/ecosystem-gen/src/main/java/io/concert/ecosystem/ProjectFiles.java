@@ -188,7 +188,6 @@ final class ProjectFiles {
                       WORKER_LA_SLOTS: ${WORKER_LA_SLOTS:-2000}
                       ORCH_WF_POLLERS_MAX: ${ORCH_WF_POLLERS_MAX:-64}
                       INGEST_PARALLEL_GROUPS: ${INGEST_PARALLEL_GROUPS:-256}
-                      DIRECT_SM_TYPES: ${DIRECT_SM_TYPES:-}
                 """.formatted(n);
         String env = """
                     depends_on:

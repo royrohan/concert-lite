@@ -73,8 +73,14 @@ final class LoadGen {
                         e = EventEnvelope.event(runId + "-" + sent, "demo", "Tick", locks,
                                 "{\"key\":\"" + runId + "-K" + k + "\",\"seq\":" + seq + ",\"chain\":" + chain + "}", System.currentTimeMillis());
                     } else {
+                        // every chainEvery-th append also emits a receipt to <key>-R (DB-truth outbox)
+                        long seq = perKey[k]++;
+                        boolean chain = chainEvery > 0 && seq % chainEvery == chainEvery - 1;
+                        if (chain) {
+                            chained[k]++;
+                        }
                         e = new EventEnvelope(runId + "-" + sent, "ledger", runId + "-K" + k, "append", extra,
-                                "{\"seq\":" + perKey[k]++ + "}", System.currentTimeMillis(), 0);
+                                "{\"seq\":" + seq + (chain ? ",\"chain\":true" : "") + "}", System.currentTimeMillis(), 0);
                     }
                     batch.add(PutRecordsRequestEntry.builder()
                             .partitionKey(e.effectiveLockKeys().get(0))

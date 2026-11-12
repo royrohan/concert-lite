@@ -39,6 +39,11 @@ public final class TraceWriter implements AutoCloseable {
         this.flusher = Thread.ofVirtual().name("trace-writer").start(this::loop);
     }
 
+    /** The store the rows go to. */
+    public StateStore store() {
+        return store;
+    }
+
     public void add(TraceRow row) {
         if (!TraceSampling.sampled(row.eventId())) {
             return;

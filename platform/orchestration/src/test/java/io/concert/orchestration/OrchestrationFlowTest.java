@@ -10,9 +10,7 @@ import io.concert.common.TaskQueues;
 import io.concert.common.TraceRow;
 import io.concert.common.WorkflowIds;
 import io.concert.common.api.EntitySnapshot;
-import io.concert.common.api.EntityWorkflow;
 import io.concert.sdk.AbstractStateMachine;
-import io.concert.sdk.EntityPersistenceActivitiesImpl;
 import io.concert.sdk.StateMachineSpec;
 import io.concert.store.InMemoryStateStore;
 import io.concert.store.TraceWriter;
@@ -77,11 +75,11 @@ class OrchestrationFlowTest {
         orch.registerActivitiesImplementations(dispatch);
 
         Worker ledger = env.newWorker(TaskQueues.stateMachine("ledger"));
-        ledger.registerWorkflowImplementationTypes(Ledger.class);
-        ledger.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(store));
+        ledger.registerActivitiesImplementations(new io.concert.sdk.TransitionActivitiesImpl(
+                store, java.util.Map.of("ledger", Ledger.class), null, null, traces));
 
         env.start();
-        dispatcher = new IngestDispatcher(store, traces, dispatch, Set.of(), 64);
+        dispatcher = new IngestDispatcher(store, traces, dispatch, 64);
     }
 
     @AfterEach
@@ -97,8 +95,8 @@ class OrchestrationFlowTest {
     }
 
     private JsonNode ledgerData(String ledger) {
-        EntitySnapshot s = client.newWorkflowStub(EntityWorkflow.class, WorkflowIds.entity("ledger", ledger)).snapshot();
-        return s.data() == null ? Json.read("{\"count\":0,\"last\":-1,\"ooo\":0}", JsonNode.class) : Json.read(s.data(), JsonNode.class);
+        String data = store.loadState(WorkflowIds.entity("ledger", ledger)).map(io.concert.common.api.SmStateRow::data).orElse(null);
+        return data == null ? Json.read("{\"count\":0,\"last\":-1,\"ooo\":0}", JsonNode.class) : Json.read(data, JsonNode.class);
     }
 
     private static void await(Duration timeout, BooleanSupplier cond) throws InterruptedException {
@@ -131,9 +129,9 @@ class OrchestrationFlowTest {
         assertEquals(n - 1, ledgerData("L1").get("last").asLong());
     }
 
-    /** {@code direct} events skip the entity lock (no KeyLockWorkflow, no lock waits) and still apply in shard order. */
+    /** The {@code direct} flag is ignored (direct mode was removed): such events go through their entity's lock, in order. */
     @Test
-    void directEventsBypassTheLockInOrder() throws Exception {
+    void directFlaggedEventsStillTakeTheirLockInOrder() throws Exception {
         int n = 100;
         for (int b = 0; b < n; b += 25) {
             List<EventEnvelope> batch = new ArrayList<>();
@@ -145,24 +143,12 @@ class OrchestrationFlowTest {
         await(Duration.ofSeconds(60), () -> ledgerData("LD").get("count").asLong() == n);
         assertEquals(0, ledgerData("LD").get("ooo").asLong());
         assertEquals(n - 1, ledgerData("LD").get("last").asLong());
-        var notFound = org.junit.jupiter.api.Assertions.assertThrows(io.grpc.StatusRuntimeException.class,
-                () -> client.getWorkflowServiceStubs().blockingStub().describeWorkflowExecution(
-                        io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest.newBuilder()
-                                .setNamespace(client.getOptions().getNamespace())
-                                .setExecution(io.temporal.api.common.v1.WorkflowExecution.newBuilder()
-                                        .setWorkflowId(WorkflowIds.lock(WorkflowIds.entityKey("ledger", "LD"))))
-                                .build()),
-                "no lock workflow for direct events");
-        assertEquals(io.grpc.Status.Code.NOT_FOUND, notFound.getStatus().getCode());
-        // control: the same lookup finds the lock of a normal event
-        dispatcher.dispatchBatch(List.of(append("n-1", "LN", 0, List.of())));
-        await(Duration.ofSeconds(30), () -> ledgerData("LN").get("count").asLong() == 1);
         client.getWorkflowServiceStubs().blockingStub().describeWorkflowExecution(
                 io.temporal.api.workflowservice.v1.DescribeWorkflowExecutionRequest.newBuilder()
                         .setNamespace(client.getOptions().getNamespace())
                         .setExecution(io.temporal.api.common.v1.WorkflowExecution.newBuilder()
-                                .setWorkflowId(WorkflowIds.lock(WorkflowIds.entityKey("ledger", "LN"))))
-                        .build());
+                                .setWorkflowId(WorkflowIds.lock(WorkflowIds.entityKey("ledger", "LD"))))
+                        .build()); // the entity's lock exists: the events went through it
     }
 
     @Test

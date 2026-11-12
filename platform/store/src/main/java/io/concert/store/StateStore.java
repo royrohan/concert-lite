@@ -1,6 +1,10 @@
 package io.concert.store;
 
+import io.concert.common.EventEnvelope;
 import io.concert.common.TraceRow;
+import io.concert.common.api.CommitOutcome;
+import io.concert.common.api.EntityLoad;
+import io.concert.common.api.TransitionCommit;
 import io.concert.common.api.SmStateRow;
 import java.util.Collection;
 import java.util.List;
@@ -47,6 +51,38 @@ public interface StateStore extends AutoCloseable {
     void upsertState(SmStateRow row, TraceRow trace);
 
     Optional<SmStateRow> loadState(String workflowId);
+
+    // ---------------------------------------------------------------------------------------------- DB-truth
+    // Entity state lives here: a transition commits the state row, the applied-event record and the outbox rows of
+    // the events it emitted in one transaction. Postgres and Aurora DSQL implement it; other backends do not.
+
+    /** The entity as committed, plus the stored result if {@code eventId} was already applied to it. */
+    default EntityLoad loadEntity(String workflowId, String eventId) {
+        throw new UnsupportedOperationException(kind() + " store does not hold entity state (DB-truth needs postgres or dsql)");
+    }
+
+    /**
+     * Commits a transition atomically: records the event as applied and, if accepted, moves the entity from
+     * {@code expectedVersion} to the new row and stores its outbox events. Writes nothing and answers ALREADY_APPLIED
+     * if the event was applied before, or CONFLICT if the entity is not at {@code expectedVersion} (for a rejected
+     * event too: the rejection was decided on that version).
+     */
+    default CommitOutcome commitTransition(TransitionCommit commit) {
+        throw new UnsupportedOperationException(kind() + " store does not hold entity state (DB-truth needs postgres or dsql)");
+    }
+
+    /** Outbox events not yet marked sent, created before {@code createdBeforeMillis}, of entities with the prefix. */
+    default List<EventEnvelope> pendingOutbox(String workflowIdPrefix, long createdBeforeMillis, int limit) {
+        return List.of();
+    }
+
+    /** Marks outbox events delivered (idempotent). */
+    default void markOutboxSent(Collection<String> eventIds) {}
+
+    /** Deletes outbox rows sent before the time, and applied-event records older than the other; returns rows removed. */
+    default int sweepEntityLog(long outboxSentBeforeMillis, long appliedBeforeMillis, int batchSize) {
+        return 0;
+    }
 
     void appendTrace(List<TraceRow> rows);
 

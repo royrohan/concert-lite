@@ -8,10 +8,8 @@ import io.concert.common.TemporalClients;
 import io.concert.common.api.IngestConfig;
 import io.concert.store.StateStore;
 import io.concert.store.Stores;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,7 +19,6 @@ import org.slf4j.LoggerFactory;
  * TEMPORAL_ADDRESS=localhost:7233   TEMPORAL_NAMESPACE=default
  * KINESIS_ENDPOINT=http://localhost:4566   INGEST_STREAM=concert-<flow>   INGEST_POSITION=TRIM_HORIZON
  * STORE_JDBC_URL=jdbc:postgresql://localhost:5433/concert   (STORE_KIND=dsql for Aurora DSQL)
- * DIRECT_SM_TYPES=            comma list of types that may bypass locks (no shared keys!)
  * DEDUPE_TTL_HOURS=24
  * INGEST_CREATE_STREAM=      create the stream if missing (default: true under CONCERT_FLOW), KINESIS_SHARDS=2
  * CONCERT_FLOW=              the flow (ecosystem) this coordinator serves: stream concert-<flow>, task queue
@@ -33,10 +30,7 @@ public final class OrchestrationWorkerMain {
 
     public static void main(String[] args) throws InterruptedException {
         StateStore store = Stores.fromEnv();
-        Set<String> direct = Arrays.stream(Env.get("DIRECT_SM_TYPES", "").split(","))
-                .map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toSet());
         OrchestrationWorker.Settings settings = new OrchestrationWorker.Settings(
-                direct,
                 Env.getInt("INGEST_PARALLEL_GROUPS", 256),
                 Env.getLong("INGEST_IDLE_POLL_MS", 20),
                 Env.getLong("INGEST_CHECKPOINT_MS", 500),
@@ -98,8 +92,7 @@ public final class OrchestrationWorkerMain {
             worker.close();
             store.close();
         }));
-        log.info("orchestration worker up (flow={}, stream={}, queue={}, direct types={})", Flows.CURRENT, stream,
-                TaskQueues.orchestration(), direct);
+        log.info("orchestration worker up (flow={}, stream={}, queue={})", Flows.CURRENT, stream, TaskQueues.orchestration());
         Thread.currentThread().join();
     }
 }
