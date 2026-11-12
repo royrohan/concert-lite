@@ -297,8 +297,12 @@ Two implementation rules keep the workflows themselves from deadlocking:
 
 ### 7.5 Release
 
-The releasing activity sends `release(requestId)` to each lower key's lock **in parallel** and logs failures without
-failing. Retry policy: start-to-close 30 s, backoff 50 ms to 10 s, unlimited attempts.
+The releasing activity sends `release(requestId)` to each lower key's lock **in parallel**.
+- If any release fails, the activity **MUST** fail after attempting every key, so it is retried. This happens, for
+  example, while the target lock's workflow task is failing during a coordinator restart. A swallowed failure loses
+  the release and leaves the key held forever: an earlier Java implementation did this, and the chaos test caught it.
+- A lock that no longer exists (workflow not found) counts as released.
+- Retry policy: start-to-close 30 s, backoff 50 ms to 10 s, unlimited attempts.
 
 `release` is idempotent:
 - the head is popped;

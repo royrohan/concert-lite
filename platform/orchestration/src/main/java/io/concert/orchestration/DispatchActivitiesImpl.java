@@ -135,19 +135,32 @@ public final class DispatchActivitiesImpl implements DispatchActivities {
         EventRouting.schedule(client, event);
     }
 
+    /**
+     * Sends {@code release} to every lock in parallel. A release that fails (e.g. the lock's workflow task is failing
+     * while its coordinator restarts) fails the activity once every key was attempted, so the caller's activity
+     * retries: {@code release} is idempotent, and a lost release would leave the key held forever. A lock that no
+     * longer exists has nothing to release.
+     */
     @Override
     public void releaseLocks(List<String> lockKeys, String requestId) {
+        List<String> failed = new java.util.concurrent.CopyOnWriteArrayList<>();
         try (var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             for (String key : lockKeys) {
                 pool.submit(() -> {
                     try {
                         client.newWorkflowStub(KeyLockWorkflow.class, WorkflowIds.lock(key)).release(requestId);
                         traces.add(new TraceRow(requestId, System.currentTimeMillis(), TraceRow.Stage.RELEASED, null, key, null));
+                    } catch (io.temporal.client.WorkflowNotFoundException e) {
+                        log.debug("release of {} on {}: the lock is gone, nothing to release", requestId, key);
                     } catch (RuntimeException e) {
-                        log.warn("release of {} on {} failed: {}", requestId, key, e.getMessage());
+                        log.warn("release of {} on {} failed, will retry: {}", requestId, key, e.getMessage());
+                        failed.add(key);
                     }
                 });
             }
+        }
+        if (!failed.isEmpty()) {
+            throw ApplicationFailure.newFailure("release of " + requestId + " failed on " + failed, "ReleaseFailed");
         }
     }
 
