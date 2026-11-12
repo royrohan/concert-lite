@@ -1,7 +1,8 @@
 # Coordinator and worker specification
 
-Status: describes the implementation on `main` (Java reference: `platform/orchestration`, `core/common`,
-`core/worker-sdk`, `platform/store`; Rust coordinator: `platform/coordinator-rs`).
+Status: describes the implementation on `main`, with entity state in the store (DB-truth, §9.3).
+Java reference: `platform/orchestration`, `core/common`, `core/worker-sdk`, `platform/store`. Rust coordinator:
+`platform/coordinator-rs`.
 
 This is a reimplementation contract. A coordinator or worker built from it, in any language or Temporal SDK, must
 interoperate with the existing ones: same workflow types, update names, payload JSON, workflow ids, task queues and
@@ -18,8 +19,8 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
 7. [Coordinator: the lock workflow](#7-coordinator-the-lock-workflow)
 8. [Coordinator: dispatch to entities](#8-coordinator-dispatch-to-entities)
 9. [Worker: the entity workflow](#9-worker-the-entity-workflow)
-10. [Worker: chained events](#10-worker-chained-events)
-11. [Worker: external side effects and Sagas](#11-worker-external-side-effects-and-sagas)
+10. [Worker: chained events and the outbox](#10-worker-chained-events-and-the-outbox)
+11. [External side effects (out of scope, parked)](#11-external-side-effects-out-of-scope-parked)
 12. [State store: Postgres and Aurora DSQL](#12-state-store-postgres-and-aurora-dsql)
 13. [Failure model and guarantees](#13-failure-model-and-guarantees)
 14. [Temporal server requirements](#14-temporal-server-requirements)
@@ -34,9 +35,9 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
 
 **In scope:**
 - the **coordinator**: deduplication, lock workflows, multi-key serialization, dispatch to entities;
-- the **worker**: entity state machine workflows, persistence, chained events, external side effects (REST and
-  Kafka) with idempotency keys and Sagas;
-- the **state store** on Postgres or Aurora DSQL.
+- the **worker**: entity state machine workflows, each transition one database transaction (DB-truth), chained
+  events through a transactional outbox;
+- the **state store** on Postgres or Aurora DSQL, which is the source of truth for entity state.
 
 **Out of scope:**
 - the ingress adapter that reads events from a source (Kinesis shard consumers, checkpoints, the ingest supervisor).
@@ -44,7 +45,8 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
 - egress for analytics (completed-entity snapshots to Kafka, analytics sinks, reconciliation);
 - event-style processing (`style = "event"`, processor workflows). The lock workflow's event-style branch is noted
   where it affects the lock protocol (§7.7) and is otherwise not specified;
-- other store backends (DynamoDB, Spanner).
+- other store backends (DynamoDB, Spanner);
+- external side effects from inside transitions: parked (§11).
 
 ## 2. Architecture
 
@@ -62,20 +64,22 @@ tables. Key words: **MUST**, **MUST NOT**, **SHOULD** and **MAY**, as in RFC 211
                                                        ▼
                 ┌───────────────────────────┐  sm-<smType> task queue
                 │          WORKER           │
-                │ EntityWorkflow per entity │  decide ─▶ (activities: REST, Kafka, Saga) ─▶ commit in memory
-                │ smType:instanceKey        │  ─▶ persist sm_state (local activity) ─▶ enqueue emitted events
-                └─────────────┬─────────────┘
+                │ EntityWorkflow per entity │  (load) ─▶ decide ─▶ commit ONE transaction:
+                │ smType:instanceKey        │    sm_state (version-checked) + applied_event + outbox
+                └─────────────┬─────────────┘  ─▶ deliver outbox to lock chains (sweeper catches leftovers)
                               ▼
-                     Postgres / Aurora DSQL
-              processed_event · sm_state · event_trace
+                     Postgres / Aurora DSQL  (source of truth for entities)
+       processed_event · sm_state · applied_event · outbox · event_trace
 ```
 
 **Responsibilities:**
 - **Coordinator:** deduplication, ordering, mutual exclusion over keys, delivery. It **MUST NOT** read payloads or
   entity state, and **MUST NOT** change entity state. One implementation serves every flow.
-- **Worker:** the only component that decides transitions, mutates entity state and performs side effects.
-- **Temporal:** holds all durable orchestration state (lock queues, entity state, pending activities). The store holds
-  the dedupe set, a projection of entity state and traces.
+- **Worker:** the only component that decides transitions and changes entity state. Each transition is one database
+  transaction (§9.3).
+- **Temporal:** holds all durable orchestration state: lock queues, event order, pending deliveries.
+- **The store:** holds the entities (`sm_state`), the record of applied events, the outbox of emitted events, the
+  dedupe set and traces.
 
 Any number of coordinator and worker processes **MAY** run. Temporal distributes the work and fails it over; there is
 no leader election, lease or peer protocol.
@@ -345,9 +349,9 @@ A reimplementation that does not support event style **MUST** still keep `headBl
 
 ### 8.2 Long transitions
 
-A transition that performs external calls (§11) can outlast the dispatch's 30 s start-to-close. The dispatch is then
-retried, re-attaching to the running update, until its 1 h schedule-to-close. Transitions **SHOULD** stay well under
-30 s so this path stays exceptional.
+A transition normally takes one database transaction. A store outage makes the commit retry (§9.4), and the
+dispatch's 30 s start-to-close can then pass. The dispatch is retried, re-attaching to the running update, until
+its 1 h schedule-to-close.
 
 ### 8.3 Traces
 
@@ -388,152 +392,129 @@ A type declares:
 Edges **MUST** be deterministic: built once and never changed at runtime. A change that alters existing behavior
 needs Temporal versioning (`getVersion`) like any workflow code change.
 
-### 9.3 Handling an event
+### 9.3 DB-truth
 
-Updates **MUST** be decided strictly in update-acceptance order, even when a decision yields to call activities:
+The entity lives in the state store (§12), not in the workflow. Each event is **one database transaction** that
+writes, together or not at all:
+- the new `sm_state` row, conditional on the version the decision was made on;
+- an `applied_event` record of the event and its result;
+- `outbox` rows for the events the transition emitted (§10).
 
-1. **Ticket.** On entry, before any yield, take ticket `t`. Wait until `run` has loaded state and
-   `served == t`. An update can arrive in the same workflow task as the start, so the wait for `run` matters.
-2. **Decide.** Look up `next(state, eventType)`:
-   - **No edge:** the result is rejected (`no transition from S on E`); state is unchanged.
-   - **Edge `S → T`:** call the type's decision. It **MAY** call activities (§11). It either rejects with a reason
-     (state unchanged) or accepts with new data.
-   - **Accepted:** set `state = T`, `data = new data`, `version += 1`, and append to `recent`.
-3. **Release the ticket** (`served += 1`), so the next event can be decided.
-4. **Persist.** Call the persistence local activity with the `sm_state` row (§12.4) and a trace row (`TRANSITION`
-   or `REJECTED`). Start-to-close is 10 s, schedule-to-close 10 min.
-5. **Post-persist.** If accepted, start the hand-off of emitted events (§10).
-6. **Return** the `TransitionResult`. The update completes, the lock chain is released, and the next event on these
+The workflow orders the events and runs the decision code on a **cached copy** of the entity. The commit's version
+check detects a stale copy, and the `applied_event` primary key detects a redelivered event. Implementations **MUST
+NOT** treat workflow memory as the entity's state: it is a cache, valid only while commits from it succeed.
+
+### 9.4 Handling an event
+
+Updates **MUST** be decided strictly in update-acceptance order, even when a decision yields:
+
+1. **Ticket.** On entry, before any yield, take ticket `t`. Wait until `run` has set up and `served == t`. An update
+   can arrive in the same workflow task as the start, so the wait for `run` matters.
+2. **Load, if the cache is not valid.** A fresh run, or a run after a redelivery, has no valid cache. Call
+   `loadEntity(workflowId, eventId)`: it returns the stored row (none for a new entity, whose cache is then the initial
+   state at version 0) and, if this event was applied before, its stored result. A stored result is the answer: go to
+   step 6.
+3. **Decide** on the cache. Look up `next(state, eventType)`:
+   - **No edge:** the result is rejected (`no transition from S on E`).
+   - **Edge `S → T`:** call the type's decision. It either rejects with a reason, or accepts with new data and the
+     events it emits.
+4. **Commit** with `commitTransition` (§12.4), carrying:
+   - the expected version (the cache's);
+   - the result: accepted with `version + 1`, or rejected with the unchanged version;
+   - for an accepted result, the new row and the emitted events;
+   - a trace row (`TRANSITION` or `REJECTED`, best effort).
+
+   It is a local activity: start-to-close 10 s, schedule-to-close **1 h** (a store outage is waited out, as long as
+   the lock's dispatch waits), backoff 100 ms to 10 s. The outcome decides what happens next:
+   - **COMMITTED:** apply the result to the cache.
+   - **ALREADY_APPLIED:** the event was applied before (a redelivery). Its stored result is the answer, and the cache
+     is marked invalid (it may be behind the store).
+   - **CONFLICT:** the store holds a newer version. Replace the cache with the returned row and go back to step 3.
+     After 10 conflicts in a row the update fails (`TransitionConflict`); entity events are serialized, so even one
+     conflict is unusual.
+5. **Release the ticket** (`served += 1`), so the next event can be decided.
+6. **After commit**, only if this call committed the transition (not for ALREADY_APPLIED):
+   - start the outbox delivery of the emitted events (§10);
+   - run the post-commit hooks (e.g. terminal-state handling).
+7. **Return** the `TransitionResult`. The update completes, the lock chain is released, and the next event on these
    keys may start.
 
 Rules:
-- Decisions **MUST** be deterministic. That means no I/O, no wall clock (use workflow time) and no randomness; side
-  effects go through activities.
-- A **rejection** leaves state, data and version unchanged.
-- Activities already called before a rejection are **not undone automatically**. Undoing them is the job of a Saga
-  (§11.5).
+- Decisions **MUST** be deterministic: no I/O, no wall clock (use workflow time), no randomness.
+- Decisions **MUST NOT** perform side effects. They run before the commit, are not part of it, and may run more than
+  once for one event (after a conflict). Effects on other entities are emitted events (§10). Calls to external
+  systems are out of scope (§11).
+- A **rejection** leaves state, data and version unchanged. It is still recorded in `applied_event`, so a redelivery
+  gets the same rejection, and it is committed only on the version it was decided on.
 - For typed (model) machines the decision also covers:
   - binding the payload to the edge's payload type; JSON that does not bind is a rejection;
   - validating payload multiplicities;
   - validating the entity data after the transition. Invalid data rejects the event.
 
-### 9.4 Continue-as-new
+### 9.5 Continue-as-new
 
-`run` waits until all of the following hold, then continues-as-new with `{state, data, version, recent, createdAtMillis}`:
+`run` waits until all of the following hold, then continues-as-new with
+`{state, data, version, recent, createdAtMillis}`:
 - the run has handled **500** events, or Temporal suggests continuing;
 - every update handler has finished;
-- no work the run started is still pending: hand-offs of emitted events, and any asynchronous activities.
+- no work the run started is still pending: outbox deliveries, and any asynchronous activities.
 
-## 10. Worker: chained events
+The carried state is the cache. It is passed as null (a fresh load) when the cache was marked invalid. Redeliveries
+across continue-as-new are recognized by the store (`applied_event`), not by Temporal update ids.
+
+## 10. Worker: chained events and the outbox
 
 During a decision the machine **MAY** emit events to other entities, or to itself:
 - explicitly (`emitEntity(smType, instanceKey, eventType, payload, extraLockKeys)`);
 - or declaratively, with state-entry emissions from the model.
 
 Rules:
-- Emitted events are **buffered** and handed over **only if the transition is accepted**, after its state row is
-  persisted. A rejected transition emits nothing.
-- Child ids are `<eventId>.<n>`, with `parentEventId` set and `causationRoot` inherited. Replays and retries
-  therefore produce the same ids.
-- The hand-off is a **regular activity** (`EventEmitEnqueue`, unlimited retries). For each child it sends `acquire`
-  of a first request on the child's `K0`, with the §6.2 rules. A duplicate is success.
+- Emitted events are **buffered** by the decision. They are written to the `outbox` **in the transition's
+  transaction**, so they exist if and only if the transition committed. A rejected or conflicting decision emits
+  nothing.
+- Child ids are `<eventId>.<n>`, with `parentEventId` set and `causationRoot` inherited. Replays, retries and
+  redeliveries therefore produce the same ids.
+- **Fast path:** right after commit, the workflow delivers the new rows with a **regular activity**
+  (`EventEmitDeliverOutbox`, unlimited retries). It sends `acquire` of a first request on each child's `K0` (§6.2
+  rules; a duplicate is success), then marks the rows sent.
   - It **MUST NOT** be a local activity: the emitting entity is inside an update that a lock chain is waiting on.
-- Emitted events skip `processed_event`. They are deduplicated by the lock's validator and recent window, and by the
-  entity's update id.
+- **Sweeper:** every worker sweeps its own type's outbox rows (`workflow_id LIKE '<smType>:%'`) that are still unsent
+  after `OUTBOX_SWEEP_AFTER_SECONDS` (30), every `OUTBOX_SWEEP_SECONDS` (10). It delivers them the same way. This
+  covers a worker that died between commit and delivery.
+- Delivery is **at least once**, and the *effect* is once:
+  - several workers may sweep the same rows;
+  - a lock's validator and recent window drop duplicate requests;
+  - the target entity's `applied_event` record drops a duplicate that gets through, however late.
+- Emitted events skip `processed_event`.
 - A child's lock keys are the declared extra keys plus its own entity key.
+- Housekeeping: the sweeper deletes sent rows older than `OUTBOX_RETENTION_HOURS` (24), and `applied_event` records
+  older than `APPLIED_EVENT_RETENTION_HOURS` (168). A redelivery older than the second window is no longer recognized.
 
-## 11. Worker: external side effects and Sagas
+## 11. External side effects (out of scope, parked)
 
-A transition that writes to an external system does so through **activities**, called from the decision. The worker
-registers the implementations on `sm-<smType>`. In the Java worker these come from `WorkerActivities` providers via
-`ServiceLoader`, and the generated test registers fakes.
+Calling external systems (REST services, Kafka) from inside a transition does not fit DB-truth: the call would happen
+before the commit and could not be part of it. The previous design is described in `docs/external-side-effects.md`:
+- activities with idempotency keys and Sagas;
+- an example and chaos scenarios, parked in git history at `2e0f267`.
 
-### 11.1 What Temporal guarantees, and what it does not
-
-- An activity runs **at least once**:
-  - it is retried after a failure, a timeout, or a worker crash;
-  - once it has **completed**, its result is in workflow history and it is **never** executed again, whether on
-    replay, after a worker crash, or on a repeated delivery of the event (§8.1).
-- Temporal provides **no** distributed transaction across external systems: no XA, no two-phase commit. A write whose
-  answer was lost is repeated by the retry.
-- **Exactly-once effect therefore requires the receiver to deduplicate.** The rest of this section specifies how.
-
-### 11.2 Idempotency keys
-
-- Every external write **MUST** carry an idempotency key that is identical on every attempt, crash and replay.
-- Keys **MUST** be derived from stable inputs: the instance key, or the event id plus a step name. They **MUST NOT**
-  come from random UUIDs or wall-clock time.
-
-Reference: `<paymentId>:charge`, `<paymentId>:refund`, `<paymentId>:settled`, `<paymentId>:reversed`.
-
-### 11.3 REST services
-
-**Requests:** send the key as the `Idempotency-Key` header.
-
-**Classify the answers:**
-
-| answer | classification |
-|---|---|
-| 2xx | the result |
-| a business refusal (reference: 422) | **non-retryable** (`ApplicationFailure` with `nonRetryable`, type e.g. `Declined`): retrying cannot change it |
-| 5xx, timeout, dropped connection | **retryable, outcome unknown**: the retry, with the same key, finds out |
-
-**Timeouts:** a client request timeout shorter than the activity's start-to-close (reference: 4 s request, 5 s
-start-to-close, 2 min schedule-to-close, backoff 0.5 s to 5 s). This bounds a hung call ("committed, answer never
-came").
-
-**Receiver contract**, which the service **MUST** implement for the scheme to be correct:
-- **Atomic commit:** commit the effect and store the answer under the key **in one transaction**, serialized per key.
-  The reference uses Postgres with `pg_advisory_xact_lock(hashtext(key))`, then the entry and answer inserts.
-- **Replay:** answer a known key with the stored answer, marked `Idempotent-Replayed: true`, without committing again.
-- **Safe compensation:** a compensating call for something that never happened (e.g. refund with nothing charged)
-  **MUST** succeed as a no-op. Compensation can then run after any ambiguous failure.
-
-### 11.4 Kafka
-
-- **Producer:** `enable.idempotence=true` and `acks=all`. Its timeouts **MUST** end inside the activity's
-  start-to-close (reference: request 3 s, delivery 8 s, start-to-close 12 s, schedule-to-close 40 s).
-- The idempotent producer only removes duplicates of its **own internal retries within one producer session**. A
-  Temporal retry is a new send, so after a lost acknowledgement **the record is written again**. Delivery is at least
-  once.
-- **Record identity:** every record **MUST** carry its idempotency key in an `idempotency-key` header. The record
-  key is the business key (reference: the payment id, so a payment's records stay in one partition), and the header
-  is `<id>:settled` or `<id>:reversed`. Consumers **MUST** treat a repeated idempotency key as a duplicate, keeping
-  the first. That makes the *effect* once.
-- A record cannot be withdrawn. To undo one, publish a compensating record (reference: type `REVERSED`, key
-  `<id>:reversed`).
-
-### 11.5 Sagas
-
-A transition that performs several external writes **MUST** leave nothing half done:
-
-1. **Register each compensation before the call it compensates.** A call that failed ambiguously (timeout, lost
-   answer) may still have committed, so its undo must already be registered.
-   Reference: register the refund, then charge; register the reversal, then publish.
-2. On a **non-retryable business refusal** of a step that commits nothing (the decline), do **not** compensate.
-3. On any **other failure** of a step (retries or schedule-to-close exhausted), run the compensations in reverse
-   order.
-4. **Compensations MUST retry until they succeed** (unlimited attempts). An entity can therefore stay in an
-   intermediate state while a system it needs is down; this is intended.
-5. **Report the outcome as state**, not as an exception:
-   - the reference moves to an intermediate state (`SETTLING`);
-   - it then emits a chained event to itself (§10): `confirm`, `decline` or `fail`, carrying the receipts and the
-     reason;
-   - the final state (`SETTLED`, `DECLINED`, `FAILED`) then says what happened, and the emitted event's id
-     (`<eventId>.1`) makes the report idempotent.
-6. **Do not reject after side effects without compensating.** A rejection does not undo activities (§9.3).
-
-The external calls run inside the decision. That holds the entity's ticket, and therefore the event's lock chain, for
-their duration. Keys touched by slow external calls serialize accordingly.
+A future design **SHOULD** model external effects as outbox intents: the transition records the intended call in its
+transaction, and a delivery step performs it with an idempotency key and reports the outcome back as an event.
 
 ## 12. State store: Postgres and Aurora DSQL
 
 ### 12.1 Role
 
-- Temporal is the source of truth for entity state.
-- `sm_state` is a **projection**, written by the worker on every handled event and read by tools and tests.
+- **The store is the source of truth for entity state (DB-truth, §9.3):**
+  - `sm_state` holds the entities;
+  - `applied_event` holds every event applied to an entity, with its result;
+  - `outbox` holds the events transitions emitted, until delivered.
+
+  The three are written in one transaction per event.
+- Temporal holds the orchestration state: lock queues, event order, pending deliveries.
 - `processed_event` is the coordinator's dedupe set.
 - `event_trace` is best-effort observability.
+- Entity workers require `STORE_KIND` postgres or dsql. The DynamoDB and Spanner stores do not implement
+  `commitTransition`.
 
 ### 12.2 Schema
 
@@ -558,6 +539,24 @@ CREATE TABLE IF NOT EXISTS sm_state (
     last_event_id text,
     updated_at    timestamptz NOT NULL
 );
+CREATE TABLE IF NOT EXISTS applied_event (
+    workflow_id text NOT NULL,
+    event_id    text NOT NULL,
+    accepted    boolean NOT NULL,
+    from_state  text NOT NULL,
+    to_state    text NOT NULL,
+    version     bigint NOT NULL,
+    message     text,
+    applied_at  timestamptz NOT NULL,
+    PRIMARY KEY (workflow_id, event_id)
+);
+CREATE TABLE IF NOT EXISTS outbox (
+    event_id    text PRIMARY KEY,        -- child event id <parentEventId>.<n>
+    workflow_id text NOT NULL,           -- the emitting entity
+    envelope    text NOT NULL,           -- EventEnvelope JSON
+    created_at  timestamptz NOT NULL,
+    sent_at     timestamptz
+);
 CREATE TABLE IF NOT EXISTS event_trace (
     trace_id    text PRIMARY KEY,        -- client-generated UUID
     event_id    text NOT NULL,
@@ -571,6 +570,8 @@ CREATE INDEX ASYNC IF NOT EXISTS event_trace_event_idx ON event_trace (event_id)
 CREATE INDEX ASYNC IF NOT EXISTS event_trace_workflow_idx ON event_trace (workflow_id);
 CREATE INDEX ASYNC IF NOT EXISTS event_trace_ts_idx ON event_trace (ts);
 CREATE INDEX ASYNC IF NOT EXISTS processed_event_received_idx ON processed_event (received_at);
+CREATE INDEX ASYNC IF NOT EXISTS applied_event_applied_idx ON applied_event (applied_at);
+CREATE INDEX ASYNC IF NOT EXISTS outbox_created_idx ON outbox (created_at);
 ```
 
 ### 12.3 Dedupe (`claimForDispatch`)
@@ -591,24 +592,44 @@ SELECT event_id FROM processed_event WHERE status = 'RECEIVED' AND event_id IN (
   arriving after the sweep is still absorbed downstream, by the lock's recent window and the entity update id, as
   long as those still remember it.
 
-### 12.4 Projection write (`upsertState`)
+### 12.4 Transition commit (`commitTransition`)
 
-One autocommit statement per handled event:
+One transaction per event, retried as a whole on `40001` / `40P01` (§12.6). Anything but COMMITTED is rolled back.
 
 ```sql
+-- 1. the applied-event record; its primary key turns a redelivery into a no-op
+INSERT INTO applied_event (workflow_id, event_id, accepted, from_state, to_state, version, message, applied_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (workflow_id, event_id) DO NOTHING;
+--    0 rows: SELECT the stored result, roll back            -> ALREADY_APPLIED(stored result)
+
+-- 2a. accepted: move the entity, only from the version the decision was made on
+UPDATE sm_state SET state = ?, data = ?, version = ?, last_event_id = ?, updated_at = ?
+WHERE workflow_id = ? AND version = :expected;
+--    0 rows and :expected = 0: a new entity
 INSERT INTO sm_state (workflow_id, sm_type, state, data, version, last_event_id, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (workflow_id) DO UPDATE SET state = EXCLUDED.state, data = EXCLUDED.data, version = EXCLUDED.version,
-  last_event_id = EXCLUDED.last_event_id, updated_at = EXCLUDED.updated_at
-WHERE sm_state.version < EXCLUDED.version;
+VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (workflow_id) DO NOTHING;
+--    still 0 rows: SELECT the current row, roll back         -> CONFLICT(current row)
+--    then the emitted events
+INSERT INTO outbox (event_id, workflow_id, envelope, created_at) VALUES (?, ?, ?, ?), …
+ON CONFLICT (event_id) DO NOTHING;
+
+-- 2b. rejected: nothing changes, but the rejection was decided on :expected
+SELECT version FROM sm_state WHERE workflow_id = ? FOR UPDATE;  -- absent = 0
+--    different from :expected: roll back                     -> CONFLICT(current row)
+
+COMMIT;                                                       -- COMMITTED
 ```
 
-- **Monotonic by version:** retried or out-of-order writes converge on the newest version, and the write is
-  idempotent.
-- A **rejected** event writes the unchanged version, so it is a no-op for an existing row.
-- On a brand-new entity whose first event is rejected, the insert creates a version-0 row in the initial state with
-  `data` null.
-- The trace row is not written in the same transaction; it goes through the batching trace writer.
+Notes:
+- A rejected first event creates no `sm_state` row. Its `applied_event` record is written.
+- `loadEntity(workflowId, eventId)` is a plain read of the `sm_state` row and the `applied_event` record.
+- The outbox queries:
+  - pending rows: `SELECT envelope FROM outbox WHERE sent_at IS NULL AND created_at < ? AND workflow_id LIKE ? ORDER
+    BY created_at LIMIT ?`;
+  - mark sent: `UPDATE outbox SET sent_at = now() WHERE sent_at IS NULL AND event_id IN (…)`, in batches of 1000;
+  - housekeeping deletes, batched to at most 2500 rows per statement.
+- `upsertState` (the version-guarded upsert) remains for other writers, such as event-style keyed state. Entity
+  workflows do not use it.
 
 ### 12.5 Traces
 
@@ -638,14 +659,13 @@ WHERE sm_state.version < EXCLUDED.version;
 |---|---|---|
 | intake to lock | at least once; duplicates dropped | `processed_event` claim; re-claim of `RECEIVED`; `acquire` validator and recent window (4000) |
 | lock to lock (forward) | at least once, deduplicated | `acquire` update id `<id>@<key>` and the validator |
-| lock to entity | at least once; **applied once per entity run** | `handle` update id = event id (§17) |
-| entity to store | at least once, converging | version-guarded upsert |
-| entity to external system | at least once; **effect once** with receiver deduplication | idempotency keys, atomic commit and answer, consumer dedupe (§11) |
-| entity to emitted event | at least once, deduplicated | child ids `<id>.<n>`, lock and entity dedupe |
+| lock to entity | at least once; **applied once** | `handle` update id = event id within a run; `applied_event` across runs and after |
+| transition to store | **atomic**: state, applied event and outbox together, or nothing | one transaction, conditional on the expected version (§12.4) |
+| entity to emitted event | at least once; **applied once**; exists only if the transition committed | outbox in the transition's transaction; fast path and sweeper; lock dedupe and the target's `applied_event` |
 
 ### 13.2 Ordering
 
-- **Per entity:** transitions are applied in the order their `handle` updates were accepted (§9.3).
+- **Per entity:** transitions are applied in the order their `handle` updates were accepted (§9.4).
 - **Same first key:** events with the same `K0`, submitted in one source order, are applied in that order (§6, §7.3).
 - **Shared later key only:** events that share a key but have different `K0` are **mutually exclusive** but not
   ordered by source. Their relative order is the order in which their chains reach the shared key. Design entities so
@@ -657,10 +677,9 @@ WHERE sm_state.version < EXCLUDED.version;
 | failure | effect |
 |---|---|
 | coordinator process killed | workflow tasks time out (`WORKFLOW_TASK_TIMEOUT_MS`, 2 s) and move to another coordinator. Local activities in flight are re-run; their calls are idempotent |
-| worker process killed | entity workflow tasks and local activities move to another worker. An external activity times out (its start-to-close) and is retried with the same idempotency key |
+| worker process killed | entity workflow tasks and local activities move to another worker. A transaction that committed before the kill is found on retry (ALREADY_APPLIED, or the same commit is re-sent and refused as already applied); one that did not commit is redone. Outbox rows committed but not delivered are delivered by a sweeper |
 | whole tier down | work queues durably in Temporal until a process returns; nothing is lost |
-| store unavailable | dedupe fails the batch, which the adapter retries. Projection writes retry within their 10 min schedule-to-close. Past that the `handle` update fails, the lock records `FAILED` and moves on, and the projection lags until the next transition writes a newer version |
-| external system unavailable | the activity retries until its schedule-to-close, then the Saga compensates. Compensations retry until the system returns |
+| store unavailable | dedupe fails the batch, which the adapter retries. Transitions wait: the commit retries for up to 1 h, and nothing is half written. Past 1 h the `handle` update fails and the lock records `FAILED` and moves on. The event is then not applied, consistently: no state, no applied record, no outbox rows |
 | Temporal restarted | clients and pollers reconnect; all orchestration state is in Temporal's persistence |
 
 **Hot keys.** A key shared by many events keeps many updates in flight on its lock: an `acquire` per waiting event,
@@ -706,37 +725,43 @@ queue was last worked on by another implementation (`COORDINATOR_ALLOW_FOREIGN_R
 | `WORKFLOW_TASK_TIMEOUT_MS` | 2000 | both | failover speed (stock Temporal: 10 000) |
 | `STICKY_SCHEDULE_TO_START_MS` | 1000 | both | failover speed (stock: 5000) |
 | `TRACE_SAMPLE` | 1.0 | both | trace sampling (§12.5) |
-| per-ecosystem activity settings | e.g. `LEDGER_URL`, `PAYMENTS_KAFKA_BOOTSTRAP` | worker | external systems (§11) |
+| `OUTBOX_SWEEP_SECONDS` / `OUTBOX_SWEEP_AFTER_SECONDS` | 10 / 30 | worker | outbox sweeper interval, and the age of rows it delivers (§10); 0 turns the sweeper off |
+| `OUTBOX_RETENTION_HOURS` | 24 | worker | delete sent outbox rows after this |
+| `APPLIED_EVENT_RETENTION_HOURS` | 168 | worker | delete applied-event records after this; redeliveries older than this are no longer recognized |
 
 ## 16. Verification
 
 A conforming implementation **SHOULD** pass the existing suites:
 - **Unit and Temporal test-server suites:**
   - the lock protocol: `OrchestrationFlowTest` and `ForwardReleaseRaceTest` (`platform/orchestration`);
-  - the entity workflow: `AbstractStateMachineTest`, `ModelStateMachineTest` and `LockTemplatesTest`
-    (`core/worker-sdk`);
-  - the store: `PostgresStoreTest` (`platform/store`);
-  - Sagas against fakes: `SettlementMachineTest`, `LedgerServiceTest` and `LedgerPostgresIT` (`showcases/payments`);
+  - the entity workflow: `AbstractStateMachineTest` (including a redelivery after continue-as-new, a stale cache and
+    a store outage), `ModelStateMachineTest`, `OutboxSweeperTest` and `LockTemplatesTest` (`core/worker-sdk`);
+  - the store: `StateStoreContract`, run by `InMemoryStateStoreTest` and `PostgresStoreTest` (`platform/store`).
+    It covers the atomic commit, redelivery, version conflicts, rejections, a concurrent race with exactly one
+    winner, and the outbox lifecycle;
   - key order (UTF-16), wire JSON compatibility and the lock queue logic: the Rust coordinator's unit tests
     (`cargo test` in `platform/coordinator-rs`).
-- **`scripts/chaos.sh`:** kills and restarts coordinators and workers, and optionally Temporal, under load. It
-  verifies no lost events, no double application and per-key order. `RUST_COORDINATOR=1` mixes in the Rust
-  coordinator.
-- **`scripts/payments-chaos.sh`:** external side effects under ambiguous commits, lost Kafka acks, worker kills,
-  ledger restarts and Kafka outages, plus a no-idempotency control. It verifies that every entity is consistent with
-  the ledger and the topic (results: `docs/external-side-effects.md`).
+- **`scripts/chaos.sh`:** kills and restarts coordinators and workers under load, optionally Temporal
+  (`CHAOS_TEMPORAL=1`), and optionally freezes the Postgres store (`CHAOS_STORE=1`). It verifies:
+  - no lost events, no double application, per-key order;
+  - for entity runs, the outbox: every `CHAIN_EVERY`-th append emits a receipt to ledger `<key>-R`, each receipt
+    ledger must count exactly the chained appends, and no outbox row may be left pending.
+
+  `RUST_COORDINATOR=1` mixes in the Rust coordinator.
 
 ## 17. Known limitations
 
-- **Update-id deduplication is per run.** Temporal deduplicates `handle` update ids within one entity workflow run.
-  The duplicate window is narrow: a dispatch is retried after the update completed but before the coordinator
-  recorded the result, and the entity continued-as-new in between. An event could then be applied again in the new
-  run. The carried `recent` window (50 transitions with event ids) is available for a guard. A reimplementation
-  **SHOULD** reject an event whose id is in `recent`; the reference does not yet do so.
+- **Redelivery window.** `applied_event` recognizes redeliveries for `APPLIED_EVENT_RETENTION_HOURS` (default 7
+  days). An event redelivered after its record was swept would be applied again.
 - **Mutual exclusion is not causal ordering.** See §13.2 for events that share only a later key.
-- **Side-effect calls hold the keys.** External calls inside a decision block the entity and its lock chain for their
-  duration (§11.5).
-- **The projection lags on store outages** longer than the persistence schedule-to-close (§13.3).
+- **Emitted events may be reordered after a crash.** The fast path delivers a transition's events right after its
+  commit, in commit order. A row left behind is delivered by the sweeper up to about 40 s later, possibly after
+  events emitted by later transitions. Each emitted event is applied once, but a target entity should not depend on
+  the arrival order of events from different source transitions.
+- **One database round trip per event**, plus one load when a run starts or a cache is invalidated. Throughput per
+  entity is bounded by the store's transaction latency.
+- **No external side effects** inside transitions (§11).
+- **Postgres or DSQL only** for entity workers (§12.1).
 
 ## Appendix A: payload JSON
 
