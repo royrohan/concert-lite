@@ -753,6 +753,15 @@ A conforming implementation **SHOULD** pass the existing suites:
 
   `RUST_COORDINATOR=1` mixes in the Rust coordinator.
 
+  Reference run (`RUN_ID=dbtruth2 DURATION=120 RATE=50 KEYS=100 KILL_EVERY=12 CHAOS_STORE=1`, Postgres): 6000
+  appends to 100 ledgers (half of them multi-key), with 4 `kill -9` (one coordinator, three workers) and 2 store
+  freezes (5 s and 7 s). All checks passed:
+  - no lost or double-applied events, order kept;
+  - 1200 receipts delivered through the outbox, each applied exactly once, no rows left pending;
+  - in the store: 7200 `applied_event` records (6000 appends + 1200 receipts) and 1200 outbox rows, all sent.
+
+  The first run (`dbtruth1`) found a coordinator bug: dropped lock releases (§7.5), now fixed.
+
 ## 17. Known limitations
 
 - **Redelivery window.** `applied_event` recognizes redeliveries for `APPLIED_EVENT_RETENTION_HOURS` (default 7
