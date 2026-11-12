@@ -1,8 +1,14 @@
 package io.concert.store;
 
 import com.zaxxer.hikari.HikariDataSource;
+import io.concert.common.EventEnvelope;
+import io.concert.common.Json;
 import io.concert.common.TraceRow;
+import io.concert.common.api.CommitOutcome;
+import io.concert.common.api.EntityLoad;
 import io.concert.common.api.SmStateRow;
+import io.concert.common.api.TransitionCommit;
+import io.concert.common.api.TransitionResult;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -208,6 +214,205 @@ public final class JdbcStateStore implements StateStore {
                 }
             }
         });
+    }
+
+    // ---------------------------------------------------------------------------------------------- DB-truth
+
+    private static final String STATE_COLUMNS = "workflow_id, sm_type, state, data, version, last_event_id, updated_at";
+
+    private static Optional<SmStateRow> readState(Connection c, String workflowId, boolean forUpdate) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT " + STATE_COLUMNS + " FROM sm_state WHERE workflow_id = ?"
+                + (forUpdate ? " FOR UPDATE" : ""))) {
+            ps.setString(1, workflowId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(new SmStateRow(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                        rs.getLong(5), rs.getString(6), rs.getTimestamp(7).getTime()));
+            }
+        }
+    }
+
+    private static TransitionResult readApplied(Connection c, String workflowId, String eventId) throws SQLException {
+        try (PreparedStatement ps = c.prepareStatement("SELECT from_state, to_state, accepted, message, version "
+                + "FROM applied_event WHERE workflow_id = ? AND event_id = ?")) {
+            ps.setString(1, workflowId);
+            ps.setString(2, eventId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? new TransitionResult(eventId, rs.getString(1), rs.getString(2), rs.getBoolean(3),
+                        rs.getString(4), rs.getLong(5)) : null;
+            }
+        }
+    }
+
+    @Override
+    public EntityLoad loadEntity(String workflowId, String eventId) {
+        return OccRetry.run(() -> {
+            try (Connection c = ds.getConnection()) {
+                return new EntityLoad(readState(c, workflowId, false).orElse(null),
+                        eventId == null ? null : readApplied(c, workflowId, eventId));
+            }
+        });
+    }
+
+    @Override
+    public CommitOutcome commitTransition(TransitionCommit t) {
+        return OccRetry.run(() -> {
+            try (Connection c = ds.getConnection()) {
+                c.setAutoCommit(false);
+                try {
+                    CommitOutcome out = commit(c, t);
+                    if (out.status() == CommitOutcome.Status.COMMITTED) {
+                        c.commit();
+                    } else {
+                        c.rollback();
+                    }
+                    return out;
+                } catch (SQLException | RuntimeException e) {
+                    c.rollback();
+                    throw e;
+                } finally {
+                    c.setAutoCommit(true);
+                }
+            }
+        });
+    }
+
+    /** The transition's statements, in one transaction; anything but COMMITTED is rolled back by the caller. */
+    private CommitOutcome commit(Connection c, TransitionCommit t) throws SQLException {
+        TransitionResult r = t.result();
+        Timestamp now = new Timestamp(t.nowMillis());
+        // 1. the applied-event record: its primary key turns a redelivery into a no-op
+        try (PreparedStatement ps = c.prepareStatement("INSERT INTO applied_event (workflow_id, event_id, accepted, "
+                + "from_state, to_state, version, message, applied_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                + "ON CONFLICT (workflow_id, event_id) DO NOTHING")) {
+            ps.setString(1, t.workflowId());
+            ps.setString(2, t.eventId());
+            ps.setBoolean(3, r.accepted());
+            ps.setString(4, r.fromState());
+            ps.setString(5, r.toState());
+            ps.setLong(6, r.version());
+            ps.setString(7, r.message());
+            ps.setTimestamp(8, now);
+            if (ps.executeUpdate() == 0) {
+                return CommitOutcome.alreadyApplied(readApplied(c, t.workflowId(), t.eventId()));
+            }
+        }
+        if (!r.accepted()) {
+            // a rejection was decided on expectedVersion: it stands only if the entity is still there
+            long current = readState(c, t.workflowId(), true).map(SmStateRow::version).orElse(0L);
+            return current == t.expectedVersion() ? CommitOutcome.committed(r)
+                    : CommitOutcome.conflict(readState(c, t.workflowId(), false).orElse(null));
+        }
+        // 2. the state row, only from the version the decision was made on
+        SmStateRow row = t.row();
+        int n;
+        try (PreparedStatement ps = c.prepareStatement("UPDATE sm_state SET state = ?, data = " + dataParam()
+                + ", version = ?, last_event_id = ?, updated_at = ? WHERE workflow_id = ? AND version = ?")) {
+            ps.setString(1, row.state());
+            ps.setString(2, JsonData.normalize(row.data()));
+            ps.setLong(3, row.version());
+            ps.setString(4, row.lastEventId());
+            ps.setTimestamp(5, new Timestamp(row.updatedAtMillis()));
+            ps.setString(6, row.workflowId());
+            ps.setLong(7, t.expectedVersion());
+            n = ps.executeUpdate();
+        }
+        if (n == 0 && t.expectedVersion() == 0) {
+            try (PreparedStatement ps = c.prepareStatement("INSERT INTO sm_state (" + STATE_COLUMNS + ") VALUES (?, ?, ?, "
+                    + dataParam() + ", ?, ?, ?) ON CONFLICT (workflow_id) DO NOTHING")) {
+                ps.setString(1, row.workflowId());
+                ps.setString(2, row.smType());
+                ps.setString(3, row.state());
+                ps.setString(4, JsonData.normalize(row.data()));
+                ps.setLong(5, row.version());
+                ps.setString(6, row.lastEventId());
+                ps.setTimestamp(7, new Timestamp(row.updatedAtMillis()));
+                n = ps.executeUpdate();
+            }
+        }
+        if (n == 0) {
+            return CommitOutcome.conflict(readState(c, t.workflowId(), false).orElse(null));
+        }
+        // 3. the outbox: what the transition emitted, delivered after commit
+        if (!t.outbox().isEmpty()) {
+            try (PreparedStatement ps = c.prepareStatement("INSERT INTO outbox (event_id, workflow_id, envelope, created_at) "
+                    + "VALUES " + repeat("(?, ?, ?, ?)", t.outbox().size()) + " ON CONFLICT (event_id) DO NOTHING")) {
+                int i = 1;
+                for (EventEnvelope e : t.outbox()) {
+                    ps.setString(i++, e.eventId());
+                    ps.setString(i++, t.workflowId());
+                    ps.setString(i++, Json.write(e));
+                    ps.setTimestamp(i++, now);
+                }
+                ps.executeUpdate();
+            }
+        }
+        return CommitOutcome.committed(r);
+    }
+
+    @Override
+    public List<EventEnvelope> pendingOutbox(String workflowIdPrefix, long createdBeforeMillis, int limit) {
+        String like = likePrefix(workflowIdPrefix);
+        return OccRetry.run(() -> {
+            try (Connection c = ds.getConnection();
+                    PreparedStatement ps = c.prepareStatement("SELECT envelope FROM outbox WHERE sent_at IS NULL "
+                            + "AND created_at < ? AND workflow_id LIKE ? ORDER BY created_at LIMIT ?")) {
+                ps.setTimestamp(1, new Timestamp(createdBeforeMillis));
+                ps.setString(2, like);
+                ps.setInt(3, limit);
+                List<EventEnvelope> out = new ArrayList<>();
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        out.add(Json.read(rs.getString(1), EventEnvelope.class));
+                    }
+                }
+                return out;
+            }
+        });
+    }
+
+    @Override
+    public void markOutboxSent(Collection<String> eventIds) {
+        List<String> ids = List.copyOf(new LinkedHashSet<>(eventIds));
+        for (int from = 0; from < ids.size(); from += 1000) {
+            List<String> batch = ids.subList(from, Math.min(ids.size(), from + 1000));
+            OccRetry.run(() -> {
+                try (Connection c = ds.getConnection();
+                        PreparedStatement ps = c.prepareStatement("UPDATE outbox SET sent_at = now() WHERE sent_at IS NULL "
+                                + "AND event_id IN (" + placeholders(batch.size()) + ")")) {
+                    bindStrings(ps, 1, batch);
+                    return ps.executeUpdate();
+                }
+            });
+        }
+    }
+
+    @Override
+    public int sweepEntityLog(long outboxSentBeforeMillis, long appliedBeforeMillis, int batchSize) {
+        int limit = Math.min(batchSize, 2500); // DSQL: at most 3000 modified rows per transaction
+        int total = 0;
+        for (String sql : List.of(
+                "DELETE FROM outbox WHERE event_id IN (SELECT event_id FROM outbox WHERE sent_at < ? LIMIT ?)",
+                "DELETE FROM applied_event WHERE (workflow_id, event_id) IN "
+                        + "(SELECT workflow_id, event_id FROM applied_event WHERE applied_at < ? LIMIT ?)")) {
+            long before = sql.startsWith("DELETE FROM outbox") ? outboxSentBeforeMillis : appliedBeforeMillis;
+            while (true) {
+                int n = OccRetry.run(() -> {
+                    try (Connection c = ds.getConnection(); PreparedStatement ps = c.prepareStatement(sql)) {
+                        ps.setTimestamp(1, new Timestamp(before));
+                        ps.setInt(2, limit);
+                        return ps.executeUpdate();
+                    }
+                });
+                total += n;
+                if (n == 0) {
+                    break;
+                }
+            }
+        }
+        return total;
     }
 
     @Override

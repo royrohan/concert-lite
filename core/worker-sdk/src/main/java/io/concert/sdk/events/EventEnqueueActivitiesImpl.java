@@ -33,6 +33,17 @@ public final class EventEnqueueActivitiesImpl implements EventEnqueueActivities 
     }
 
     @Override
+    public void deliverOutbox(java.util.List<EventEnvelope> events, String emittedBy) {
+        if (events.isEmpty()) {
+            return;
+        }
+        enqueue(EnqueueRequest.children(emittedBy, events, System.currentTimeMillis()));
+        if (traces != null) {
+            traces.store().markOutboxSent(events.stream().map(EventEnvelope::eventId).toList());
+        }
+    }
+
+    @Override
     public void unblock(String lockKey, String requestId) {
         EventRouting.unblock(client, lockKey, requestId);
     }

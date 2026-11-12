@@ -219,8 +219,8 @@ implementations with a `io.concert.sdk.WorkerActivities` provider, listed in
 Services the flow needs go in `compose.extra.yml` next to the generated `compose.yml`. It is yours: never generated.
 `./deploy-concert-ecosystem` and the dashboard add it whenever it exists.
 
-The worked example is `examples/payments`, explained in
-[External side effects](../../docs/external-side-effects.md):
+The worked example (`examples/payments`, parked: see
+[External side effects](../../docs/external-side-effects.md) for where it is in git history) showed:
 - a REST charge and a Kafka publish with idempotency keys;
 - a Saga for compensation;
 - chaos scenarios for commits whose answer is lost.
@@ -247,9 +247,6 @@ The worked example is `examples/payments`, explained in
 
 ## Examples
 
-- `examples/payments` → `showcases/payments`: a machine that calls a REST service and Kafka from a transition
-  (activities, idempotency keys, Saga), with `scripts/payments-chaos.sh`; see
-  [External side effects](../../docs/external-side-effects.md).
 - `examples/library` → `showcases/library`: one machine (`loan`), built step by step in
   [Getting started](../../docs/getting-started/README.md); unit test `LoanMachineTest`, integration test `LoanFlowIT`
   (`./gradlew :library:integrationTest` against the deployed stack).

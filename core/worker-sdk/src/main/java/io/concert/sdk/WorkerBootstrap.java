@@ -54,10 +54,14 @@ public final class WorkerBootstrap {
         if (extraActivities.length > 0) {
             worker.registerActivitiesImplementations(extraActivities);
         }
-        if (Arrays.stream(extraActivities).noneMatch(a -> a instanceof EventEnqueueActivities)) {
-            // ModelStateMachine.emit: entity transitions emitting event-style (or other entity) events
-            worker.registerActivitiesImplementations(new EventEnqueueActivitiesImpl(client, new TraceWriter(store)));
+        EventEnqueueActivities enqueue = Arrays.stream(extraActivities).filter(a -> a instanceof EventEnqueueActivities)
+                .map(a -> (EventEnqueueActivities) a).findFirst().orElse(null);
+        if (enqueue == null) {
+            // outbox delivery of the events entity transitions emit (event-style or other entities)
+            enqueue = new EventEnqueueActivitiesImpl(client, new TraceWriter(store));
+            worker.registerActivitiesImplementations(enqueue);
         }
+        OutboxSweeper.start(store, smType, enqueue);
         EntitySnapshotPublisher publisher = Arrays.stream(extraActivities)
                 .filter(a -> a instanceof EntitySnapshotPublisher).map(a -> (EntitySnapshotPublisher) a)
                 .findFirst().orElse(null);

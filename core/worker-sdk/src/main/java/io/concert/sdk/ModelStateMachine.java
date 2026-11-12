@@ -6,7 +6,6 @@ import io.concert.common.api.TransitionResult;
 import io.concert.model.runtime.ModelJson;
 import io.concert.model.runtime.ModelObject;
 import io.concert.model.runtime.ModelValidationException;
-import io.concert.sdk.events.EnqueueRequest;
 import io.concert.sdk.events.EventCatalog;
 import io.concert.sdk.events.EventEmissions;
 import io.concert.sdk.events.EventEnqueueActivities;
@@ -59,9 +58,10 @@ import java.util.Map;
  *
  * <p><b>Emitting event-style events (interop).</b> {@code onTransition} may call {@link #emit},
  * {@link #emitAt} or {@link #emitEntity}. The events are buffered and, only if the transition is accepted,
- * handed to the {@link EventEnqueueActivities} activity after the state row is persisted (regular activity,
- * so the hand-off is recorded in history; the run waits for it before continuing as new). Their ids are
- * {@code <eventId>.<n>}, so replays and retries cannot duplicate them.
+ * written to the outbox in the same database transaction as the new state (DB-truth, see
+ * {@link AbstractStateMachine}), then delivered by the {@link EventEnqueueActivities} activity (or the worker's
+ * outbox sweeper after a crash). Their ids are {@code <eventId>.<n>}, so replays, retries and redeliveries cannot
+ * duplicate them.
  *
  * @param <D> the generated class of the aggregate root
  */
@@ -85,24 +85,13 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
                             .build())
                     .build());
 
-    /** Hands emitted events to their lock chains / processors; unlimited retries (never lost). */
-    private final EventEnqueueActivities emitter = Workflow.newActivityStub(EventEnqueueActivities.class,
-            ActivityOptions.newBuilder()
-                    .setStartToCloseTimeout(Duration.ofSeconds(30))
-                    .setRetryOptions(RetryOptions.newBuilder()
-                            .setInitialInterval(Duration.ofMillis(100))
-                            .setMaximumInterval(Duration.ofSeconds(10))
-                            .setMaximumAttempts(0)
-                            .build())
-                    .build());
-
-    /** Snapshot publishes and emits started by this run; it may not continue-as-new before they complete. */
+    /** Snapshot publishes started by this run; it may not continue-as-new before they complete. */
     private final List<Promise<Void>> pendingSnapshots = new ArrayList<>();
 
     /** The event being decided (emits are only allowed then) and what it emitted so far. */
     private EventEnvelope emitParent;
     private List<EventEnvelope> emitBuffer;
-    /** Emits of accepted events, waiting for their state row to be persisted. */
+    /** Emits of accepted decisions, by event id, until the base class takes them into the transition's outbox. */
     private final Map<String, List<EventEnvelope>> acceptedEmits = new HashMap<>();
 
     /** Thrown by {@link #reject} to reject the current event from {@code onTransition}. */
@@ -268,12 +257,13 @@ public abstract class ModelStateMachine<D extends ModelObject> extends AbstractS
     }
 
     @Override
-    protected void onPersisted(TransitionResult result, EventEnvelope event) {
+    protected List<EventEnvelope> takeEmits(EventEnvelope event) {
         List<EventEnvelope> emits = acceptedEmits.remove(event.eventId());
-        if (emits != null && result.accepted()) {
-            pendingSnapshots.add(Async.procedure(emitter::enqueue,
-                    EnqueueRequest.children(event.eventId(), emits, Workflow.currentTimeMillis())));
-        }
+        return emits == null ? List.of() : emits;
+    }
+
+    @Override
+    protected void onPersisted(TransitionResult result, EventEnvelope event) {
         if (result.accepted() && spec().isTerminal(result.toState())) {
             publishSnapshot(result);
             onTerminal(result.toState(), readData(), event);

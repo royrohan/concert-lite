@@ -15,8 +15,8 @@ its schedule. There is no bespoke lease, peer or outbox protocol: failover, retr
 Pure model, state machine, generate, implement, tests, integration test, deploy, run.
 [Coordinator and worker specification](docs/spec/coordinator-worker.md) is the normative contract (lock protocol,
 multi-key chains, entity workflow, Sagas, Postgres / DSQL store) for reimplementing either side.
-[External side effects](docs/external-side-effects.md) shows a worker that charges a REST service and publishes to
-Kafka, with idempotent writes and a Saga, checked by chaos scenarios where commits succeed but their answer is lost.
+[External side effects](docs/external-side-effects.md) describes the (parked) payments example: a worker calling a REST
+service and Kafka with idempotent writes and a Saga.
 
 * [Architecture](#architecture) · [Quickstart](#quickstart) · [Concepts](#concepts) ·
   [Guarantees per hop](#guarantees-per-hop) · [UIs and ports](#uis-and-ports) · [Scripts](#scripts-and-commands)
@@ -469,7 +469,6 @@ Three independent consumers read it, each with its own group and pace (see
 | `scripts/trading-load.sh [orders=100] [rate=50]` | one-shot trading order flow (trading showcase) |
 | `scripts/reconcile.sh [--smType X] [--dry-run]` | reconcile the sinks with the StateStore now (needs the Concert Dashboard) |
 | `scripts/chaos.sh` (`DURATION`, `RATE`, `KILL_EVERY`, `CHAOS_TEMPORAL`, `STORE_KIND`, `EVENT_STYLE=1`) | chaos experiment: kill/restart coordinators and workers under load, verify no loss / double apply / reordering (event style: handlers, keyed state, chained events) |
-| `scripts/payments-chaos.sh [scenario...]` (`COUNT`, `RATE`, `FAULT_RATE`, `WORKERS`) | external side effects under chaos: ledger commits whose answer is lost, lost Kafka acks, killed workers, Kafka outages; verifies every payment against the ledger and the topic ([guide](docs/external-side-effects.md)) |
 | `scripts/db-load.sh` (`TRACE_SAMPLE`, `RATE`, `DURATION`) | database statements per event from `pg_stat_statements` (Postgres only) |
 | `scripts/legend-lite.sh check` | every `.pure` model set compiles in legend-lite (real Pure semantics), and the generated store layer of each deployable set of sink roots compiles and plans on DuckDB and ClickHouse |
 | `scripts/legend-lite.sh store [--models d,d] [--roots …]` | print the generated Legend store layer (Database / Mapping / Connection / Runtime) |

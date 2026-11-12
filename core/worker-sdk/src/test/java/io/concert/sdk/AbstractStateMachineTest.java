@@ -100,6 +100,82 @@ class AbstractStateMachineTest {
         assertEquals(1, store.loadState("door:d1").orElseThrow().version());
     }
 
+    // ------------------------------------------------------------------ DB-truth
+
+    @Test
+    void anEventRedeliveredAfterContinueAsNewIsAppliedOnce() {
+        TransitionResult first = send("e1", "open");
+        send("e2", "close");
+        send("e3", "open"); // continue-as-new after 3: a new run, which has never seen update id e1
+
+        TransitionResult again = send("e1", "open");
+
+        assertEquals(first, again, "the stored result of the first application");
+        assertEquals(3, store.loadState("door:d1").orElseThrow().version(), "not applied a second time");
+        assertEquals("CLOSED", send("e4", "close").toState(), "the run carries on from the stored state");
+    }
+
+    @Test
+    void aStaleCopyIsDetectedAtCommitAndTheEventDecidedAgainOnTheStoredEntity() {
+        assertEquals("OPEN", send("e1", "open").toState());
+        // someone else moves the entity in the database (the workflow's copy is now stale)
+        store.commitTransition(new io.concert.common.api.TransitionCommit("door:d1", "x1", 1,
+                new TransitionResult("x1", "OPEN", "CLOSED", true, null, 2),
+                new io.concert.common.api.SmStateRow("door:d1", "door", "CLOSED", null, 2, "x1", 0), List.of(), 0));
+
+        TransitionResult r = send("e2", "open"); // on the stale copy (OPEN) this would be rejected
+
+        assertTrue(r.accepted(), r.toString());
+        assertEquals("CLOSED", r.fromState());
+        assertEquals(3, r.version());
+    }
+
+    @Test
+    void whileTheStoreIsDownNothingIsCommittedAndTheEventWaitsForIt() {
+        tearDown();
+        FlakyStore flaky = new FlakyStore(new InMemoryStateStore(), 3);
+        store = flaky.memory;
+        env = TestWorkflowEnvironment.newInstance(TestEnvironmentOptions.newBuilder().setUseTimeskipping(false).build());
+        Worker w = env.newWorker(TaskQueues.stateMachine("door"));
+        w.registerWorkflowImplementationTypes(DoorMachine.class);
+        w.registerActivitiesImplementations(new EntityPersistenceActivitiesImpl(flaky.proxy()));
+        env.start();
+        client = env.getWorkflowClient();
+
+        TransitionResult r = send("e1", "open"); // the first three commits fail; the local activity retries
+
+        assertTrue(r.accepted());
+        assertEquals(1, r.version());
+        assertEquals(4, flaky.commits.get(), "three failed attempts, then the commit");
+        assertEquals(1, store.loadState("door:d1").orElseThrow().version());
+    }
+
+    /** A store whose first {@code failures} commits throw, as if the database were unreachable. */
+    static final class FlakyStore {
+        final InMemoryStateStore memory;
+        final java.util.concurrent.atomic.AtomicInteger commits = new java.util.concurrent.atomic.AtomicInteger();
+        private final int failures;
+
+        FlakyStore(InMemoryStateStore memory, int failures) {
+            this.memory = memory;
+            this.failures = failures;
+        }
+
+        io.concert.store.StateStore proxy() {
+            return (io.concert.store.StateStore) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                    new Class<?>[] {io.concert.store.StateStore.class}, (proxy, method, args) -> {
+                        if (method.getName().equals("commitTransition") && commits.incrementAndGet() <= failures) {
+                            throw new IllegalStateException("database unreachable");
+                        }
+                        try {
+                            return method.invoke(memory, args);
+                        } catch (java.lang.reflect.InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    });
+        }
+    }
+
     @Test
     void mermaidHighlightsCurrentState() {
         String m = DoorMachine.SPEC.toMermaid("OPEN");

@@ -3,49 +3,91 @@ package io.concert.sdk;
 import io.concert.common.EventEnvelope;
 import io.concert.common.TraceRow;
 import io.concert.common.WorkflowIds;
+import io.concert.common.api.CommitOutcome;
 import io.concert.common.api.EntityInit;
+import io.concert.common.api.EntityLoad;
 import io.concert.common.api.EntityPersistenceActivities;
 import io.concert.common.api.EntitySnapshot;
 import io.concert.common.api.EntityWorkflow;
 import io.concert.common.api.SmStateRow;
+import io.concert.common.api.TransitionCommit;
 import io.concert.common.api.TransitionRecord;
 import io.concert.common.api.TransitionResult;
+import io.concert.sdk.events.EventEnqueueActivities;
+import io.temporal.activity.ActivityOptions;
 import io.temporal.activity.LocalActivityOptions;
+import io.temporal.common.RetryOptions;
+import io.temporal.failure.ApplicationFailure;
+import io.temporal.workflow.Async;
+import io.temporal.workflow.Promise;
 import io.temporal.workflow.Workflow;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
 
 /**
  * Base class for a state machine type. Subclasses provide the transition table and optionally a
- * data hook; the base class owns the Temporal plumbing:
+ * data hook; the base class owns the Temporal plumbing.
+ *
+ * <p><b>DB-truth.</b> The entity lives in the state store (Postgres / Aurora DSQL), not in this workflow. Each event
+ * is one database transaction, committed by {@link EntityPersistenceActivities#commitTransition}: the new state row,
+ * the applied-event record (event id and result) and the outbox rows of the events the transition emitted are written
+ * together, or not at all. The workflow orders the events and runs the decision code:
  *
  * <ul>
- *   <li>applies each {@code handle} update atomically: an event is decided only after the previous
- *       one has committed or been rejected, so the transition order is exactly the update acceptance
- *       order even when {@link #decide} yields (calls activities),
- *   <li>projects state to DSQL through a local activity (monotonic by version, so idempotent),
- *   <li>continues-as-new after {@link #continueAsNewAfter()} events to bound history size.
+ *   <li>events are decided strictly in update acceptance order, one at a time, even when {@link #decide} yields;
+ *   <li>the decision is made on a cached copy of the entity (loaded from the store when a run starts or the cache is
+ *       in doubt); the commit is conditional on that version, so a stale cache is detected (CONFLICT), reloaded and
+ *       the event decided again;
+ *   <li>an event already applied (a redelivery, also across continue-as-new) gets the stored result back and changes
+ *       nothing;
+ *   <li>after commit, the outbox is delivered to the emitted events' lock chains (a regular activity); a sweeper in the
+ *       worker delivers whatever a crash left behind;
+ *   <li>continues-as-new after {@link #continueAsNewAfter()} events, carrying the cache.
  * </ul>
+ *
+ * Decisions must not perform side effects: they run before the commit and are not part of it (and may run again after
+ * a conflict). Side effects belong in emitted events.
  */
 public abstract class AbstractStateMachine implements EntityWorkflow {
 
     private static final int RECENT_LIMIT = 50;
+    /** Conflicts in a row before the event fails: entity events are serialized, so even one is unusual. */
+    private static final int MAX_CONFLICTS = 10;
 
+    /** The store may be down for a while: keep trying for as long as the lock's dispatch waits (1 h). */
     private final EntityPersistenceActivities persistence = Workflow.newLocalActivityStub(
             EntityPersistenceActivities.class,
             LocalActivityOptions.newBuilder()
                     .setStartToCloseTimeout(Duration.ofSeconds(10))
-                    .setScheduleToCloseTimeout(Duration.ofMinutes(10))
+                    .setScheduleToCloseTimeout(Duration.ofHours(1))
+                    .setRetryOptions(RetryOptions.newBuilder()
+                            .setInitialInterval(Duration.ofMillis(100))
+                            .setMaximumInterval(Duration.ofSeconds(10))
+                            .build())
+                    .build());
+
+    /** Outbox delivery: a regular activity, so it never holds this workflow task open while a lock waits on us. */
+    private final EventEnqueueActivities outbox = Workflow.newActivityStub(EventEnqueueActivities.class,
+            ActivityOptions.newBuilder()
+                    .setStartToCloseTimeout(Duration.ofSeconds(30))
+                    .setRetryOptions(RetryOptions.newBuilder()
+                            .setInitialInterval(Duration.ofMillis(100))
+                            .setMaximumInterval(Duration.ofSeconds(10))
+                            .setMaximumAttempts(0)
+                            .build())
                     .build());
 
     private String smType;
     private String instanceKey;
+    /** The cached entity; {@link #cacheValid} says whether it may be decided on without loading. */
     private String state;
     private String data;
     private long version;
+    private boolean cacheValid;
     /** First accepted transition (0: none yet) and latest accepted transition, workflow time. */
     private long createdAtMillis;
     private long lastAcceptedMillis;
@@ -55,14 +97,15 @@ public abstract class AbstractStateMachine implements EntityWorkflow {
     private long ticketsIssued;
     private long ticketServed;
     private final Deque<TransitionRecord> recent = new ArrayDeque<>();
+    /** Outbox deliveries started by this run; it may not continue-as-new before they complete. */
+    private final List<Promise<Void>> deliveries = new ArrayList<>();
 
     /** The transition table. Must be deterministic (build it once, e.g. in a static field). */
     protected abstract StateMachineSpec spec();
 
     /**
      * Computes the entity's data after an accepted transition. Runs inside workflow code, so it must
-     * be deterministic (no I/O, clocks or randomness); call activities from a subclass for side
-     * effects. Default: keep the event payload as the latest data.
+     * be deterministic (no I/O, clocks or randomness). Default: keep the event payload as the latest data.
      */
     protected String applyData(String fromState, String toState, String currentData, EventEnvelope event) {
         return event.payload() != null ? event.payload() : currentData;
@@ -85,24 +128,32 @@ public abstract class AbstractStateMachine implements EntityWorkflow {
 
     /**
      * Decides an event that has a transition {@code fromState -> toState}: computes the new data, or
-     * rejects the event. Runs inside workflow code, so it must be deterministic. It may yield (call
-     * activities): the next event is decided only after this returns. Default: accept with
-     * {@link #applyData}.
+     * rejects the event. Runs inside workflow code, so it must be deterministic; it may run more than once for one
+     * event (after a version conflict). Default: accept with {@link #applyData}.
      */
     protected Decision decide(String fromState, String toState, String currentData, EventEnvelope event) {
         return Decision.accept(applyData(fromState, toState, currentData, event));
     }
 
     /**
-     * Called after the state row of {@code result} (accepted or not) has been persisted. Other events
-     * may have been decided meanwhile, so read current state rather than assuming it is unchanged.
+     * The events the latest accepted {@link #decide} of {@code event} emitted, removed from the subclass's buffer; they
+     * are committed in the transition's outbox. Default: none.
+     */
+    protected List<EventEnvelope> takeEmits(EventEnvelope event) {
+        return List.of();
+    }
+
+    /**
+     * Called after the transition of {@code result} (accepted or not) has been committed by this call (not for a
+     * redelivered event that was applied before).
+     * Other events may have been decided meanwhile, so read current state rather than assuming it is unchanged.
      */
     protected void onPersisted(TransitionResult result, EventEnvelope event) {}
 
     /**
-     * Side effects for an accepted transition (call activities from here: payments, emails, ...).
-     * Runs after the in-memory state change and before the projection write; the update completes,
-     * and the event's locks are released, only after it returns.
+     * Called once an accepted transition has been committed, before the update completes. Not part of the
+     * transaction: work here is not undone if something fails later, and is not retried. Prefer emitted events for
+     * side effects.
      */
     protected void onTransition(String fromState, String toState, EventEnvelope event) {}
 
@@ -123,6 +174,8 @@ public abstract class AbstractStateMachine implements EntityWorkflow {
     public void run(EntityInit init) {
         smType = init.smType();
         instanceKey = init.instanceKey();
+        // a continued run carries the cache; a fresh run loads the entity before its first decision
+        cacheValid = init.state() != null;
         state = init.state() != null ? init.state() : spec().initialState();
         data = init.data();
         version = init.version();
@@ -138,11 +191,13 @@ public abstract class AbstractStateMachine implements EntityWorkflow {
         initialized = true;
 
         // Continue-as-new is the only way a run ends, so this is the one place that must wait for
-        // pending work (hasPendingWork) besides the update handlers.
+        // pending work (deliveries, hasPendingWork) besides the update handlers.
         int limit = continueAsNewAfter();
         Workflow.await(() -> (handledThisRun >= limit || Workflow.getInfo().isContinueAsNewSuggested())
-                && Workflow.isEveryHandlerFinished() && !hasPendingWork());
-        Workflow.continueAsNew(new EntityInit(smType, instanceKey, state, data, version, List.copyOf(recent), createdAtMillis));
+                && Workflow.isEveryHandlerFinished() && deliveries.stream().allMatch(Promise::isCompleted)
+                && !hasPendingWork());
+        Workflow.continueAsNew(new EntityInit(smType, instanceKey, cacheValid ? state : null, cacheValid ? data : null,
+                cacheValid ? version : 0, List.copyOf(recent), createdAtMillis));
     }
 
     @Override
@@ -160,58 +215,106 @@ public abstract class AbstractStateMachine implements EntityWorkflow {
     @Override
     public TransitionResult handle(EventEnvelope event) {
         // Take a ticket before the first yield: tickets follow update acceptance order. An update can
-        // be delivered in the same workflow task as the start, so also wait for run() to load the
-        // (possibly continued-as-new) state.
+        // be delivered in the same workflow task as the start, so also wait for run() to set up.
         long ticket = ticketsIssued++;
         Workflow.await(() -> initialized && ticketServed == ticket);
 
-        String from;
-        long now;
         TransitionResult result;
-        TraceRow trace;
-        boolean accepted;
+        List<EventEnvelope> emitted = List.of();
+        boolean committedNow = false;
         try {
-            from = state;
-            now = Workflow.currentTimeMillis();
             handledThisRun++;
-            Optional<String> next = spec().next(from, event.eventType());
-            Decision decision = next.isEmpty() ? null : decide(from, next.get(), data, event);
-            accepted = decision != null && decision.accepted();
-            if (next.isEmpty()) {
-                result = new TransitionResult(event.eventId(), from, from, false,
-                        "no transition from " + from + " on " + event.eventType(), version);
-                trace = new TraceRow(event.eventId(), now, TraceRow.Stage.REJECTED, workflowId(), null,
-                        from + " x " + event.eventType());
-            } else if (!accepted) {
-                result = new TransitionResult(event.eventId(), from, from, false, decision.rejection(), version);
-                trace = new TraceRow(event.eventId(), now, TraceRow.Stage.REJECTED, workflowId(), null,
-                        from + " x " + event.eventType() + ": " + decision.rejection());
-            } else {
-                String to = next.get();
-                data = decision.data();
-                state = to;
-                version++;
-                lastAcceptedMillis = now;
-                if (createdAtMillis == 0) {
-                    createdAtMillis = now;
+            result = cacheValid ? null : load(event);
+            for (int conflicts = 0; result == null; conflicts++) {
+                if (conflicts >= MAX_CONFLICTS) {
+                    throw ApplicationFailure.newFailure("entity " + workflowId() + " kept changing under event "
+                            + event.eventId(), "TransitionConflict");
                 }
-                result = new TransitionResult(event.eventId(), from, to, true, null, version);
-                trace = new TraceRow(event.eventId(), now, TraceRow.Stage.TRANSITION, workflowId(), null,
-                        from + " -> " + to + " (" + event.eventType() + ")");
+                Attempt a = attempt(event);
+                CommitOutcome out = persistence.commitTransition(a.commit(), a.trace());
+                switch (out.status()) {
+                    case COMMITTED -> {
+                        result = a.commit().result();
+                        committedNow = true;
+                        if (result.accepted()) {
+                            adopt(a.commit().row());
+                            lastAcceptedMillis = a.commit().nowMillis();
+                            if (createdAtMillis == 0) {
+                                createdAtMillis = lastAcceptedMillis;
+                            }
+                            emitted = a.commit().outbox();
+                        }
+                        remember(new TransitionRecord(event.eventId(), event.eventType(), result.fromState(),
+                                result.toState(), result.accepted(), a.commit().nowMillis()));
+                    }
+                    case ALREADY_APPLIED -> {
+                        // a redelivery: the store has the first answer; our cache may be behind it
+                        result = out.result();
+                        cacheValid = false;
+                    }
+                    case CONFLICT -> adopt(out.current()); // decided on a stale copy: decide again on the stored one
+                }
             }
-            remember(new TransitionRecord(event.eventId(), event.eventType(), from, result.toState(), result.accepted(), now));
         } finally {
             ticketServed++;
         }
-        if (accepted) {
-            onTransition(from, result.toState(), event);
+        if (!committedNow) {
+            return result; // applied before (a redelivery): its hooks ran then, its outbox is delivered or swept
         }
-
-        // State is already updated; the projection write may yield without affecting ordering.
-        persistence.persistState(
-                new SmStateRow(workflowId(), smType, state, data, version, event.eventId(), now), trace);
+        if (!emitted.isEmpty()) {
+            deliveries.add(Async.procedure(outbox::deliverOutbox, emitted, event.eventId()));
+            deliveries.removeIf(Promise::isCompleted);
+        }
+        if (result.accepted()) {
+            onTransition(result.fromState(), result.toState(), event);
+        }
         onPersisted(result, event);
         return result;
+    }
+
+    /** Loads the entity into the cache; returns the stored result if the event was applied before, else null. */
+    private TransitionResult load(EventEnvelope event) {
+        EntityLoad l = persistence.loadEntity(workflowId(), event.eventId());
+        adopt(l.row());
+        return l.applied();
+    }
+
+    /** Replaces the cache with the stored entity (null: none yet, the initial state). */
+    private void adopt(SmStateRow row) {
+        if (row == null) {
+            state = spec().initialState();
+            data = null;
+            version = 0;
+        } else {
+            state = row.state();
+            data = row.data();
+            version = row.version();
+        }
+        cacheValid = true;
+    }
+
+    private record Attempt(TransitionCommit commit, TraceRow trace) {}
+
+    /** Decides the event on the cached entity and builds the transaction that commits the decision. */
+    private Attempt attempt(EventEnvelope event) {
+        String from = state;
+        long now = Workflow.currentTimeMillis();
+        Optional<String> next = spec().next(from, event.eventType());
+        Decision decision = next.isEmpty() ? null : decide(from, next.get(), data, event);
+        if (decision != null && decision.accepted()) {
+            String to = next.get();
+            TransitionResult r = new TransitionResult(event.eventId(), from, to, true, null, version + 1);
+            SmStateRow row = new SmStateRow(workflowId(), smType, to, decision.data(), version + 1, event.eventId(), now);
+            return new Attempt(new TransitionCommit(workflowId(), event.eventId(), version, r, row, takeEmits(event), now),
+                    new TraceRow(event.eventId(), now, TraceRow.Stage.TRANSITION, workflowId(), null,
+                            from + " -> " + to + " (" + event.eventType() + ")"));
+        }
+        takeEmits(event); // a rejected decision emits nothing: drop whatever it buffered
+        String reason = decision == null ? "no transition from " + from + " on " + event.eventType() : decision.rejection();
+        TransitionResult r = new TransitionResult(event.eventId(), from, from, false, reason, version);
+        return new Attempt(new TransitionCommit(workflowId(), event.eventId(), version, r, null, List.of(), now),
+                new TraceRow(event.eventId(), now, TraceRow.Stage.REJECTED, workflowId(), null,
+                        from + " x " + event.eventType() + (decision == null ? "" : ": " + reason)));
     }
 
     /** The entity's current data JSON (may be {@code null}). */

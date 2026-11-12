@@ -135,7 +135,7 @@ class TypedSampleMachinesTest {
                 "{\"amount\":{\"amount\":20,\"currency\":\"EUR\"},\"method\":\"WALLET\"," + lines + "}");
         assertFalse(wrong.accepted());
         assertEquals("payment of 20 EUR does not match order total 25.00 EUR", wrong.message());
-        assertEquals(0, store.loadState("order:o2").orElseThrow().version());
+        assertTrue(store.loadState("order:o2").isEmpty(), "a rejected first event creates no entity row (DB-truth)");
 
         TransitionResult ok = send("order", "o2", "e2", "pay",
                 "{\"amount\":{\"amount\":25,\"currency\":\"EUR\"},\"method\":\"WALLET\",\"customer\":{\"customerId\":\"c1\",\"name\":\"Ann\"},"

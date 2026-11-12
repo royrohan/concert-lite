@@ -223,10 +223,11 @@ public class ModelStateMachineTest {
         TransitionResult rejected = send("e5", "assign", "{\"assignee\":\"nobody\"}");
         assertFalse(rejected.accepted());
         assertEquals("cannot assign to nobody", rejected.message());
-        assertEquals("OPEN", row().state());
-        assertEquals(0, row().version());
-        assertNull(row().data());
+        // rejections are recorded as applied events but change nothing: the entity has no row yet
+        assertTrue(store.loadState("ticket:t1").isEmpty());
+        assertFalse(store.loadEntity("ticket:t1", "e5").applied().accepted());
         assertTrue(send("e6", "assign", "{\"assignee\":\"ann\"}").accepted());
+        assertEquals(1, row().version());
     }
 
     @Test

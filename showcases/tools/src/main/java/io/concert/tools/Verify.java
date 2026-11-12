@@ -28,7 +28,10 @@ import org.HdrHistogram.Histogram;
  *   <li><b>no loss</b>: every ledger's applied count == events sent to it,
  *   <li><b>no double apply</b>: never more than sent,
  *   <li><b>order</b>: no event applied after a higher seq on the same ledger,
- *   <li><b>dedupe state</b>: every event reached DISPATCHED.
+ *   <li><b>dedupe state</b>: every event reached DISPATCHED,
+ *   <li><b>outbox</b> (entity style with {@code --chain-every}): every n-th append emits a receipt to ledger
+ *       {@code <runId>-K<i>-R} through the outbox; each receipt ledger must count exactly the chained appends, and no
+ *       outbox row may be left pending.
  * </ul>
  *
  * For an event-style run ({@code tools loadgen --style event}) the counts come from the keyed-state documents
@@ -63,8 +66,10 @@ final class Verify {
                 applied = state.values().stream().mapToLong(v -> v[0]).sum();
                 if (m.eventStyle()) {
                     chains = counterState(store, "state:chain:" + m.runId() + "-K");
-                    chainApplied = chains.values().stream().mapToLong(v -> v[0]).sum();
+                } else {
+                    chains = receipts(state, m);
                 }
+                chainApplied = chains.values().stream().mapToLong(v -> v[0]).sum();
                 if ((applied >= m.total() && chainApplied >= chainedTotal) || System.currentTimeMillis() > deadline) {
                     break;
                 }
@@ -106,6 +111,9 @@ final class Verify {
                 errorRows = store.scanStatesWhere("event:" + m.runId() + "-", "status", "ERROR_BLOCKING").size()
                         + store.scanStatesWhere("event:" + m.runId() + "-", "status", "ERROR_NON_BLOCKING").size();
             }
+            // entity style (DB-truth): emitted events wait in the outbox until delivered; none may be left behind
+            long pendingOutbox = m.eventStyle() ? 0
+                    : store.pendingOutbox("ledger:" + m.runId() + "-", System.currentTimeMillis(), 1000).size();
             Map<String, Long> dedupe = store.processedStatusCounts(m.runId() + "-");
             long dropped = store.scanTraces(m.runId() + "-", TraceRow.Stage.DROPPED).size();
             long failed = store.scanTraces(m.runId() + "-", TraceRow.Stage.FAILED).size();
@@ -121,6 +129,11 @@ final class Verify {
             check("no double-applied events", over == 0, over + " extra across " + overKeys + " ledgers");
             check("per-key order kept", ooo == 0, ooo + " out-of-order applies across " + oooKeys + " ledgers");
             check("dedupe state settled", dedupe.getOrDefault("RECEIVED", 0L) == 0, "status counts " + dedupe);
+            if (!m.eventStyle() && chainedTotal > 0) {
+                check("emitted receipts (outbox): none lost", chainLost == 0, chainLost + " of " + chainedTotal + " missing");
+                check("emitted receipts (outbox): none applied twice", chainOver == 0, chainOver + " extra");
+                check("outbox drained", pendingOutbox == 0, pendingOutbox + " rows still pending");
+            }
             if (m.eventStyle()) {
                 check("chained child events: none lost", chainLost == 0, chainLost + " of " + chainedTotal + " missing");
                 check("chained child events: none applied twice", chainOver == 0, chainOver + " extra");
@@ -132,7 +145,8 @@ final class Verify {
             Map<String, TraceRow> done = firstDone(store, m.runId());
             latency(done);
             timeline(done, m, chaos);
-            boolean pass = lost == 0 && over == 0 && ooo == 0 && chainLost == 0 && chainOver == 0 && errorRows == 0;
+            boolean pass = lost == 0 && over == 0 && ooo == 0 && chainLost == 0 && chainOver == 0 && errorRows == 0
+                    && pendingOutbox == 0;
             System.out.println(pass ? "RESULT: PASS" : "RESULT: FAIL");
             return pass ? 0 : 1;
         }
@@ -148,6 +162,21 @@ final class Verify {
         for (SmStateRow r : store.scanStates("ledger:" + runId + "-K")) {
             JsonNode d = Json.read(r.data(), JsonNode.class);
             out.put(r.workflowId().substring("ledger:".length()), new long[] {d.path("count").asLong(), d.path("outOfOrder").asLong()});
+        }
+        return out;
+    }
+
+    /**
+     * Entity style: {@code <runId>-K<i>} -> [count] of its receipt ledger {@code <runId>-K<i>-R}, which receives one
+     * event per chained append through the outbox.
+     */
+    private static Map<String, long[]> receipts(Map<String, long[]> ledgers, Manifest m) {
+        Map<String, long[]> out = new HashMap<>();
+        for (int k = 0; k < m.keys(); k++) {
+            long[] r = ledgers.get(m.runId() + "-K" + k + "-R");
+            if (r != null) {
+                out.put(m.runId() + "-K" + k, new long[] {r[0], 0, 0});
+            }
         }
         return out;
     }

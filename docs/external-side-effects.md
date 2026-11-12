@@ -1,5 +1,12 @@
 # External side effects: idempotent writes when the commit's answer is lost
 
+> **Parked.** Entity state now lives in Postgres / DSQL and each transition is one database transaction
+> ([spec §9](spec/coordinator-worker.md#9-worker-the-entity-workflow)). Calling external activities from inside a
+> transition no longer fits that model, so the payments example (`examples/payments`, `showcases/payments`,
+> `scripts/payments-chaos.sh`) was removed from the build. It is in git history at merge commit `2e0f267`
+> (`git checkout 2e0f267 -- examples/payments showcases/payments scripts/payments-chaos.sh`). External side effects
+> will be redone on DB-truth later, for example as outbox intents. The text below describes the parked version.
+
 The worker in this example writes to two external systems from inside a state machine transition:
 - a REST service, a sample ledger that charges accounts;
 - Kafka, a settlement record on a new topic, `payments.settled`.
